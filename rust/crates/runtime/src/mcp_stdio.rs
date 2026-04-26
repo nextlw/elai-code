@@ -313,6 +313,8 @@ pub struct McpServerManager {
     servers: BTreeMap<String, ManagedMcpServer>,
     unsupported_servers: Vec<UnsupportedMcpServer>,
     tool_index: BTreeMap<String, ToolRoute>,
+    /// Full tool metadata kept after discovery so `McpToolSource` can build definitions.
+    discovered: Vec<ManagedMcpTool>,
     next_request_id: u64,
 }
 
@@ -347,6 +349,7 @@ impl McpServerManager {
             servers: managed_servers,
             unsupported_servers,
             tool_index: BTreeMap::new(),
+            discovered: Vec::new(),
             next_request_id: 1,
         }
     }
@@ -363,6 +366,9 @@ impl McpServerManager {
         for server_name in server_names {
             self.ensure_server_ready(&server_name).await?;
             self.clear_routes_for_server(&server_name);
+            // Drop stale entries for this server from the persistent cache.
+            self.discovered
+                .retain(|t| t.server_name != server_name);
 
             let mut cursor = None;
             loop {
@@ -412,12 +418,14 @@ impl McpServerManager {
                             raw_name: tool.name.clone(),
                         },
                     );
-                    discovered_tools.push(ManagedMcpTool {
+                    let managed = ManagedMcpTool {
                         server_name: server_name.clone(),
                         qualified_name,
                         raw_name: tool.name.clone(),
                         tool,
-                    });
+                    };
+                    self.discovered.push(managed.clone());
+                    discovered_tools.push(managed);
                 }
 
                 match result.next_cursor {
@@ -480,6 +488,21 @@ impl McpServerManager {
             server.initialized = false;
         }
         Ok(())
+    }
+
+    /// Returns `true` if the named server has completed initialization successfully.
+    #[must_use]
+    pub fn healthy(&self, server_name: &str) -> bool {
+        self.servers
+            .get(server_name)
+            .map(|s| s.initialized)
+            .unwrap_or(false)
+    }
+
+    /// Iterates over all managed tools discovered so far (full metadata including description and
+    /// input schema). Only tools whose server passes `healthy()` are routable at call time.
+    pub fn all_managed_tools(&self) -> impl Iterator<Item = &ManagedMcpTool> {
+        self.discovered.iter()
     }
 
     fn clear_routes_for_server(&mut self, server_name: &str) {

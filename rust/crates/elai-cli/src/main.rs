@@ -5391,6 +5391,22 @@ mod tests {
     }
 
     #[test]
+    fn permission_policy_builtin_unchanged() {
+        use tools::mvp_tool_specs;
+        let registry = GlobalToolRegistry::builtin();
+        let policy = permission_policy(PermissionMode::ReadOnly, &registry);
+        // Verify every builtin tool has a permission requirement registered in the policy.
+        for spec in mvp_tool_specs() {
+            let required = policy.required_mode_for(spec.name);
+            assert_eq!(
+                required, spec.required_permission,
+                "permission for builtin tool '{}' changed: got {:?}, want {:?}",
+                spec.name, required, spec.required_permission
+            );
+        }
+    }
+
+    #[test]
     fn shared_help_uses_resume_annotation_copy() {
         let help = commands::render_slash_command_help();
         assert!(help.contains("Slash commands"));

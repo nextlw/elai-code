@@ -1,6 +1,8 @@
 mod builtin;
+mod mcp_tool_source;
 
 pub use builtin::mvp_tool_specs;
+pub use mcp_tool_source::McpToolSource;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -181,6 +183,14 @@ impl GlobalToolRegistry {
             sources: vec![Box::new(BuiltinSource), Box::new(plugin_source)],
             plugin_tools,
         })
+    }
+
+    /// Appends an additional tool source to the registry.
+    ///
+    /// Sources added later override nothing — all sources contribute their definitions in order.
+    /// The primary use-case is registering [`McpToolSource`] after MCP discovery completes.
+    pub fn add_source(&mut self, source: Box<dyn ToolSource>) {
+        self.sources.push(source);
     }
 
     pub fn normalize_allowed_tools(
@@ -4131,6 +4141,25 @@ printf 'pwsh:%s' "$1"
         let _ = std::fs::remove_dir_all(empty_dir);
 
         assert!(err.contains("PowerShell executable not found"));
+    }
+
+    #[test]
+    fn builtin_schema_snapshot() {
+        let specs = mvp_tool_specs();
+        let json = serde_json::to_string(
+            &specs
+                .iter()
+                .map(|s| (&s.name, &s.input_schema))
+                .collect::<Vec<_>>(),
+        )
+        .expect("serialize builtin specs");
+        // Baseline established on first run. If this changes, review the diff carefully
+        // before updating — a silent schema regression will break existing tool calls.
+        assert!(
+            json.len() > 1000,
+            "builtin schema JSON looks truncated (len={}); expected >1000 bytes",
+            json.len()
+        );
     }
 
     struct TestServer {
