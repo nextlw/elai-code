@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use commands::{CommandManifestEntry, CommandRegistry, CommandSource};
 use runtime::{BootstrapPhase, BootstrapPlan};
-use tools::{ToolManifestEntry, ToolRegistry, ToolSource};
+use tools::{ManifestSource, ToolManifestEntry, ToolRegistry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamPaths {
@@ -157,7 +157,7 @@ pub fn extract_tools(source: &str) -> ToolRegistry {
                 if imported.ends_with("Tool") {
                     entries.push(ToolManifestEntry {
                         name: imported,
-                        source: ToolSource::Base,
+                        source: ManifestSource::Base,
                     });
                 }
             }
@@ -168,7 +168,7 @@ pub fn extract_tools(source: &str) -> ToolRegistry {
                 if name.ends_with("Tool") || name.ends_with("Tools") {
                     entries.push(ToolManifestEntry {
                         name,
-                        source: ToolSource::Conditional,
+                        source: ManifestSource::Conditional,
                     });
                 }
             }

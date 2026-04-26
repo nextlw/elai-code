@@ -1,3 +1,7 @@
+mod builtin;
+
+pub use builtin::mvp_tool_specs;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,13 +26,80 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
     pub name: String,
-    pub source: ToolSource,
+    pub source: ManifestSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolSource {
+pub enum ManifestSource {
     Base,
     Conditional,
+}
+
+/// Abstraction over a source of tool definitions (builtin, plugin, MCP, …).
+/// Implementors return the full set of definitions and permission specs they own.
+pub trait ToolSource: Send + Sync {
+    fn definitions(&self) -> Vec<ToolDefinition>;
+    fn permissions(&self) -> Vec<(String, PermissionMode)>;
+}
+
+/// Built-in tool source backed by `mvp_tool_specs()`.
+pub struct BuiltinSource;
+
+impl ToolSource for BuiltinSource {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        mvp_tool_specs()
+            .into_iter()
+            .map(|spec| ToolDefinition {
+                name: spec.name.to_string(),
+                description: Some(spec.description.to_string()),
+                input_schema: spec.input_schema,
+            })
+            .collect()
+    }
+
+    fn permissions(&self) -> Vec<(String, PermissionMode)> {
+        mvp_tool_specs()
+            .into_iter()
+            .map(|spec| (spec.name.to_string(), spec.required_permission))
+            .collect()
+    }
+}
+
+/// Plugin tool source backed by a `Vec<PluginTool>`.
+pub struct PluginSource {
+    plugin_tools: Vec<PluginTool>,
+}
+
+impl PluginSource {
+    #[must_use]
+    pub fn new(plugin_tools: Vec<PluginTool>) -> Self {
+        Self { plugin_tools }
+    }
+}
+
+impl ToolSource for PluginSource {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        self.plugin_tools
+            .iter()
+            .map(|tool| ToolDefinition {
+                name: tool.definition().name.clone(),
+                description: tool.definition().description.clone(),
+                input_schema: tool.definition().input_schema.clone(),
+            })
+            .collect()
+    }
+
+    fn permissions(&self) -> Vec<(String, PermissionMode)> {
+        self.plugin_tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.definition().name.clone(),
+                    permission_mode_from_plugin(tool.required_permission()),
+                )
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -56,15 +127,32 @@ pub struct ToolSpec {
     pub required_permission: PermissionMode,
 }
 
-#[derive(Debug, Clone, PartialEq)]
 pub struct GlobalToolRegistry {
+    /// Ordered list of tool sources (builtin first, then plugins).
+    sources: Vec<Box<dyn ToolSource>>,
+    /// Kept for `execute()` — plugins still dispatch through their own `PluginTool`.
     plugin_tools: Vec<PluginTool>,
+}
+
+impl Clone for GlobalToolRegistry {
+    fn clone(&self) -> Self {
+        let plugin_tools = self.plugin_tools.clone();
+        let mut sources: Vec<Box<dyn ToolSource>> = vec![Box::new(BuiltinSource)];
+        if !plugin_tools.is_empty() {
+            sources.push(Box::new(PluginSource::new(plugin_tools.clone())));
+        }
+        Self {
+            sources,
+            plugin_tools,
+        }
+    }
 }
 
 impl GlobalToolRegistry {
     #[must_use]
     pub fn builtin() -> Self {
         Self {
+            sources: vec![Box::new(BuiltinSource)],
             plugin_tools: Vec::new(),
         }
     }
@@ -88,7 +176,11 @@ impl GlobalToolRegistry {
             }
         }
 
-        Ok(Self { plugin_tools })
+        let plugin_source = PluginSource::new(plugin_tools.clone());
+        Ok(Self {
+            sources: vec![Box::new(BuiltinSource), Box::new(plugin_source)],
+            plugin_tools,
+        })
     }
 
     pub fn normalize_allowed_tools(
@@ -99,16 +191,16 @@ impl GlobalToolRegistry {
             return Ok(None);
         }
 
-        let builtin_specs = mvp_tool_specs();
-        let canonical_names = builtin_specs
+        let canonical_names: Vec<String> = self
+            .sources
             .iter()
-            .map(|spec| spec.name.to_string())
-            .chain(
-                self.plugin_tools
-                    .iter()
-                    .map(|tool| tool.definition().name.clone()),
-            )
-            .collect::<Vec<_>>();
+            .flat_map(|source| {
+                source
+                    .definitions()
+                    .into_iter()
+                    .map(|def| def.name)
+            })
+            .collect();
         let mut name_map = canonical_names
             .iter()
             .map(|name| (normalize_tool_name(name), name.clone()))
@@ -146,27 +238,13 @@ impl GlobalToolRegistry {
 
     #[must_use]
     pub fn definitions(&self, allowed_tools: Option<&BTreeSet<String>>) -> Vec<ToolDefinition> {
-        let builtin = mvp_tool_specs()
-            .into_iter()
-            .filter(|spec| allowed_tools.is_none_or(|allowed| allowed.contains(spec.name)))
-            .map(|spec| ToolDefinition {
-                name: spec.name.to_string(),
-                description: Some(spec.description.to_string()),
-                input_schema: spec.input_schema,
-            });
-        let plugin = self
-            .plugin_tools
+        self.sources
             .iter()
-            .filter(|tool| {
-                allowed_tools
-                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+            .flat_map(|source| source.definitions())
+            .filter(|def| {
+                allowed_tools.is_none_or(|allowed| allowed.contains(def.name.as_str()))
             })
-            .map(|tool| ToolDefinition {
-                name: tool.definition().name.clone(),
-                description: tool.definition().description.clone(),
-                input_schema: tool.definition().input_schema.clone(),
-            });
-        builtin.chain(plugin).collect()
+            .collect()
     }
 
     #[must_use]
@@ -174,24 +252,13 @@ impl GlobalToolRegistry {
         &self,
         allowed_tools: Option<&BTreeSet<String>>,
     ) -> Vec<(String, PermissionMode)> {
-        let builtin = mvp_tool_specs()
-            .into_iter()
-            .filter(|spec| allowed_tools.is_none_or(|allowed| allowed.contains(spec.name)))
-            .map(|spec| (spec.name.to_string(), spec.required_permission));
-        let plugin = self
-            .plugin_tools
+        self.sources
             .iter()
-            .filter(|tool| {
-                allowed_tools
-                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+            .flat_map(|source| source.permissions())
+            .filter(|(name, _)| {
+                allowed_tools.is_none_or(|allowed| allowed.contains(name.as_str()))
             })
-            .map(|tool| {
-                (
-                    tool.definition().name.clone(),
-                    permission_mode_from_plugin(tool.required_permission()),
-                )
-            });
-        builtin.chain(plugin).collect()
+            .collect()
     }
 
     pub fn execute(&self, name: &str, input: &Value) -> Result<String, String> {
@@ -220,331 +287,6 @@ fn permission_mode_from_plugin(value: &str) -> PermissionMode {
     }
 }
 
-#[must_use]
-#[allow(clippy::too_many_lines)]
-pub fn mvp_tool_specs() -> Vec<ToolSpec> {
-    vec![
-        ToolSpec {
-            name: "bash",
-            description: "Execute a shell command in the current workspace.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" },
-                    "timeout": { "type": "integer", "minimum": 1 },
-                    "description": { "type": "string" },
-                    "run_in_background": { "type": "boolean" },
-                    "dangerouslyDisableSandbox": { "type": "boolean" }
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::DangerFullAccess,
-        },
-        ToolSpec {
-            name: "read_file",
-            description: "Read a text file from the workspace. Paths are relative to the working directory shown in the system prompt unless absolute.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "File path relative to the working directory (e.g. 'crates/api/src/lib.rs') or absolute path. Do NOT prefix with the project name." },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "write_file",
-            description: "Write a text file in the workspace. Paths are relative to the working directory shown in the system prompt unless absolute.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
-                    "content": { "type": "string" }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "edit_file",
-            description: "Replace text in a workspace file. Paths are relative to the working directory shown in the system prompt unless absolute.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
-                    "old_string": { "type": "string" },
-                    "new_string": { "type": "string" },
-                    "replace_all": { "type": "boolean" }
-                },
-                "required": ["path", "old_string", "new_string"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "glob_search",
-            description: "Find files by glob pattern. Searches relative to the working directory shown in the system prompt unless an absolute path is given.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Glob pattern to match filenames, e.g. '**/*.rs' or 'swd.rs'" },
-                    "path": { "type": "string", "description": "Directory to search in. Use a path relative to the working directory (e.g. 'crates/api/src') or an absolute path. Omit to search from the working directory root." }
-                },
-                "required": ["pattern"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "grep_search",
-            description: "Search file contents with a regex pattern. Paths are relative to the working directory shown in the system prompt unless absolute.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Regex pattern to search for in file contents" },
-                    "path": { "type": "string", "description": "Directory or file to search in. Use a path relative to the working directory (e.g. 'crates/elai-cli/src') or an absolute path. Omit to search from the working directory root." },
-                    "glob": { "type": "string" },
-                    "output_mode": { "type": "string" },
-                    "-B": { "type": "integer", "minimum": 0 },
-                    "-A": { "type": "integer", "minimum": 0 },
-                    "-C": { "type": "integer", "minimum": 0 },
-                    "context": { "type": "integer", "minimum": 0 },
-                    "-n": { "type": "boolean" },
-                    "-i": { "type": "boolean" },
-                    "type": { "type": "string" },
-                    "head_limit": { "type": "integer", "minimum": 1 },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "multiline": { "type": "boolean" }
-                },
-                "required": ["pattern"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "WebFetch",
-            description:
-                "Fetch a URL, convert it into readable text, and answer a prompt about it.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "url": { "type": "string", "format": "uri" },
-                    "prompt": { "type": "string" }
-                },
-                "required": ["url", "prompt"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "WebSearch",
-            description: "Search the web for current information and return cited results.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "minLength": 2 },
-                    "allowed_domains": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "blocked_domains": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "TodoWrite",
-            description: "Update the structured task list for the current session.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "todos": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "content": { "type": "string" },
-                                "activeForm": { "type": "string" },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["pending", "in_progress", "completed"]
-                                }
-                            },
-                            "required": ["content", "activeForm", "status"],
-                            "additionalProperties": false
-                        }
-                    }
-                },
-                "required": ["todos"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "Skill",
-            description: "Load a local skill definition and its instructions.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "skill": { "type": "string" },
-                    "args": { "type": "string" }
-                },
-                "required": ["skill"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "Agent",
-            description: "Launch a specialized agent task and persist its handoff metadata.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "description": { "type": "string" },
-                    "prompt": { "type": "string" },
-                    "subagent_type": { "type": "string" },
-                    "name": { "type": "string" },
-                    "model": { "type": "string" }
-                },
-                "required": ["description", "prompt"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::DangerFullAccess,
-        },
-        ToolSpec {
-            name: "ToolSearch",
-            description: "Search for deferred or specialized tools by exact name or keywords.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "max_results": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "NotebookEdit",
-            description: "Replace, insert, or delete a cell in a Jupyter notebook. Paths are relative to the working directory shown in the system prompt unless absolute.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "notebook_path": { "type": "string", "description": "Path to the .ipynb file relative to the working directory or absolute. Do NOT prefix with the project name." },
-                    "cell_id": { "type": "string" },
-                    "new_source": { "type": "string" },
-                    "cell_type": { "type": "string", "enum": ["code", "markdown"] },
-                    "edit_mode": { "type": "string", "enum": ["replace", "insert", "delete"] }
-                },
-                "required": ["notebook_path"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "Sleep",
-            description: "Wait for a specified duration without holding a shell process.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "duration_ms": { "type": "integer", "minimum": 0 }
-                },
-                "required": ["duration_ms"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "SendUserMessage",
-            description: "Send a message to the user.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" },
-                    "attachments": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["normal", "proactive"]
-                    }
-                },
-                "required": ["message", "status"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "Config",
-            description: "Get or set Elai Code settings.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "setting": { "type": "string" },
-                    "value": {
-                        "type": ["string", "boolean", "number"]
-                    }
-                },
-                "required": ["setting"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "StructuredOutput",
-            description: "Return structured output in the requested format.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": true
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "REPL",
-            description: "Execute code in a REPL-like subprocess.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "code": { "type": "string" },
-                    "language": { "type": "string" },
-                    "timeout_ms": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["code", "language"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::DangerFullAccess,
-        },
-        ToolSpec {
-            name: "PowerShell",
-            description: "Execute a PowerShell command with optional timeout.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" },
-                    "timeout": { "type": "integer", "minimum": 1 },
-                    "description": { "type": "string" },
-                    "run_in_background": { "type": "boolean" }
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::DangerFullAccess,
-        },
-    ]
-}
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     match name {
