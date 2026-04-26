@@ -97,6 +97,85 @@ pub struct SwdTransaction {
     pub timestamp_ms: u64,
 }
 
+// ─── Correction Context ──────────────────────────────────────
+
+pub const MAX_CORRECTION_ATTEMPTS: u8 = 2;
+
+#[derive(Debug, Clone)]
+pub struct CorrectionContext {
+    pub attempts: u8,
+    pub max_attempts: u8,
+    pub last_failures: Vec<SwdTransaction>,
+}
+
+impl CorrectionContext {
+    pub fn new() -> Self {
+        Self {
+            attempts: 0,
+            max_attempts: MAX_CORRECTION_ATTEMPTS,
+            last_failures: Vec::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.attempts = 0;
+        self.last_failures.clear();
+    }
+
+    pub fn can_retry(&self) -> bool {
+        self.attempts < self.max_attempts
+    }
+
+    pub fn record_failures(&mut self, txs: &[SwdTransaction]) {
+        self.attempts += 1;
+        self.last_failures = txs
+            .iter()
+            .filter(|tx| {
+                matches!(
+                    tx.outcome,
+                    SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. } | SwdOutcome::RolledBack
+                )
+            })
+            .cloned()
+            .collect();
+    }
+
+    pub fn has_failures(&self) -> bool {
+        !self.last_failures.is_empty()
+    }
+}
+
+impl Default for CorrectionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[allow(dead_code)]
+pub fn build_correction_prompt(failures: &[SwdTransaction]) -> String {
+    let mut lines = vec!["[SWD CORRECTION TURN]".to_string()];
+    lines.push("File actions failed verification:".to_string());
+    for tx in failures {
+        let status = tx.outcome.as_str().to_uppercase();
+        let detail = match &tx.outcome {
+            SwdOutcome::Failed { reason } => reason.clone(),
+            SwdOutcome::Drift { detail } => detail.clone(),
+            SwdOutcome::RolledBack => "rolled back after batch failure".to_string(),
+            _ => String::new(),
+        };
+        lines.push(format!(
+            "- [{status}] {tool} {path}: {detail} (before={before}, after={after})",
+            tool = tx.tool_name,
+            path = tx.path,
+            before = tx.before_hash.as_deref().unwrap_or("none"),
+            after = tx.after_hash.as_deref().unwrap_or("none"),
+        ));
+    }
+    lines.push(String::new());
+    lines.push("Please correct your response and retry the failed file operations.".to_string());
+    lines.join("\n")
+}
+
 // ─── Hashing ─────────────────────────────────────────────────
 
 pub fn hash_content(content: &[u8]) -> String {
@@ -441,3 +520,86 @@ Rules:
 - If any action fails, ALL previous actions in the response are rolled back
 - You may still use read_file, grep_search, glob_search, bash (read-only) normally
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tx(outcome: SwdOutcome) -> SwdTransaction {
+        SwdTransaction {
+            tool_name: "write_file".to_string(),
+            path: "src/foo.rs".to_string(),
+            before_hash: Some("aabbcc".to_string()),
+            after_hash: Some("ddeeff".to_string()),
+            outcome,
+            timestamp_ms: 0,
+        }
+    }
+
+    #[test]
+    fn test_correction_context_new() {
+        let ctx = CorrectionContext::new();
+        assert_eq!(ctx.attempts, 0);
+        assert_eq!(ctx.max_attempts, MAX_CORRECTION_ATTEMPTS);
+        assert!(ctx.can_retry());
+        assert!(!ctx.has_failures());
+    }
+
+    #[test]
+    fn test_correction_context_max_attempts() {
+        let mut ctx = CorrectionContext::new();
+        let txs = vec![make_tx(SwdOutcome::Failed {
+            reason: "error".to_string(),
+        })];
+        ctx.record_failures(&txs);
+        assert!(ctx.can_retry());
+        ctx.record_failures(&txs);
+        assert!(!ctx.can_retry());
+    }
+
+    #[test]
+    fn test_correction_context_reset() {
+        let mut ctx = CorrectionContext::new();
+        let txs = vec![make_tx(SwdOutcome::Failed {
+            reason: "error".to_string(),
+        })];
+        ctx.record_failures(&txs);
+        ctx.record_failures(&txs);
+        assert!(!ctx.can_retry());
+        ctx.reset();
+        assert_eq!(ctx.attempts, 0);
+        assert!(ctx.can_retry());
+        assert!(!ctx.has_failures());
+    }
+
+    #[test]
+    fn test_correction_context_filters_only_failures() {
+        let mut ctx = CorrectionContext::new();
+        let txs = vec![
+            make_tx(SwdOutcome::Verified),
+            make_tx(SwdOutcome::Noop),
+            make_tx(SwdOutcome::Failed {
+                reason: "fail".to_string(),
+            }),
+            make_tx(SwdOutcome::Drift {
+                detail: "drift".to_string(),
+            }),
+            make_tx(SwdOutcome::RolledBack),
+        ];
+        ctx.record_failures(&txs);
+        assert_eq!(ctx.last_failures.len(), 3);
+    }
+
+    #[test]
+    fn test_correction_prompt_format() {
+        let txs = vec![make_tx(SwdOutcome::Failed {
+            reason: "hash mismatch".to_string(),
+        })];
+        let prompt = build_correction_prompt(&txs);
+        assert!(prompt.contains("[SWD CORRECTION TURN]"));
+        assert!(prompt.contains("src/foo.rs"));
+        assert!(prompt.contains("FAILED"));
+        assert!(prompt.contains("hash mismatch"));
+        assert!(prompt.contains("aabbcc"));
+    }
+}

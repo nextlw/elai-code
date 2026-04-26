@@ -1,3 +1,4 @@
+mod diff;
 mod init;
 mod input;
 mod render;
@@ -33,9 +34,10 @@ use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials, generate_pkce_pair, generate_state, load_system_prompt,
-    parse_oauth_callback_request_target, save_oauth_credentials, ApiClient, ApiRequest,
-    AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
+    clear_oauth_credentials, generate_pkce_pair, generate_state, load_budget_config,
+    load_system_prompt, parse_oauth_callback_request_target, save_budget_config,
+    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
+    BudgetTracker, BudgetUsagePct, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
     ConversationMessage, ConversationRuntime, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, RuntimeError,
     Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
@@ -95,7 +97,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
             no_tui,
             swd_level,
-        } => run_repl(model, allowed_tools, permission_mode, no_tui, swd_level)?,
+            budget_config,
+        } => run_repl(model, allowed_tools, permission_mode, no_tui, swd_level, budget_config)?,
         CliAction::Help => print_help(),
     }
     Ok(())
@@ -164,7 +167,7 @@ fn claw_env_fill_missing_from_file(path: &Path) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum CliAction {
     DumpManifests,
     BootstrapPlan,
@@ -199,6 +202,7 @@ enum CliAction {
         permission_mode: PermissionMode,
         no_tui: bool,
         swd_level: crate::swd::SwdLevel,
+        budget_config: Option<BudgetConfig>,
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
@@ -232,6 +236,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut rest = Vec::new();
     let mut no_tui = false;
     let mut swd_level_arg = crate::swd::SwdLevel::default();
+    let mut budget_max_tokens: Option<u64> = None;
+    let mut budget_max_usd: Option<f64> = None;
+    let mut budget_max_turns: Option<u32> = None;
+    let mut no_budget = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -281,6 +289,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 no_tui = true;
                 index += 1;
             }
+            "--orchestrate" => {
+                env::set_var("CLAW_ORCHESTRATE", "1");
+                index += 1;
+            }
             "--swd" => {
                 let value = args
                     .get(index + 1)
@@ -293,6 +305,59 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 let value = &flag[6..];
                 swd_level_arg = crate::swd::SwdLevel::from_str(value)
                     .ok_or_else(|| format!("invalid --swd: {value}"))?;
+                index += 1;
+            }
+            "--budget-tokens" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --budget-tokens".to_string())?;
+                budget_max_tokens = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid --budget-tokens: {value}"))?,
+                );
+                index += 2;
+            }
+            flag if flag.starts_with("--budget-tokens=") => {
+                let v = &flag[16..];
+                budget_max_tokens = Some(
+                    v.parse::<u64>()
+                        .map_err(|_| format!("invalid --budget-tokens: {v}"))?,
+                );
+                index += 1;
+            }
+            "--budget-usd" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --budget-usd".to_string())?;
+                budget_max_usd = Some(
+                    value
+                        .parse::<f64>()
+                        .map_err(|_| format!("invalid --budget-usd: {value}"))?,
+                );
+                index += 2;
+            }
+            flag if flag.starts_with("--budget-usd=") => {
+                let v = &flag[13..];
+                budget_max_usd = Some(
+                    v.parse::<f64>()
+                        .map_err(|_| format!("invalid --budget-usd: {v}"))?,
+                );
+                index += 1;
+            }
+            "--budget-turns" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --budget-turns".to_string())?;
+                budget_max_turns = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid --budget-turns: {value}"))?,
+                );
+                index += 2;
+            }
+            "--no-budget" => {
+                no_budget = true;
                 index += 1;
             }
             "-p" => {
@@ -342,6 +407,20 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
     let allowed_tools = normalize_allowed_tools(&allowed_tool_values)?;
 
+    let budget_config = if no_budget {
+        None
+    } else if budget_max_tokens.is_some() || budget_max_usd.is_some() || budget_max_turns.is_some()
+    {
+        Some(BudgetConfig {
+            max_tokens: budget_max_tokens,
+            max_turns: budget_max_turns,
+            max_cost_usd: budget_max_usd,
+            warn_at_pct: 80.0,
+        })
+    } else {
+        None
+    };
+
     if rest.is_empty() {
         return Ok(CliAction::Repl {
             model,
@@ -349,6 +428,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             permission_mode,
             no_tui,
             swd_level: swd_level_arg,
+            budget_config,
         });
     }
     if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) {
@@ -1043,6 +1123,7 @@ fn run_resume_command(
         | SlashCommand::Permissions { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
+        | SlashCommand::Budget { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -1053,11 +1134,13 @@ fn run_repl(
     permission_mode: PermissionMode,
     no_tui: bool,
     swd_level: crate::swd::SwdLevel,
+    budget_config: Option<BudgetConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Use TUI mode when stdout is a real terminal and --no-tui not specified.
     if !no_tui && std::io::stdout().is_terminal() {
-        return run_tui_repl(model, allowed_tools, permission_mode, swd_level);
+        return run_tui_repl(model, allowed_tools, permission_mode, swd_level, budget_config);
     }
+    let _ = budget_config;
 
     // Fallback: plain text REPL (piped/non-TTY).
     let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
@@ -1100,6 +1183,7 @@ fn run_tui_repl(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     swd_level: crate::swd::SwdLevel,
+    budget_config: Option<BudgetConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::atomic::AtomicU8;
     use std::sync::Arc;
@@ -1121,6 +1205,19 @@ fn run_tui_repl(
 
     let swd_atomic = Arc::new(AtomicU8::new(swd_level as u8));
 
+    // Resolve budget tracker: CLI flags → .claw/budget.json → disabled
+    let effective_budget = if let Some(cfg) = budget_config {
+        BudgetTracker::new(cfg)
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if let Some(cfg) = load_budget_config(&cwd) {
+            BudgetTracker::new(cfg)
+        } else {
+            BudgetTracker::disabled()
+        }
+    };
+    let budget_tracker = std::sync::Arc::new(std::sync::Mutex::new(effective_budget));
+
     let mut app = tui::UiApp::new(
         model.clone(),
         permission_mode.as_str().to_string(),
@@ -1128,6 +1225,9 @@ fn run_tui_repl(
         recent_sessions,
         Arc::clone(&swd_atomic),
     );
+    app.budget_enabled = budget_tracker.lock().unwrap().is_enabled();
+    // Tracks the last warning threshold already shown (90 or 80) to avoid repeating.
+    let mut budget_warned_at: u8 = 0;
 
     // Install a panic hook that restores the terminal before printing the panic.
     let original_hook = std::panic::take_hook();
@@ -1169,8 +1269,46 @@ fn run_tui_repl(
                     app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}")));
                 }
                 // Persist session.
-                let guard = session.lock().unwrap();
-                let _ = guard.save_to_path(&session_handle.path);
+                {
+                    let guard = session.lock().unwrap();
+                    let _ = guard.save_to_path(&session_handle.path);
+                }
+                // Budget check after each turn
+                {
+                    let usage = {
+                        let guard = session.lock().unwrap();
+                        UsageTracker::from_session(&guard)
+                    };
+                    let bt = budget_tracker.lock().unwrap();
+                    if bt.is_enabled() {
+                        let pct_data = bt.usage_pct(&usage, &app.model);
+                        app.budget_pct = pct_data.highest_pct;
+                        app.budget_cost_usd = pct_data.current_cost_usd;
+                        match bt.check(&usage, &app.model) {
+                            BudgetStatus::Exhausted { reason } => {
+                                let _ = append_budget_summary_to_memory(
+                                    &app.model,
+                                    &usage,
+                                    &pct_data,
+                                    &reason,
+                                );
+                                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                    "🛑 Budget esgotado: {reason}\n💡 Aumente com --budget-tokens N ou /budget N"
+                                )));
+                            }
+                            BudgetStatus::Warning { pct, dimension } => {
+                                let threshold = if pct >= 90.0 { 90u8 } else { 80u8 };
+                                if budget_warned_at < threshold {
+                                    budget_warned_at = threshold;
+                                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                        "⚠️  Budget {pct:.0}% consumido ({dimension})"
+                                    )));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
 
             match action {
@@ -1179,6 +1317,7 @@ fn run_tui_repl(
                 }
                 tui::TuiAction::SendMessage(text) => {
                     if !app.thinking {
+                        budget_warned_at = 0;
                         app.thinking = true;
                         let model_clone = app.model.clone();
                         let perm_clone = permission_mode_from_label(
@@ -1264,7 +1403,7 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::SlashCommand(cmd) => {
-                    handle_tui_slash_command(cmd, &mut app, &session);
+                    handle_tui_slash_command(cmd, &mut app, &session, &budget_tracker);
                 }
                 tui::TuiAction::EnterReadMode => {
                     app.read_mode = true;
@@ -1297,10 +1436,48 @@ fn run_tui_repl(
     result
 }
 
+fn append_budget_summary_to_memory(
+    model: &str,
+    usage: &UsageTracker,
+    pct: &BudgetUsagePct,
+    reason: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let memory_path = if cwd.join("MEMORY.md").exists() {
+        cwd.join("MEMORY.md")
+    } else if cwd.join("CLAW.md").exists() {
+        cwd.join("CLAW.md")
+    } else {
+        cwd.join("MEMORY.md")
+    };
+    let timestamp = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    };
+    let cumulative = usage.cumulative_usage();
+    let summary = format!(
+        "\n## Budget Save — {timestamp}\n- Reason: {reason}\n- Tokens: {}/{}\n- Turns: {}\n- Cost: ${:.4}\n- Model: {model}\n",
+        cumulative.total_tokens(),
+        pct.tokens_pct,
+        usage.turns(),
+        pct.current_cost_usd,
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&memory_path)?;
+    file.write_all(summary.as_bytes())
+}
+
 fn handle_tui_slash_command(
     cmd: String,
     app: &mut tui::UiApp,
     session: &Arc<std::sync::Mutex<Session>>,
+    budget_tracker: &std::sync::Arc<std::sync::Mutex<BudgetTracker>>,
 ) {
     // Remove the thinking flag since slash commands don't call the runtime.
     app.thinking = false;
@@ -1522,6 +1699,68 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             app.push_chat(tui::ChatEntry::SystemNote(
                 "ℹ Use `claw agents` ou `claw skills` fora do modo TUI para listar.".to_string(),
             ));
+        }
+        "budget" => {
+            if let Some(a) = arg {
+                if a == "off" {
+                    budget_tracker.lock().unwrap().disable();
+                    app.budget_enabled = false;
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "✅ Budget desativado".to_string(),
+                    ));
+                } else {
+                    let parts: Vec<&str> = a.split_whitespace().collect();
+                    let max_tokens = parts.first().and_then(|s| s.parse::<u64>().ok());
+                    let max_usd = parts.get(1).and_then(|s| s.parse::<f64>().ok());
+                    if max_tokens.is_some() || max_usd.is_some() {
+                        let cfg = BudgetConfig {
+                            max_tokens,
+                            max_turns: None,
+                            max_cost_usd: max_usd,
+                            warn_at_pct: 80.0,
+                        };
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let _ = save_budget_config(&cwd, &cfg);
+                        budget_tracker.lock().unwrap().update_config(cfg.clone());
+                        app.budget_enabled = true;
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "✅ Budget definido: tokens={} usd={}",
+                            cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
+                            cfg.max_cost_usd
+                                .map_or("∞".into(), |u| format!("${u:.2}")),
+                        )));
+                    } else {
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            "❓ Uso: /budget [tokens] [usd] | off".to_string(),
+                        ));
+                    }
+                }
+            } else {
+                let bt = budget_tracker.lock().unwrap();
+                let usage = {
+                    let guard = session.lock().unwrap();
+                    UsageTracker::from_session(&guard)
+                };
+                if bt.is_enabled() {
+                    let pct = bt.usage_pct(&usage, &app.model);
+                    let cfg = bt.config();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "📊 Budget: {:.0}% consumido · ${:.4} · Tokens: {} · Turns: {}\n   Limites: tokens={} usd={} turns={}",
+                        pct.highest_pct,
+                        pct.current_cost_usd,
+                        pct.total_tokens,
+                        usage.turns(),
+                        cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
+                        cfg.max_cost_usd.map_or("∞".into(), |u| format!("${u:.2}")),
+                        cfg.max_turns.map_or("∞".into(), |t| t.to_string()),
+                    )));
+                } else {
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "ℹ️  Budget desativado. Use /budget <tokens> [usd] para ativar"
+                            .to_string(),
+                    ));
+                }
+            }
         }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
@@ -1803,6 +2042,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             ),
             SlashCommand::CommitPushPr { .. } => {
                 Self::repl_feature_not_wired("commit-push-pr not yet wired to REPL")
+            }
+            SlashCommand::Budget { .. } => {
+                Self::repl_feature_not_wired("budget command available in TUI mode")
             }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))
@@ -3555,6 +3797,7 @@ struct DefaultRuntimeClient {
     progress_reporter: Option<InternalPromptProgressReporter>,
     tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
     swd_level: Arc<std::sync::atomic::AtomicU8>,
+    correction_ctx: crate::swd::CorrectionContext,
 }
 
 impl DefaultRuntimeClient {
@@ -3567,9 +3810,18 @@ impl DefaultRuntimeClient {
         progress_reporter: Option<InternalPromptProgressReporter>,
         swd_level: Arc<std::sync::atomic::AtomicU8>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let orchestrate = env::var("CLAW_ORCHESTRATE")
+            .ok()
+            .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false);
+        let client = if orchestrate {
+            ProviderClient::orchestrated().map_err(|error| error.to_string())?
+        } else {
+            ProviderClient::from_model(&model).map_err(|error| error.to_string())?
+        };
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
-            client: ProviderClient::from_model(&model).map_err(|error| error.to_string())?,
+            client,
             model,
             enable_tools,
             emit_output,
@@ -3578,6 +3830,7 @@ impl DefaultRuntimeClient {
             progress_reporter,
             tui_sender: None,
             swd_level,
+            correction_ctx: crate::swd::CorrectionContext::new(),
         })
     }
 
@@ -3610,7 +3863,12 @@ impl ApiClient for DefaultRuntimeClient {
         let emit_output = self.emit_output;
         let swd_level_arc = Arc::clone(&self.swd_level);
 
-        self.runtime.block_on(async {
+        self.correction_ctx.reset();
+        let correction_shared: std::sync::Arc<std::sync::Mutex<crate::swd::CorrectionContext>> =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::swd::CorrectionContext::new()));
+        let correction_for_async = std::sync::Arc::clone(&correction_shared);
+
+        let result = self.runtime.block_on(async {
             let mut stream = self
                 .client
                 .stream_message(&message_request)
@@ -3737,11 +3995,68 @@ impl ApiClient for DefaultRuntimeClient {
                             {
                                 let actions = crate::swd::parse_file_actions(&full_text_buf);
                                 if !actions.is_empty() {
-                                    let txs = crate::swd::execute_file_actions(actions);
-                                    let _ = crate::swd::append_swd_log(&txs);
                                     if let Some(ref sender) = tui_sender {
-                                        let _ = sender
-                                            .send(tui::TuiMsg::SwdBatchResult(txs));
+                                        // Compute diffs for preview before executing.
+                                        let previews: Vec<(String, Vec<crate::diff::DiffHunk>)> =
+                                            actions.iter().map(|action| {
+                                                let old = std::fs::read_to_string(&action.path)
+                                                    .unwrap_or_default();
+                                                let new = match action.operation {
+                                                    crate::swd::FileOp::Write => {
+                                                        action.content.as_deref().unwrap_or("").to_string()
+                                                    }
+                                                    crate::swd::FileOp::Delete => String::new(),
+                                                };
+                                                let hunks = crate::diff::compute_diff(&old, &new, 3);
+                                                (action.path.clone(), hunks)
+                                            }).collect();
+
+                                        let (reply_tx, reply_rx) =
+                                            std::sync::mpsc::sync_channel::<bool>(1);
+                                        let _ = sender.send(tui::TuiMsg::SwdDiffPreview {
+                                            actions: previews,
+                                            reply_tx,
+                                        });
+                                        let accepted = reply_rx.recv().unwrap_or(false);
+
+                                        if accepted {
+                                            let txs = crate::swd::execute_file_actions(actions);
+                                            let _ = crate::swd::append_swd_log(&txs);
+                                            let has_failures = txs.iter().any(|tx| {
+                                                matches!(
+                                                    tx.outcome,
+                                                    crate::swd::SwdOutcome::Failed { .. }
+                                                        | crate::swd::SwdOutcome::Drift { .. }
+                                                        | crate::swd::SwdOutcome::RolledBack
+                                                )
+                                            });
+                                            let _ = sender.send(tui::TuiMsg::SwdBatchResult(txs.clone()));
+                                            if has_failures {
+                                                correction_for_async
+                                                    .lock()
+                                                    .unwrap()
+                                                    .record_failures(&txs);
+                                            }
+                                        }
+                                        // Rejection note already sent by TUI handler.
+                                    } else {
+                                        // Non-TUI mode: execute directly (no preview).
+                                        let txs = crate::swd::execute_file_actions(actions);
+                                        let _ = crate::swd::append_swd_log(&txs);
+                                        let has_failures = txs.iter().any(|tx| {
+                                            matches!(
+                                                tx.outcome,
+                                                crate::swd::SwdOutcome::Failed { .. }
+                                                    | crate::swd::SwdOutcome::Drift { .. }
+                                                    | crate::swd::SwdOutcome::RolledBack
+                                            )
+                                        });
+                                        if has_failures {
+                                            correction_for_async
+                                                .lock()
+                                                .unwrap()
+                                                .record_failures(&txs);
+                                        }
                                     }
                                 }
                                 full_text_buf.clear();
@@ -3777,7 +4092,27 @@ impl ApiClient for DefaultRuntimeClient {
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
             response_to_events(response, out)
-        })
+        })?;
+
+        // Full-mode correction loop: if failures were recorded, notify TUI and retry.
+        {
+            use std::sync::atomic::Ordering;
+            if crate::swd::SwdLevel::from_u8(self.swd_level.load(Ordering::Relaxed))
+                == crate::swd::SwdLevel::Full
+            {
+                let ctx = correction_shared.lock().unwrap().clone();
+                if ctx.has_failures() && ctx.can_retry() {
+                    let attempt = ctx.attempts;
+                    let max_attempts = ctx.max_attempts;
+                    if let Some(ref sender) = self.tui_sender {
+                        let _ = sender.send(tui::TuiMsg::CorrectionRetry { attempt, max_attempts });
+                    }
+                }
+                self.correction_ctx = correction_shared.lock().unwrap().clone();
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -4351,6 +4686,7 @@ struct CliToolExecutor {
     tool_registry: GlobalToolRegistry,
     tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
     swd_level: Arc<std::sync::atomic::AtomicU8>,
+    swd_retry_counts: std::collections::HashMap<String, u8>,
 }
 
 impl CliToolExecutor {
@@ -4367,6 +4703,7 @@ impl CliToolExecutor {
             tool_registry,
             tui_sender: None,
             swd_level,
+            swd_retry_counts: std::collections::HashMap::new(),
         }
     }
 
@@ -4407,8 +4744,67 @@ impl CliToolExecutor {
         let outcome = swd::verify_outcome(&before_hash, &after_hash, tool_ok);
 
         // Rollback if failed.
-        if matches!(outcome, SwdOutcome::Failed { .. }) && !path.is_empty() {
+        if matches!(outcome, SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }) && !path.is_empty() {
             let _ = swd::rollback(&path, before_bytes.as_deref());
+        }
+
+        // Rich error with retry hint for partial mode correction.
+        if matches!(outcome, SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }) && !path.is_empty() {
+            let retry_count = self.swd_retry_counts.entry(path.clone()).or_insert(0);
+            let detail = match &outcome {
+                SwdOutcome::Failed { reason } => reason.clone(),
+                SwdOutcome::Drift { detail } => detail.clone(),
+                _ => String::new(),
+            };
+            if *retry_count < crate::swd::MAX_CORRECTION_ATTEMPTS {
+                *retry_count += 1;
+                let ts2 = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                    .unwrap_or(0);
+                let tx_err = SwdTransaction {
+                    tool_name: tool_name.to_string(),
+                    path: path.clone(),
+                    before_hash: before_hash.clone(),
+                    after_hash: after_hash.clone(),
+                    outcome: outcome.clone(),
+                    timestamp_ms: ts2,
+                };
+                let _ = swd::append_swd_log(&[tx_err.clone()]);
+                if let Some(ref sender) = self.tui_sender {
+                    let _ = sender.send(tui::TuiMsg::SwdResult(tx_err));
+                }
+                let hint = format!(
+                    "SWD verification failed for {path}:\n\
+                     - Before hash: {before}\n\
+                     - After hash: {after}\n\
+                     - Reason: {detail}\n\
+                     The file has been rolled back. Please retry with corrected content.",
+                    before = before_hash.as_deref().unwrap_or("none"),
+                    after = after_hash.as_deref().unwrap_or("none"),
+                );
+                return Err(ToolError::new(hint));
+            } else {
+                let ts2 = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                    .unwrap_or(0);
+                let tx_err = SwdTransaction {
+                    tool_name: tool_name.to_string(),
+                    path: path.clone(),
+                    before_hash: before_hash.clone(),
+                    after_hash: after_hash.clone(),
+                    outcome: outcome.clone(),
+                    timestamp_ms: ts2,
+                };
+                let _ = swd::append_swd_log(&[tx_err.clone()]);
+                if let Some(ref sender) = self.tui_sender {
+                    let _ = sender.send(tui::TuiMsg::SwdResult(tx_err));
+                }
+                return Err(ToolError::new(format!(
+                    "SWD max retries exceeded for {path}: {detail}. Manual intervention required."
+                )));
+            }
         }
 
         let ts = SystemTime::now()
@@ -4720,6 +5116,7 @@ mod tests {
                 permission_mode: PermissionMode::DangerFullAccess,
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
+                budget_config: None,
             }
         );
     }
@@ -4815,6 +5212,7 @@ mod tests {
                 permission_mode: PermissionMode::ReadOnly,
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
+                budget_config: None,
             }
         );
     }
@@ -4839,6 +5237,7 @@ mod tests {
                 permission_mode: PermissionMode::DangerFullAccess,
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
+                budget_config: None,
             }
         );
     }
@@ -5035,7 +5434,7 @@ mod tests {
             names,
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-                "version", "export", "agents", "skills",
+                "version", "export", "agents", "skills", "budget",
             ]
         );
     }

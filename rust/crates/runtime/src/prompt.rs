@@ -190,8 +190,23 @@ impl SystemPromptBuilder {
                 self.os_version.as_deref().unwrap_or("unknown")
             ),
         ]));
+        lines.push(String::new());
+        lines.push("## Path conventions for tools".to_string());
+        lines.extend(prepend_bullets(vec![
+            "When calling file tools (read_file, write_file, edit_file, glob_search, grep_search, NotebookEdit), paths MUST be either absolute or relative to the Working directory above.".to_string(),
+            "Do NOT prefix paths with the project name or any parent-directory segment of the Working directory.".to_string(),
+            format!("Example: to read a file inside `{cwd}/src/foo.rs`, pass `src/foo.rs`, not `{}/src/foo.rs` (where the leading folder name repeats the cwd).", project_basename(&cwd)),
+            "If a path is unknown, use glob_search or bash `ls` to discover the actual layout before reading.".to_string(),
+        ]));
         lines.join("\n")
     }
+}
+
+fn project_basename(cwd: &str) -> &str {
+    Path::new(cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("project")
 }
 
 #[must_use]
@@ -411,20 +426,59 @@ fn collapse_blank_lines(content: &str) -> String {
     result
 }
 
+/// Result returned by `load_system_prompt_with_output`, which carries skill
+/// metadata in addition to the prompt sections.
+#[derive(Debug, Clone)]
+pub struct SystemPromptOutput {
+    pub sections: Vec<String>,
+    pub skill_budget_multiplier: f32,
+    pub skill_force_provider: Option<String>,
+}
+
+/// Loads the system prompt and returns full output including skill metadata.
+pub fn load_system_prompt_with_output(
+    cwd: impl Into<PathBuf>,
+    current_date: impl Into<String>,
+    os_name: impl Into<String>,
+    os_version: impl Into<String>,
+) -> Result<SystemPromptOutput, PromptBuildError> {
+    let cwd = cwd.into();
+    let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
+    let config = ConfigLoader::default_for(&cwd).load()?;
+    let skills = crate::skills::load_all_skills(&cwd);
+
+    let mut builder = SystemPromptBuilder::new()
+        .with_os(os_name, os_version)
+        .with_project_context(project_context)
+        .with_runtime_config(config);
+
+    let mut skill_budget_multiplier = 1.0_f32;
+    let mut skill_force_provider: Option<String> = None;
+
+    if !skills.is_empty() {
+        let result = crate::skills::build_skill_prompt_sections(&skills);
+        skill_budget_multiplier = result.budget_multiplier;
+        skill_force_provider = result.force_provider;
+        for section in result.sections {
+            builder = builder.append_section(section);
+        }
+    }
+
+    Ok(SystemPromptOutput {
+        sections: builder.build(),
+        skill_budget_multiplier,
+        skill_force_provider,
+    })
+}
+
 pub fn load_system_prompt(
     cwd: impl Into<PathBuf>,
     current_date: impl Into<String>,
     os_name: impl Into<String>,
     os_version: impl Into<String>,
 ) -> Result<Vec<String>, PromptBuildError> {
-    let cwd = cwd.into();
-    let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
-    let config = ConfigLoader::default_for(&cwd).load()?;
-    Ok(SystemPromptBuilder::new()
-        .with_os(os_name, os_version)
-        .with_project_context(project_context)
-        .with_runtime_config(config)
-        .build())
+    load_system_prompt_with_output(cwd, current_date, os_name, os_version)
+        .map(|output| output.sections)
 }
 
 fn render_config_section(config: &RuntimeConfig) -> String {

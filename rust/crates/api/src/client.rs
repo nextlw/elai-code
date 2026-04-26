@@ -1,8 +1,17 @@
+use std::sync::Arc;
+
 use crate::error::ApiError;
+use crate::orchestrator::{
+    ClawUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig, ProviderOrchestrator, RequestOptions,
+};
 use crate::providers::claw_provider::{self, AuthSource, ClawApiClient};
 use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
 use crate::providers::{self, Provider, ProviderKind};
-use crate::types::{MessageRequest, MessageResponse, StreamEvent};
+use crate::types::{
+    ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
+    MessageDelta, MessageDeltaEvent, MessageRequest, MessageResponse, MessageStartEvent,
+    MessageStopEvent, OutputContentBlock, StreamEvent,
+};
 
 async fn send_via_provider<P: Provider>(
     provider: &P,
@@ -23,6 +32,7 @@ pub enum ProviderClient {
     ClawApi(ClawApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    Orchestrated(Arc<ProviderOrchestrator>),
 }
 
 impl ProviderClient {
@@ -49,10 +59,74 @@ impl ProviderClient {
         }
     }
 
+    /// Build an orchestrated `ProviderClient` that registers every provider with
+    /// available credentials and falls back across them.
+    pub fn orchestrated() -> Result<Self, ApiError> {
+        let mut orchestrator = ProviderOrchestrator::new();
+        let mut priority = 0_usize;
+        let mut registered_any = false;
+
+        if claw_provider::has_auth_from_env_or_saved().unwrap_or(false) {
+            if let Ok(client) = ClawApiClient::from_env() {
+                orchestrator.register_provider(
+                    Box::new(ClawUnifiedAdapter::new(client)),
+                    ProviderConfig {
+                        id: "anthropic".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
+                priority += 1;
+                registered_any = true;
+            }
+        }
+
+        if openai_compat::has_api_key("OPENAI_API_KEY") {
+            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::openai()) {
+                orchestrator.register_provider(
+                    Box::new(OpenAiUnifiedAdapter::new(client, "openai")),
+                    ProviderConfig {
+                        id: "openai".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
+                priority += 1;
+                registered_any = true;
+            }
+        }
+
+        if openai_compat::has_api_key("XAI_API_KEY") {
+            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::xai()) {
+                orchestrator.register_provider(
+                    Box::new(OpenAiUnifiedAdapter::new(client, "xai")),
+                    ProviderConfig {
+                        id: "xai".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
+                registered_any = true;
+            }
+        }
+
+        if !registered_any {
+            return Err(ApiError::missing_credentials(
+                "orchestrator",
+                &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY"],
+            ));
+        }
+
+        Ok(Self::Orchestrated(Arc::new(orchestrator)))
+    }
+
     #[must_use]
-    pub const fn provider_kind(&self) -> ProviderKind {
+    pub fn provider_kind(&self) -> ProviderKind {
         match self {
-            Self::ClawApi(_) => ProviderKind::ClawApi,
+            Self::ClawApi(_) | Self::Orchestrated(_) => ProviderKind::ClawApi,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
         }
@@ -65,6 +139,11 @@ impl ProviderClient {
         match self {
             Self::ClawApi(client) => send_via_provider(client, request).await,
             Self::Xai(client) | Self::OpenAi(client) => send_via_provider(client, request).await,
+            Self::Orchestrated(orchestrator) => {
+                orchestrator
+                    .send_message(request, &RequestOptions::default())
+                    .await
+            }
         }
     }
 
@@ -79,6 +158,14 @@ impl ProviderClient {
             Self::Xai(client) | Self::OpenAi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
+            Self::Orchestrated(orchestrator) => {
+                let response = orchestrator
+                    .stream_message(request, &RequestOptions::default())
+                    .await?;
+                Ok(MessageStream::Collected(CollectedMessageStream::from_response(
+                    response,
+                )))
+            }
         }
     }
 }
@@ -87,6 +174,7 @@ impl ProviderClient {
 pub enum MessageStream {
     ClawApi(claw_provider::MessageStream),
     OpenAiCompat(openai_compat::MessageStream),
+    Collected(CollectedMessageStream),
 }
 
 impl MessageStream {
@@ -95,6 +183,7 @@ impl MessageStream {
         match self {
             Self::ClawApi(stream) => stream.request_id(),
             Self::OpenAiCompat(stream) => stream.request_id(),
+            Self::Collected(stream) => stream.request_id(),
         }
     }
 
@@ -102,6 +191,78 @@ impl MessageStream {
         match self {
             Self::ClawApi(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
+            Self::Collected(stream) => stream.next_event().await,
+        }
+    }
+}
+
+/// Replays an already-collected `MessageResponse` as a synthetic event stream so
+/// orchestrated calls can flow through the same `MessageStream` API.
+#[derive(Debug)]
+pub struct CollectedMessageStream {
+    events: Vec<StreamEvent>,
+    index: usize,
+    request_id: Option<String>,
+}
+
+impl CollectedMessageStream {
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn from_response(response: MessageResponse) -> Self {
+        let request_id = response.request_id.clone();
+        let mut events = Vec::new();
+
+        events.push(StreamEvent::MessageStart(MessageStartEvent {
+            message: response.clone(),
+        }));
+
+        for (i, block) in response.content.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let index = i as u32;
+            events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                index,
+                content_block: block.clone(),
+            }));
+            if let OutputContentBlock::Text { text } = block {
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index,
+                    delta: ContentBlockDelta::TextDelta { text: text.clone() },
+                }));
+            }
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index,
+            }));
+        }
+
+        events.push(StreamEvent::MessageDelta(MessageDeltaEvent {
+            delta: MessageDelta {
+                stop_reason: response.stop_reason.clone(),
+                stop_sequence: response.stop_sequence.clone(),
+            },
+            usage: response.usage.clone(),
+        }));
+        events.push(StreamEvent::MessageStop(MessageStopEvent {}));
+
+        Self {
+            events,
+            index: 0,
+            request_id,
+        }
+    }
+
+    #[must_use]
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>, ApiError> {
+        if self.index < self.events.len() {
+            let event = self.events[self.index].clone();
+            self.index += 1;
+            Ok(Some(event))
+        } else {
+            Ok(None)
         }
     }
 }

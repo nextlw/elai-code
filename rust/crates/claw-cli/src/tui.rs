@@ -60,6 +60,19 @@ pub enum TuiMsg {
     Error(String),
     SwdResult(crate::swd::SwdTransaction),
     SwdBatchResult(Vec<crate::swd::SwdTransaction>),
+    #[allow(dead_code)]
+    BudgetWarning { pct: f32, dimension: String },
+    #[allow(dead_code)]
+    BudgetExhausted { reason: String },
+    #[allow(dead_code)]
+    BudgetUpdate { pct: f32, cost_usd: f64 },
+    CorrectionRetry { attempt: u8, max_attempts: u8 },
+    SwdDiffPreview {
+        actions: Vec<(String, Vec<crate::diff::DiffHunk>)>,
+        reply_tx: std::sync::mpsc::SyncSender<bool>,
+    },
+    #[allow(dead_code)]
+    SystemNote(String),
 }
 
 /// A permission request sent from the runtime thread; the reply channel is
@@ -91,6 +104,11 @@ pub enum ChatEntry {
         transactions: Vec<crate::swd::SwdTransaction>,
         mode: crate::swd::SwdLevel,
     },
+    CorrectionRetryEntry { attempt: u8, max_attempts: u8 },
+    SwdDiffEntry {
+        path: String,
+        hunks: Vec<crate::diff::DiffHunk>,
+    },
 }
 
 // ─── Overlay states ───────────────────────────────────────────────────────────
@@ -121,6 +139,10 @@ pub enum OverlayKind {
         required_mode: String,
         reply_tx: mpsc::SyncSender<PermDecision>,
     },
+    SwdConfirmApply {
+        action_count: usize,
+        reply_tx: std::sync::mpsc::SyncSender<bool>,
+    },
 }
 
 // ─── Application state ────────────────────────────────────────────────────────
@@ -147,6 +169,9 @@ pub struct UiApp {
     pub spinner_frame: usize,
     pub read_mode: bool,
     pub swd_level: Arc<AtomicU8>,
+    pub budget_pct: f32,
+    pub budget_cost_usd: f64,
+    pub budget_enabled: bool,
 }
 
 impl UiApp {
@@ -178,6 +203,9 @@ impl UiApp {
             spinner_frame: 0,
             read_mode: false,
             swd_level,
+            budget_pct: 0.0,
+            budget_cost_usd: 0.0,
+            budget_enabled: false,
         }
     }
 
@@ -251,6 +279,34 @@ impl UiApp {
                     transactions: txs,
                     mode: crate::swd::SwdLevel::Full,
                 });
+            }
+            TuiMsg::BudgetWarning { pct, dimension } => {
+                self.push_chat(ChatEntry::SystemNote(format!(
+                    "⚠️  Budget {pct:.0}% consumed ({dimension})"
+                )));
+            }
+            TuiMsg::BudgetExhausted { reason } => {
+                self.thinking = false;
+                self.push_chat(ChatEntry::SystemNote(format!(
+                    "🛑 Budget exhausted: {reason}"
+                )));
+            }
+            TuiMsg::BudgetUpdate { pct, cost_usd } => {
+                self.budget_pct = pct;
+                self.budget_cost_usd = cost_usd;
+            }
+            TuiMsg::CorrectionRetry { attempt, max_attempts } => {
+                self.push_chat(ChatEntry::CorrectionRetryEntry { attempt, max_attempts });
+            }
+            TuiMsg::SwdDiffPreview { actions, reply_tx } => {
+                let action_count = actions.len();
+                for (path, hunks) in actions {
+                    self.push_chat(ChatEntry::SwdDiffEntry { path, hunks });
+                }
+                self.overlay = Some(OverlayKind::SwdConfirmApply { action_count, reply_tx });
+            }
+            TuiMsg::SystemNote(note) => {
+                self.push_chat(ChatEntry::SystemNote(note));
             }
         }
     }
@@ -440,6 +496,7 @@ fn slash_palette_items() -> Vec<(String, String)> {
         ("memory".into(), "Mostrar CLAW.md".into()),
         ("version".into(), "Mostrar versão".into()),
         ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
+        ("budget".into(), "Budget limiter (tokens/custo)".into()),
         ("exit".into(), "Sair".into()),
     ]
 }
@@ -901,6 +958,29 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             TuiAction::None
         }
 
+        Some(OverlayKind::SwdConfirmApply {
+            action_count: _,
+            reply_tx,
+        }) => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Char('a'))
+                | (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let _ = reply_tx.send(true);
+                    app.push_chat(ChatEntry::SystemNote(
+                        "✅ SWD: batch aceito — aplicando...".into(),
+                    ));
+                }
+                _ => {
+                    let _ = reply_tx.send(false);
+                    app.push_chat(ChatEntry::SystemNote(
+                        "⛔ SWD: batch rejeitado pelo usuário.".into(),
+                    ));
+                }
+            }
+            app.overlay = None;
+            TuiAction::None
+        }
+
         None => TuiAction::None,
     }
 }
@@ -1352,6 +1432,71 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 }
                 result.push(Line::from(""));
             }
+            ChatEntry::CorrectionRetryEntry { attempt, max_attempts } => {
+                result.push(Line::from(Span::styled(
+                    format!("  \u{21a9} SWD retry {attempt}/{max_attempts}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                result.push(Line::from(""));
+            }
+            ChatEntry::SwdDiffEntry { path, hunks } => {
+                use crate::diff::DiffTag;
+                result.push(Line::from(Span::styled(
+                    format!("  --- {path}"),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                if hunks.is_empty() {
+                    result.push(Line::from(Span::styled(
+                        "  (Nenhuma alteração detectada)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    for hunk in hunks {
+                        let old_count = hunk.lines.iter()
+                            .filter(|l| matches!(l.tag, DiffTag::Keep | DiffTag::Remove))
+                            .count();
+                        let new_count = hunk.lines.iter()
+                            .filter(|l| matches!(l.tag, DiffTag::Keep | DiffTag::Add))
+                            .count();
+                        result.push(Line::from(Span::styled(
+                            format!(
+                                "  @@ -{},{} +{},{} @@",
+                                hunk.old_start, old_count, hunk.new_start, new_count
+                            ),
+                            Style::default().fg(Color::Magenta),
+                        )));
+                        for line in &hunk.lines {
+                            let (marker, style) = match line.tag {
+                                DiffTag::Keep => (
+                                    " ",
+                                    Style::default().fg(Color::DarkGray),
+                                ),
+                                DiffTag::Remove => (
+                                    "-",
+                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                                ),
+                                DiffTag::Add => (
+                                    "+",
+                                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                                ),
+                            };
+                            let lineno = match line.tag {
+                                DiffTag::Add => "     ".to_string(),
+                                _ => line.old_lineno
+                                    .map(|n| format!("{n:>4} "))
+                                    .unwrap_or_else(|| "     ".to_string()),
+                            };
+                            result.push(Line::from(vec![
+                                Span::styled(format!("  {lineno}| {marker} "), style),
+                                Span::styled(line.value.clone(), style),
+                            ]));
+                        }
+                    }
+                }
+                result.push(Line::from(""));
+            }
         }
     }
 
@@ -1417,6 +1562,20 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 // ── Status footer ─────────────────────────────────────────────────────────────
 
+fn budget_bar(pct: f32) -> (String, ratatui::style::Color) {
+    let filled = ((pct / 100.0) * 8.0).round() as usize;
+    let filled = filled.min(8);
+    let empty = 8usize.saturating_sub(filled);
+    let color = if pct >= 90.0 {
+        ratatui::style::Color::Red
+    } else if pct >= 80.0 {
+        ratatui::style::Color::Yellow
+    } else {
+        ratatui::style::Color::Green
+    };
+    (format!("[{}{}]", "|".repeat(filled), " ".repeat(empty)), color)
+}
+
 fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let spinner = if app.thinking {
         SPINNER[app.spinner_frame % SPINNER.len()]
@@ -1425,14 +1584,24 @@ fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     };
     let cost = estimate_cost(&app.model, app.input_tokens, app.output_tokens);
     let swd_str = crate::swd::SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed)).as_str();
+    let budget_segment = if app.budget_enabled {
+        let (bar, _) = budget_bar(app.budget_pct);
+        format!(
+            " · Budget {} {:.0}% · ${:.2}",
+            bar, app.budget_pct, app.budget_cost_usd
+        )
+    } else {
+        String::new()
+    };
     let text = format!(
-        " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{} · {}",
+        " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{}{} · {}",
         app.model,
         app.permission_mode,
         app.input_tokens,
         app.output_tokens,
         cost,
         swd_str,
+        budget_segment,
         short_session_id(&app.session_id),
     );
     let style = if app.read_mode {
@@ -1618,6 +1787,9 @@ fn draw_overlay(
                 "",
             );
         }
+        OverlayKind::SwdConfirmApply { action_count, .. } => {
+            draw_swd_confirm(frame, area, *action_count);
+        }
     }
 }
 
@@ -1758,6 +1930,47 @@ fn draw_tool_approval(
         Line::from(""),
         Line::from(Span::styled(
             "  Enter=Sim · A=Sempre · N/Esc=Não",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize) {
+    let width = 54u16.min(area.width.saturating_sub(4));
+    let height = 7u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(format!(" \u{26a8} SWD: Aplicar {action_count} arquivo(s)? "))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Indexed(215)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  [A] ",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Aceitar    ", Style::default().fg(Color::White)),
+            Span::styled(
+                "[R] ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Rejeitar", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  A/Enter = Aceitar  ·  R/Esc = Rejeitar",
             Style::default().fg(Color::DarkGray),
         )),
     ];

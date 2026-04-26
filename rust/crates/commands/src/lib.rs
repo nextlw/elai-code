@@ -247,6 +247,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "budget",
+        aliases: &[],
+        summary: "Budget limiter (tokens/cost USD)",
+        argument_hint: Some("[tokens] [usd] | off"),
+        resume_supported: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +325,9 @@ pub enum SlashCommand {
         args: Option<String>,
     },
     Skills {
+        args: Option<String>,
+    },
+    Budget {
         args: Option<String>,
     },
     Unknown(String),
@@ -404,6 +414,9 @@ impl SlashCommand {
                 args: remainder_after_command(trimmed, command),
             },
             "skills" => Self::Skills {
+                args: remainder_after_command(trimmed, command),
+            },
+            "budget" => Self::Budget {
                 args: remainder_after_command(trimmed, command),
             },
             other => Self::Unknown(other.to_string()),
@@ -512,13 +525,17 @@ struct AgentSummary {
     shadowed_by: Option<DefinitionSource>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct SkillSummary {
     name: String,
     description: Option<String>,
     source: DefinitionSource,
     shadowed_by: Option<DefinitionSource>,
     origin: SkillOrigin,
+    priority: Option<i32>,
+    budget_multiplier: Option<f32>,
+    force_provider: Option<String>,
+    incompatible_with: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1321,14 +1338,19 @@ fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSumma
                         continue;
                     }
                     let contents = fs::read_to_string(skill_path)?;
-                    let (name, description) = parse_skill_frontmatter(&contents);
+                    let parsed = parse_skill_frontmatter(&contents);
                     root_skills.push(SkillSummary {
-                        name: name
-                            .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string()),
-                        description,
+                        name: parsed.name.unwrap_or_else(|| {
+                            entry.file_name().to_string_lossy().to_string()
+                        }),
+                        description: parsed.description,
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
+                        priority: parsed.priority,
+                        budget_multiplier: parsed.budget_multiplier,
+                        force_provider: parsed.force_provider,
+                        incompatible_with: parsed.incompatible_with,
                     });
                 }
                 SkillOrigin::LegacyCommandsDir => {
@@ -1353,13 +1375,17 @@ fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSumma
                         || entry.file_name().to_string_lossy().to_string(),
                         |stem| stem.to_string_lossy().to_string(),
                     );
-                    let (name, description) = parse_skill_frontmatter(&contents);
+                    let parsed = parse_skill_frontmatter(&contents);
                     root_skills.push(SkillSummary {
-                        name: name.unwrap_or(fallback_name),
-                        description,
+                        name: parsed.name.unwrap_or(fallback_name),
+                        description: parsed.description,
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
+                        priority: parsed.priority,
+                        budget_multiplier: parsed.budget_multiplier,
+                        force_provider: parsed.force_provider,
+                        incompatible_with: parsed.incompatible_with,
                     });
                 }
             }
@@ -1404,35 +1430,86 @@ fn parse_toml_string(contents: &str, key: &str) -> Option<String> {
     None
 }
 
-fn parse_skill_frontmatter(contents: &str) -> (Option<String>, Option<String>) {
-    let mut lines = contents.lines();
-    if lines.next().map(str::trim) != Some("---") {
-        return (None, None);
+struct ParsedSkillFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+    priority: Option<i32>,
+    budget_multiplier: Option<f32>,
+    force_provider: Option<String>,
+    incompatible_with: Vec<String>,
+}
+
+fn parse_skill_frontmatter(contents: &str) -> ParsedSkillFrontmatter {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut out = ParsedSkillFrontmatter {
+        name: None,
+        description: None,
+        priority: None,
+        budget_multiplier: None,
+        force_provider: None,
+        incompatible_with: Vec::new(),
+    };
+
+    if lines.first().map(|s| s.trim()) != Some("---") {
+        return out;
     }
 
-    let mut name = None;
-    let mut description = None;
-    for line in lines {
-        let trimmed = line.trim();
+    let mut i = 1;
+    let mut in_incompat_list = false;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
         if trimmed == "---" {
             break;
         }
+
+        if in_incompat_list {
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                out.incompatible_with
+                    .push(unquote_frontmatter_value(item.trim()));
+                i += 1;
+                continue;
+            } else {
+                in_incompat_list = false;
+            }
+        }
+
         if let Some(value) = trimmed.strip_prefix("name:") {
-            let value = unquote_frontmatter_value(value.trim());
-            if !value.is_empty() {
-                name = Some(value);
+            let v = unquote_frontmatter_value(value.trim());
+            if !v.is_empty() {
+                out.name = Some(v);
             }
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("description:") {
-            let value = unquote_frontmatter_value(value.trim());
-            if !value.is_empty() {
-                description = Some(value);
+        } else if let Some(value) = trimmed.strip_prefix("description:") {
+            let v = unquote_frontmatter_value(value.trim());
+            if !v.is_empty() {
+                out.description = Some(v);
+            }
+        } else if let Some(value) = trimmed.strip_prefix("priority:") {
+            out.priority = value.trim().parse::<i32>().ok();
+        } else if let Some(value) = trimmed.strip_prefix("budget_multiplier:") {
+            out.budget_multiplier = value.trim().parse::<f32>().ok();
+        } else if let Some(value) = trimmed.strip_prefix("force_provider:") {
+            let v = unquote_frontmatter_value(value.trim());
+            if !v.is_empty() {
+                out.force_provider = Some(v);
+            }
+        } else if trimmed.starts_with("incompatible_with:") {
+            // Check for inline single value: `incompatible_with: skill-a`
+            let after_colon = trimmed
+                .strip_prefix("incompatible_with:")
+                .unwrap_or("")
+                .trim();
+            if after_colon.is_empty() {
+                in_incompat_list = true;
+            } else {
+                out.incompatible_with
+                    .push(unquote_frontmatter_value(after_colon));
             }
         }
+
+        i += 1;
     }
 
-    (name, description)
+    out
 }
 
 fn unquote_frontmatter_value(value: &str) -> String {
@@ -1547,9 +1624,30 @@ fn render_skills_report(skills: &[SkillSummary]) -> String {
                 parts.push(detail.to_string());
             }
             let detail = parts.join(" · ");
-            match skill.shadowed_by {
-                Some(winner) => lines.push(format!("  (shadowed by {}) {detail}", winner.label())),
-                None => lines.push(format!("  {detail}")),
+            let line = match skill.shadowed_by {
+                Some(winner) => format!("  (shadowed by {}) {detail}", winner.label()),
+                None => format!("  {detail}"),
+            };
+            lines.push(line);
+
+            // Extra metadata on the next indented line
+            let mut meta_parts = Vec::new();
+            if let Some(p) = skill.priority {
+                meta_parts.push(format!("priority={p}"));
+            }
+            if let Some(m) = skill.budget_multiplier {
+                if (m - 1.0).abs() > f32::EPSILON {
+                    meta_parts.push(format!("budget={m}x"));
+                }
+            }
+            if let Some(fp) = &skill.force_provider {
+                meta_parts.push(format!("provider={fp}"));
+            }
+            if !skill.incompatible_with.is_empty() {
+                meta_parts.push(format!("incompatible={}", skill.incompatible_with.join(",")));
+            }
+            if !meta_parts.is_empty() {
+                lines.push(format!("    [{}]", meta_parts.join(" | ")));
             }
         }
         lines.push(String::new());
@@ -1640,6 +1738,7 @@ pub fn handle_slash_command(
         | SlashCommand::Plugins { .. }
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
+        | SlashCommand::Budget { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -1996,7 +2095,7 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 28);
+        assert_eq!(slash_command_specs().len(), 29);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
 
@@ -2273,9 +2372,9 @@ mod tests {
     #[test]
     fn parses_quoted_skill_frontmatter_values() {
         let contents = "---\nname: \"hud\"\ndescription: 'Quoted description'\n---\n";
-        let (name, description) = super::parse_skill_frontmatter(contents);
-        assert_eq!(name.as_deref(), Some("hud"));
-        assert_eq!(description.as_deref(), Some("Quoted description"));
+        let parsed = super::parse_skill_frontmatter(contents);
+        assert_eq!(parsed.name.as_deref(), Some("hud"));
+        assert_eq!(parsed.description.as_deref(), Some("Quoted description"));
     }
 
     #[test]

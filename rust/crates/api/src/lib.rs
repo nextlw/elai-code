@@ -1,14 +1,20 @@
 mod client;
 mod error;
+pub mod orchestrator;
 mod providers;
 mod sse;
 mod types;
 
 pub use client::{
     oauth_token_is_expired, read_base_url, read_xai_base_url, resolve_saved_oauth_token,
-    resolve_startup_auth_source, MessageStream, OAuthTokenSet, ProviderClient,
+    resolve_startup_auth_source, CollectedMessageStream, MessageStream, OAuthTokenSet,
+    ProviderClient,
 };
 pub use error::ApiError;
+pub use orchestrator::{
+    ClawUnifiedAdapter, HealthReport, OpenAiUnifiedAdapter, ProviderCapability, ProviderConfig,
+    ProviderOrchestrator, ProviderStatus, RequestOptions, TaskType,
+};
 pub use providers::claw_provider::{AuthSource, ClawApiClient, ClawApiClient as ApiClient};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{

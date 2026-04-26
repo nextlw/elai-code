@@ -243,11 +243,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file",
-            description: "Read a text file from the workspace.",
+            description: "Read a text file from the workspace. Paths are relative to the working directory shown in the system prompt unless absolute.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
+                    "path": { "type": "string", "description": "File path relative to the working directory (e.g. 'crates/api/src/lib.rs') or absolute path. Do NOT prefix with the project name." },
                     "offset": { "type": "integer", "minimum": 0 },
                     "limit": { "type": "integer", "minimum": 1 }
                 },
@@ -258,11 +258,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "write_file",
-            description: "Write a text file in the workspace.",
+            description: "Write a text file in the workspace. Paths are relative to the working directory shown in the system prompt unless absolute.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
+                    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
                     "content": { "type": "string" }
                 },
                 "required": ["path", "content"],
@@ -272,11 +272,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "edit_file",
-            description: "Replace text in a workspace file.",
+            description: "Replace text in a workspace file. Paths are relative to the working directory shown in the system prompt unless absolute.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
+                    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
                     "old_string": { "type": "string" },
                     "new_string": { "type": "string" },
                     "replace_all": { "type": "boolean" }
@@ -288,12 +288,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "glob_search",
-            description: "Find files by glob pattern.",
+            description: "Find files by glob pattern. Searches relative to the working directory shown in the system prompt unless an absolute path is given.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string" }
+                    "pattern": { "type": "string", "description": "Glob pattern to match filenames, e.g. '**/*.rs' or 'swd.rs'" },
+                    "path": { "type": "string", "description": "Directory to search in. Use a path relative to the working directory (e.g. 'crates/api/src') or an absolute path. Omit to search from the working directory root." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -302,12 +302,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "grep_search",
-            description: "Search file contents with a regex pattern.",
+            description: "Search file contents with a regex pattern. Paths are relative to the working directory shown in the system prompt unless absolute.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string" },
+                    "pattern": { "type": "string", "description": "Regex pattern to search for in file contents" },
+                    "path": { "type": "string", "description": "Directory or file to search in. Use a path relative to the working directory (e.g. 'crates/claw-cli/src') or an absolute path. Omit to search from the working directory root." },
                     "glob": { "type": "string" },
                     "output_mode": { "type": "string" },
                     "-B": { "type": "integer", "minimum": 0 },
@@ -437,11 +437,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "NotebookEdit",
-            description: "Replace, insert, or delete a cell in a Jupyter notebook.",
+            description: "Replace, insert, or delete a cell in a Jupyter notebook. Paths are relative to the working directory shown in the system prompt unless absolute.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "notebook_path": { "type": "string" },
+                    "notebook_path": { "type": "string", "description": "Path to the .ipynb file relative to the working directory or absolute. Do NOT prefix with the project name." },
                     "cell_id": { "type": "string" },
                     "new_source": { "type": "string" },
                     "cell_type": { "type": "string", "enum": ["code", "markdown"] },

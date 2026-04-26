@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod budget;
 mod compact;
 mod config;
 mod conversation;
@@ -15,10 +16,15 @@ mod prompt;
 mod remote;
 pub mod sandbox;
 mod session;
+pub mod skills;
 mod usage;
 
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
+pub use budget::{
+    load_budget_config, remove_budget_config, save_budget_config, BudgetConfig, BudgetStatus,
+    BudgetTracker, BudgetUsagePct,
+};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
@@ -72,8 +78,13 @@ pub use permissions::{
     PermissionPrompter, PermissionRequest,
 };
 pub use prompt::{
-    load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,
-    SystemPromptBuilder, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    load_system_prompt, load_system_prompt_with_output, prepend_bullets, ContextFile,
+    ProjectContext, PromptBuildError, SystemPromptBuilder, SystemPromptOutput,
+    FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+};
+pub use skills::{
+    build_skill_prompt_sections, load_all_skills, validate_skills, Skill, SkillMetadata,
+    SkillPromptResult, SkillValidation,
 };
 pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
