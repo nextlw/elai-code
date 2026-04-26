@@ -429,3 +429,10 @@ input_schema_json = '''
   "additionalProperties": false
 }
 '''
+
+[aliases]
+read = "read_file"
+write = "write_file"
+edit = "edit_file"
+glob = "glob_search"
+grep = "grep_search"

@@ -43,10 +43,9 @@ use runtime::{
     PermissionPolicy, ProjectContext, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
 };
-use tools::McpToolSource;
+use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use serde_json::json;
-use tools::GlobalToolRegistry;
 
 const DEFAULT_DATE: &str = "2026-03-31";
 const DEFAULT_OAUTH_CALLBACK_PORT: u16 = 4545;
@@ -55,7 +54,7 @@ const BUILD_TARGET: Option<&str> = option_env!("TARGET");
 const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
 const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
-type AllowedToolSet = BTreeSet<String>;
+type AllowedToolSet = Vec<MatcherPattern>;
 
 fn main() {
     if let Err(error) = run() {
@@ -559,7 +558,7 @@ fn filter_tool_specs(
     tool_registry: &GlobalToolRegistry,
     allowed_tools: Option<&AllowedToolSet>,
 ) -> Vec<ToolDefinition> {
-    tool_registry.definitions(allowed_tools)
+    tool_registry.definitions(allowed_tools.map(Vec::as_slice))
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
@@ -4876,7 +4875,7 @@ impl ToolExecutor for CliToolExecutor {
         if self
             .allowed_tools
             .as_ref()
-            .is_some_and(|allowed| !allowed.contains(tool_name))
+            .is_some_and(|allowed| !allowed.iter().any(|p| p.matches(tool_name)))
         {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled by the current --allowedTools setting"
@@ -5106,7 +5105,7 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::time::Duration;
-    use tools::GlobalToolRegistry;
+    use tools::{GlobalToolRegistry, MatcherPattern};
 
     fn registry_with_plugin_tool() -> GlobalToolRegistry {
         GlobalToolRegistry::with_plugin_tools(vec![PluginTool::new(
@@ -5254,12 +5253,11 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Repl {
                 model: suggested_default_model(),
-                allowed_tools: Some(
-                    ["glob_search", "read_file", "write_file"]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect()
-                ),
+                allowed_tools: Some(vec![
+                    MatcherPattern::Exact("read_file".to_string()),
+                    MatcherPattern::Exact("glob_search".to_string()),
+                    MatcherPattern::Exact("write_file".to_string()),
+                ]),
                 permission_mode: PermissionMode::DangerFullAccess,
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
@@ -5386,10 +5384,10 @@ mod tests {
 
     #[test]
     fn filtered_tool_specs_respect_allowlist() {
-        let allowed = ["read_file", "grep_search"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let allowed = vec![
+            MatcherPattern::Exact("read_file".to_string()),
+            MatcherPattern::Exact("grep_search".to_string()),
+        ];
         let filtered = filter_tool_specs(&GlobalToolRegistry::builtin(), Some(&allowed));
         let names = filtered
             .into_iter()

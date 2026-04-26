@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod tool_catalog;
 pub mod budget;
 mod compact;
 mod config;
@@ -86,6 +87,7 @@ pub use skills::{
     build_skill_prompt_sections, load_all_skills, validate_skills, Skill, SkillMetadata,
     SkillPromptResult, SkillValidation,
 };
+pub use tool_catalog::ToolCatalog;
 pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,

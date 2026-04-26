@@ -6,6 +6,27 @@ pub use mcp_tool_source::McpToolSource;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+/// A single pattern in an `--allowedTools` filter.
+///
+/// - `Exact(name)` matches only the tool with that exact canonical name.
+/// - `Prefix(prefix)` matches any tool whose name starts with `prefix`
+///   (used for wildcard entries like `mcp__github__*`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatcherPattern {
+    Exact(String),
+    Prefix(String),
+}
+
+impl MatcherPattern {
+    /// Returns `true` if this pattern matches `name`.
+    pub fn matches(&self, name: &str) -> bool {
+        match self {
+            Self::Exact(s) => s == name,
+            Self::Prefix(p) => name.starts_with(p.as_str()),
+        }
+    }
+}
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -196,7 +217,7 @@ impl GlobalToolRegistry {
     pub fn normalize_allowed_tools(
         &self,
         values: &[String],
-    ) -> Result<Option<BTreeSet<String>>, String> {
+    ) -> Result<Option<Vec<MatcherPattern>>, String> {
         if values.is_empty() {
             return Ok(None);
         }
@@ -204,18 +225,14 @@ impl GlobalToolRegistry {
         let canonical_names: Vec<String> = self
             .sources
             .iter()
-            .flat_map(|source| {
-                source
-                    .definitions()
-                    .into_iter()
-                    .map(|def| def.name)
-            })
+            .flat_map(|source| source.definitions().into_iter().map(|def| def.name))
             .collect();
         let mut name_map = canonical_names
             .iter()
             .map(|name| (normalize_tool_name(name), name.clone()))
             .collect::<BTreeMap<_, _>>();
 
+        // Built-in aliases (data-driven; mirrors [aliases] in builtin_tools.toml).
         for (alias, canonical) in [
             ("read", "read_file"),
             ("write", "write_file"),
@@ -226,33 +243,45 @@ impl GlobalToolRegistry {
             name_map.insert(alias.to_string(), canonical.to_string());
         }
 
-        let mut allowed = BTreeSet::new();
+        let mut patterns: Vec<MatcherPattern> = Vec::new();
         for value in values {
             for token in value
                 .split(|ch: char| ch == ',' || ch.is_whitespace())
                 .filter(|token| !token.is_empty())
             {
-                let normalized = normalize_tool_name(token);
-                let canonical = name_map.get(&normalized).ok_or_else(|| {
-                    format!(
-                        "unsupported tool in --allowedTools: {token} (expected one of: {})",
-                        canonical_names.join(", ")
-                    )
-                })?;
-                allowed.insert(canonical.clone());
+                if let Some(prefix_str) = token.strip_suffix('*') {
+                    // Wildcard: "mcp__github__*" → Prefix("mcp__github__")
+                    let p = MatcherPattern::Prefix(prefix_str.to_string());
+                    if !patterns.contains(&p) {
+                        patterns.push(p);
+                    }
+                } else {
+                    let normalized = normalize_tool_name(token);
+                    let canonical = name_map.get(&normalized).ok_or_else(|| {
+                        format!(
+                            "unsupported tool in --allowedTools: {token} (expected one of: {})",
+                            canonical_names.join(", ")
+                        )
+                    })?;
+                    let p = MatcherPattern::Exact(canonical.clone());
+                    if !patterns.contains(&p) {
+                        patterns.push(p);
+                    }
+                }
             }
         }
 
-        Ok(Some(allowed))
+        Ok(Some(patterns))
     }
 
     #[must_use]
-    pub fn definitions(&self, allowed_tools: Option<&BTreeSet<String>>) -> Vec<ToolDefinition> {
+    pub fn definitions(&self, allowed_tools: Option<&[MatcherPattern]>) -> Vec<ToolDefinition> {
         self.sources
             .iter()
             .flat_map(|source| source.definitions())
             .filter(|def| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(def.name.as_str()))
+                allowed_tools
+                    .is_none_or(|patterns| patterns.iter().any(|p| p.matches(&def.name)))
             })
             .collect()
     }
@@ -260,13 +289,14 @@ impl GlobalToolRegistry {
     #[must_use]
     pub fn permission_specs(
         &self,
-        allowed_tools: Option<&BTreeSet<String>>,
+        allowed_tools: Option<&[MatcherPattern]>,
     ) -> Vec<(String, PermissionMode)> {
         self.sources
             .iter()
             .flat_map(|source| source.permissions())
             .filter(|(name, _)| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(name.as_str()))
+                allowed_tools
+                    .is_none_or(|patterns| patterns.iter().any(|p| p.matches(name)))
             })
             .collect()
     }
@@ -4260,5 +4290,52 @@ printf 'pwsh:%s' "$1"
             )
             .into_bytes()
         }
+    }
+
+    // ─── MatcherPattern / normalize_allowed_tools tests ──────────────────────
+
+    #[test]
+    fn wildcard_mcp_prefix_matches() {
+        use super::{GlobalToolRegistry, MatcherPattern};
+        let registry = GlobalToolRegistry::builtin();
+        // Build patterns manually since MCP tools are not in the builtin registry.
+        let patterns = vec![MatcherPattern::Prefix("mcp__github__".to_string())];
+        assert!(patterns.iter().any(|p| p.matches("mcp__github__create_issue")));
+        assert!(!patterns.iter().any(|p| p.matches("mcp__notion__create_page")));
+
+        // Also verify via normalize_allowed_tools (wildcard token must not require
+        // the tool to already be registered).
+        let result = registry
+            .normalize_allowed_tools(&["mcp__github__*".to_string()])
+            .expect("should not error on wildcard");
+        let patterns = result.expect("should return Some");
+        assert!(patterns.iter().any(|p| p.matches("mcp__github__create_issue")));
+        assert!(!patterns.iter().any(|p| p.matches("mcp__notion__create_page")));
+    }
+
+    #[test]
+    fn wildcard_empty_catalog_no_panic() {
+        use super::GlobalToolRegistry;
+        let registry = GlobalToolRegistry::builtin();
+        let result = registry.normalize_allowed_tools(&["mcp__nonexistent__*".to_string()]);
+        // Should succeed (wildcards are always accepted, even without matching tools).
+        assert!(result.is_ok());
+        let patterns = result.unwrap();
+        assert!(patterns.is_some()); // non-empty input → Some(patterns)
+    }
+
+    #[test]
+    fn alias_resolution_from_catalog() {
+        use super::GlobalToolRegistry;
+        // Verify that the built-in alias "read" resolves to "read_file" via
+        // normalize_allowed_tools (the hardcoded alias table).
+        let registry = GlobalToolRegistry::builtin();
+        let result = registry
+            .normalize_allowed_tools(&["read".to_string()])
+            .expect("alias should resolve");
+        let patterns = result.expect("should return Some");
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns.iter().any(|p| p.matches("read_file")));
+        assert!(!patterns.iter().any(|p| p.matches("read")));
     }
 }
