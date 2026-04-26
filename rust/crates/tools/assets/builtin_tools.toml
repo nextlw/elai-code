@@ -1,0 +1,431 @@
+[[tool]]
+id = "bash"
+title = "Bash"
+description = "Execute a shell command in the current workspace."
+category = "shell"
+priority = 80
+required_permission = "DangerFullAccess"
+embedding_hints = ["bash", "shell", "command", "execute", "run", "terminal"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "command": { "type": "string" },
+    "timeout": { "type": "integer", "minimum": 1 },
+    "description": { "type": "string" },
+    "run_in_background": { "type": "boolean" },
+    "dangerouslyDisableSandbox": { "type": "boolean" }
+  },
+  "required": ["command"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "read_file"
+title = "Read File"
+description = "Read a text file from the workspace. Paths are relative to the working directory shown in the system prompt unless absolute."
+category = "filesystem"
+priority = 70
+required_permission = "ReadOnly"
+embedding_hints = ["read", "file", "cat", "contents", "view", "open"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "path": { "type": "string", "description": "File path relative to the working directory (e.g. 'crates/api/src/lib.rs') or absolute path. Do NOT prefix with the project name." },
+    "offset": { "type": "integer", "minimum": 0 },
+    "limit": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "write_file"
+title = "Write File"
+description = "Write a text file in the workspace. Paths are relative to the working directory shown in the system prompt unless absolute."
+category = "filesystem"
+priority = 65
+required_permission = "WorkspaceWrite"
+embedding_hints = ["write", "create", "file", "save", "output"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
+    "content": { "type": "string" }
+  },
+  "required": ["path", "content"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "edit_file"
+title = "Edit File"
+description = "Replace text in a workspace file. Paths are relative to the working directory shown in the system prompt unless absolute."
+category = "filesystem"
+priority = 65
+required_permission = "WorkspaceWrite"
+embedding_hints = ["edit", "replace", "modify", "change", "patch", "file"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "path": { "type": "string", "description": "File path relative to the working directory or absolute path. Do NOT prefix with the project name." },
+    "old_string": { "type": "string" },
+    "new_string": { "type": "string" },
+    "replace_all": { "type": "boolean" }
+  },
+  "required": ["path", "old_string", "new_string"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "glob_search"
+title = "Glob Search"
+description = "Find files by glob pattern. Searches relative to the working directory shown in the system prompt unless an absolute path is given."
+category = "filesystem"
+priority = 60
+required_permission = "ReadOnly"
+embedding_hints = ["glob", "find", "search", "files", "pattern", "list"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "pattern": { "type": "string", "description": "Glob pattern to match filenames, e.g. '**/*.rs' or 'swd.rs'" },
+    "path": { "type": "string", "description": "Directory to search in. Use a path relative to the working directory (e.g. 'crates/api/src') or an absolute path. Omit to search from the working directory root." }
+  },
+  "required": ["pattern"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "grep_search"
+title = "Grep Search"
+description = "Search file contents with a regex pattern. Paths are relative to the working directory shown in the system prompt unless absolute."
+category = "filesystem"
+priority = 60
+required_permission = "ReadOnly"
+embedding_hints = ["grep", "search", "regex", "find", "content", "text"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "pattern": { "type": "string", "description": "Regex pattern to search for in file contents" },
+    "path": { "type": "string", "description": "Directory or file to search in. Use a path relative to the working directory (e.g. 'crates/elai-cli/src') or an absolute path. Omit to search from the working directory root." },
+    "glob": { "type": "string" },
+    "output_mode": { "type": "string" },
+    "-B": { "type": "integer", "minimum": 0 },
+    "-A": { "type": "integer", "minimum": 0 },
+    "-C": { "type": "integer", "minimum": 0 },
+    "context": { "type": "integer", "minimum": 0 },
+    "-n": { "type": "boolean" },
+    "-i": { "type": "boolean" },
+    "type": { "type": "string" },
+    "head_limit": { "type": "integer", "minimum": 1 },
+    "offset": { "type": "integer", "minimum": 0 },
+    "multiline": { "type": "boolean" }
+  },
+  "required": ["pattern"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "WebFetch"
+title = "Web Fetch"
+description = "Fetch a URL, convert it into readable text, and answer a prompt about it."
+category = "web"
+priority = 55
+required_permission = "ReadOnly"
+embedding_hints = ["fetch", "url", "web", "http", "download", "browse"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "url": { "type": "string", "format": "uri" },
+    "prompt": { "type": "string" }
+  },
+  "required": ["url", "prompt"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "WebSearch"
+title = "Web Search"
+description = "Search the web for current information and return cited results."
+category = "web"
+priority = 55
+required_permission = "ReadOnly"
+embedding_hints = ["search", "web", "internet", "query", "google", "find"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "query": { "type": "string", "minLength": 2 },
+    "allowed_domains": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blocked_domains": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "TodoWrite"
+title = "Todo Write"
+description = "Update the structured task list for the current session."
+category = "meta"
+priority = 50
+required_permission = "WorkspaceWrite"
+embedding_hints = ["todo", "task", "list", "track", "plan", "checklist"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "todos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "activeForm": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "completed"]
+          }
+        },
+        "required": ["content", "activeForm", "status"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["todos"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "Skill"
+title = "Skill"
+description = "Load a local skill definition and its instructions."
+category = "meta"
+priority = 50
+required_permission = "ReadOnly"
+embedding_hints = ["skill", "load", "instruction", "plugin", "command"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "skill": { "type": "string" },
+    "args": { "type": "string" }
+  },
+  "required": ["skill"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "Agent"
+title = "Agent"
+description = "Launch a specialized agent task and persist its handoff metadata."
+category = "meta"
+priority = 50
+required_permission = "DangerFullAccess"
+embedding_hints = ["agent", "task", "delegate", "spawn", "subagent"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "description": { "type": "string" },
+    "prompt": { "type": "string" },
+    "subagent_type": { "type": "string" },
+    "name": { "type": "string" },
+    "model": { "type": "string" }
+  },
+  "required": ["description", "prompt"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "ToolSearch"
+title = "Tool Search"
+description = "Search for deferred or specialized tools by exact name or keywords."
+category = "meta"
+priority = 50
+required_permission = "ReadOnly"
+embedding_hints = ["tool", "search", "find", "deferred", "discover"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "query": { "type": "string" },
+    "max_results": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "NotebookEdit"
+title = "Notebook Edit"
+description = "Replace, insert, or delete a cell in a Jupyter notebook. Paths are relative to the working directory shown in the system prompt unless absolute."
+category = "filesystem"
+priority = 45
+required_permission = "WorkspaceWrite"
+embedding_hints = ["notebook", "jupyter", "cell", "edit", "ipynb"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "notebook_path": { "type": "string", "description": "Path to the .ipynb file relative to the working directory or absolute. Do NOT prefix with the project name." },
+    "cell_id": { "type": "string" },
+    "new_source": { "type": "string" },
+    "cell_type": { "type": "string", "enum": ["code", "markdown"] },
+    "edit_mode": { "type": "string", "enum": ["replace", "insert", "delete"] }
+  },
+  "required": ["notebook_path"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "Sleep"
+title = "Sleep"
+description = "Wait for a specified duration without holding a shell process."
+category = "meta"
+priority = 40
+required_permission = "ReadOnly"
+embedding_hints = ["sleep", "wait", "pause", "delay"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "duration_ms": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["duration_ms"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "SendUserMessage"
+title = "Send User Message"
+description = "Send a message to the user."
+category = "meta"
+priority = 40
+required_permission = "ReadOnly"
+embedding_hints = ["message", "send", "notify", "user", "communicate"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "message": { "type": "string" },
+    "attachments": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["normal", "proactive"]
+    }
+  },
+  "required": ["message", "status"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "Config"
+title = "Config"
+description = "Get or set Elai Code settings."
+category = "meta"
+priority = 40
+required_permission = "WorkspaceWrite"
+embedding_hints = ["config", "settings", "configure", "set", "get"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "setting": { "type": "string" },
+    "value": {
+      "type": ["string", "boolean", "number"]
+    }
+  },
+  "required": ["setting"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "StructuredOutput"
+title = "Structured Output"
+description = "Return structured output in the requested format."
+category = "meta"
+priority = 40
+required_permission = "ReadOnly"
+embedding_hints = ["structured", "output", "format", "json", "data"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {},
+  "additionalProperties": true
+}
+'''
+
+[[tool]]
+id = "REPL"
+title = "REPL"
+description = "Execute code in a REPL-like subprocess."
+category = "shell"
+priority = 70
+required_permission = "DangerFullAccess"
+embedding_hints = ["repl", "execute", "code", "run", "interpreter", "python", "javascript"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "code": { "type": "string" },
+    "language": { "type": "string" },
+    "timeout_ms": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["code", "language"],
+  "additionalProperties": false
+}
+'''
+
+[[tool]]
+id = "PowerShell"
+title = "PowerShell"
+description = "Execute a PowerShell command with optional timeout."
+category = "shell"
+priority = 70
+required_permission = "DangerFullAccess"
+embedding_hints = ["powershell", "pwsh", "windows", "command", "execute"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "command": { "type": "string" },
+    "timeout": { "type": "integer", "minimum": 1 },
+    "description": { "type": "string" },
+    "run_in_background": { "type": "boolean" }
+  },
+  "required": ["command"],
+  "additionalProperties": false
+}
+'''

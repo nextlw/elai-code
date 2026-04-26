@@ -38,10 +38,12 @@ use runtime::{
     load_system_prompt, parse_oauth_callback_request_target, save_budget_config,
     save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
     BudgetTracker, BudgetUsagePct, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
-    ConversationMessage, ConversationRuntime, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, RuntimeError,
-    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
+    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
+    PermissionPolicy, ProjectContext, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    UsageTracker,
 };
+use tools::McpToolSource;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use serde_json::json;
 use tools::GlobalToolRegistry;
@@ -3214,7 +3216,31 @@ fn build_runtime_plugin_state(
     let loader = ConfigLoader::default_for(&cwd);
     let runtime_config = loader.load()?;
     let plugin_manager = build_plugin_manager(&cwd, &loader, &runtime_config);
-    let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_manager.aggregated_tools()?)?;
+    let mut tool_registry =
+        GlobalToolRegistry::with_plugin_tools(plugin_manager.aggregated_tools()?)?;
+
+    // Wire MCP tools into the registry so the LLM sees them in definitions().
+    // discover_tools() is async; we use a temporary single-threaded runtime to
+    // drive it synchronously here (the caller is non-async).
+    let mut mcp_manager = McpServerManager::from_runtime_config(&runtime_config);
+    if !mcp_manager.unsupported_servers().is_empty() {
+        for unsupported in mcp_manager.unsupported_servers() {
+            eprintln!(
+                "[elai] MCP server '{}' skipped: {}",
+                unsupported.server_name, unsupported.reason
+            );
+        }
+    }
+    let mcp_rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    if let Err(e) = mcp_rt.block_on(mcp_manager.discover_tools()) {
+        eprintln!("[elai] MCP tool discovery failed (continuing without MCP tools): {e}");
+    }
+    let mcp_manager_arc = Arc::new(Mutex::new(mcp_manager));
+    let mcp_source = McpToolSource::new(Arc::clone(&mcp_manager_arc));
+    tool_registry.add_source(Box::new(mcp_source));
+
     Ok((runtime_config.feature_config().clone(), tool_registry))
 }
 
