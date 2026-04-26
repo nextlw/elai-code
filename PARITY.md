@@ -1,6 +1,6 @@
 # PARITY GAP ANALYSIS
 
-Scope: read-only comparison between the original TypeScript source at `/home/bellman/Workspace/claw-code/src/` and the Rust port under `rust/crates/`.
+Scope: read-only comparison between the original TypeScript source at `/home/bellman/Workspace/elai-code/src/` and the Rust port under `rust/crates/`.
 
 Method: compared feature surfaces, registries, entrypoints, and runtime plumbing only. No TypeScript source was copied.
 
@@ -11,7 +11,7 @@ The Rust port has a good foundation for:
 - local conversation/session state
 - a core tool loop
 - MCP stdio/bootstrap support
-- CLAW.md discovery
+- ELAI.md discovery
 - a small but usable built-in tool set
 
 It is **not feature-parity** with the TypeScript CLI.
@@ -59,7 +59,7 @@ Evidence:
 ### Rust exists
 Evidence:
 - Hook config is parsed and merged in `rust/crates/runtime/src/config.rs`.
-- Hook config can be inspected via Rust config reporting in `rust/crates/commands/src/lib.rs` and `rust/crates/claw-cli/src/main.rs`.
+- Hook config can be inspected via Rust config reporting in `rust/crates/commands/src/lib.rs` and `rust/crates/elai-cli/src/main.rs`.
 - Prompt guidance mentions hooks in `rust/crates/runtime/src/prompt.rs`.
 
 ### Missing or broken in Rust
@@ -94,7 +94,7 @@ Evidence:
 
 ---
 
-## skills/ and CLAW.md discovery
+## skills/ and ELAI.md discovery
 
 ### TS exists
 Evidence:
@@ -105,8 +105,8 @@ Evidence:
 ### Rust exists
 Evidence:
 - `Skill` tool in `rust/crates/tools/src/lib.rs` resolves and reads local `SKILL.md` files.
-- CLAW.md discovery is implemented in `rust/crates/runtime/src/prompt.rs`.
-- Rust supports `/memory` and `/init` via `rust/crates/commands/src/lib.rs` and `rust/crates/claw-cli/src/main.rs`.
+- ELAI.md discovery is implemented in `rust/crates/runtime/src/prompt.rs`.
+- Rust supports `/memory` and `/init` via `rust/crates/commands/src/lib.rs` and `rust/crates/elai-cli/src/main.rs`.
 
 ### Missing or broken in Rust
 - No bundled skill registry equivalent.
@@ -131,7 +131,7 @@ Evidence:
 Evidence:
 - Shared slash command registry in `rust/crates/commands/src/lib.rs`.
 - Rust slash commands currently cover `help`, `status`, `compact`, `model`, `permissions`, `clear`, `cost`, `resume`, `config`, `memory`, `init`, `diff`, `version`, `export`, `session`.
-- Main CLI/repl/prompt handling lives in `rust/crates/claw-cli/src/main.rs`.
+- Main CLI/repl/prompt handling lives in `rust/crates/elai-cli/src/main.rs`.
 
 ### Missing or broken in Rust
 - Missing major TS command families: `/agents`, `/hooks`, `/mcp`, `/plugin`, `/skills`, `/plan`, `/review`, `/tasks`, and many others.
@@ -154,7 +154,7 @@ Evidence:
 ### Rust exists
 Evidence:
 - Core loop in `rust/crates/runtime/src/conversation.rs`.
-- Stream/tool event translation in `rust/crates/claw-cli/src/main.rs`.
+- Stream/tool event translation in `rust/crates/elai-cli/src/main.rs`.
 - Session persistence in `rust/crates/runtime/src/session.rs`.
 
 ### Missing or broken in Rust
@@ -199,13 +199,13 @@ Evidence:
 
 ### Fixed
 - **Prompt mode tools enabled**
-  - `rust/crates/claw-cli/src/main.rs` now constructs prompt mode with `LiveCli::new(model, true, ...)`.
+  - `rust/crates/elai-cli/src/main.rs` now constructs prompt mode with `LiveCli::new(model, true, ...)`.
 - **Default permission mode = DangerFullAccess**
-  - Runtime default now resolves to `DangerFullAccess` in `rust/crates/claw-cli/src/main.rs`.
-  - Clap default also uses `DangerFullAccess` in `rust/crates/claw-cli/src/args.rs`.
-  - Init template writes `dontAsk` in `rust/crates/claw-cli/src/init.rs`.
+  - Runtime default now resolves to `DangerFullAccess` in `rust/crates/elai-cli/src/main.rs`.
+  - Clap default also uses `DangerFullAccess` in `rust/crates/elai-cli/src/args.rs`.
+  - Init template writes `dontAsk` in `rust/crates/elai-cli/src/init.rs`.
 - **Streaming `{}` tool-input prefix bug**
-  - `rust/crates/claw-cli/src/main.rs` now strips the initial empty object only for streaming tool input, while preserving legitimate `{}` in non-stream responses.
+  - `rust/crates/elai-cli/src/main.rs` now strips the initial empty object only for streaming tool input, while preserving legitimate `{}` in non-stream responses.
 - **Unlimited max_iterations**
   - Verified at `rust/crates/runtime/src/conversation.rs` with `usize::MAX`.
 

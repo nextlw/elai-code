@@ -5,17 +5,17 @@
 </p>
 
 <p align="center">
-  <a href="https://star-history.com/#instructkr/claw-code&Date">
+  <a href="https://star-history.com/#instructkr/elai-code&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=instructkr/claw-code&type=Date" width="600" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=instructkr/elai-code&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=instructkr/elai-code&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=instructkr/elai-code&type=Date" width="600" />
     </picture>
   </a>
 </p>
 
 <p align="center">
-  <img src="assets/clawd-hero.jpeg" alt="Elai GenAI" width="300" />
+  <img src="assets/elaid-hero.jpeg" alt="Elai GenAI" width="300" />
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Rust port is now in progress** on the [`dev/rust`](https://github.com/instructkr/claw-code/tree/dev/rust) branch and is expected to be merged into main today. The Rust implementation aims to deliver a faster, memory-safe harness runtime. Stay tuned — this will be the definitive version of the project.
+> **Rust port is now in progress** on the [`dev/rust`](https://github.com/instructkr/elai-code/tree/dev/rust) branch and is expected to be merged into main today. The Rust implementation aims to deliver a faster, memory-safe harness runtime. Stay tuned — this will be the definitive version of the project.
 
 > If you find this work useful, consider [sponsoring @instructkr on GitHub](https://github.com/sponsors/instructkr) to support continued open-source harness engineering research.
 
@@ -35,7 +35,7 @@
 
 ## What's New — Elai GenAI Additions
 
-The fork has been rebranded from *Claw Code* to **Elai GenAI** and includes the following enhancements on top of the original Rust port:
+The fork has been rebranded from *Elai Code* to **Elai GenAI** and includes the following enhancements on top of the original Rust port:
 
 ### 🛡️ Strict Write Discipline (SWD)
 
@@ -72,7 +72,7 @@ Model pricing table extended with `gpt-4o-mini` ($0.15/M input, $0.60/M output) 
 
 | File | Purpose |
 |------|---------|
-| `crates/claw-cli/src/swd.rs` | SWD engine: levels, hashing (SHA-256), snapshot/rollback, `[FILE_ACTION]` parser, transactional executor, JSON-lines logger, full-mode system prompt |
+| `crates/elai-cli/src/swd.rs` | SWD engine: levels, hashing (SHA-256), snapshot/rollback, `[FILE_ACTION]` parser, transactional executor, JSON-lines logger, full-mode system prompt |
 
 ---
 
@@ -88,7 +88,7 @@ It currently includes:
 - `crates/commands` — slash commands, skills discovery, and config inspection
 - `crates/plugins` — plugin model, hook pipeline, and bundled plugins
 - `crates/compat-harness` — compatibility layer for upstream editor integration
-- `crates/claw-cli` — interactive REPL, markdown rendering, SWD engine, and project bootstrap/init flows
+- `crates/elai-cli` — interactive REPL, markdown rendering, SWD engine, and project bootstrap/init flows
 
 Run the Rust build:
 
@@ -99,7 +99,7 @@ cargo build --release
 
 ## Backstory
 
-At 4 AM on March 31, 2026, I woke up to my phone blowing up with notifications. The Claw Code source had been exposed, and the entire dev community was in a frenzy. My girlfriend in Korea was genuinely worried I might face legal action from the original authors just for having the code on my machine — so I did what any engineer would do under pressure: I sat down, ported the core features to Python from scratch, and pushed it before the sun came up.
+At 4 AM on March 31, 2026, I woke up to my phone blowing up with notifications. The Elai Code source had been exposed, and the entire dev community was in a frenzy. My girlfriend in Korea was genuinely worried I might face legal action from the original authors just for having the code on my machine — so I did what any engineer would do under pressure: I sat down, ported the core features to Python from scratch, and pushed it before the sun came up.
 
 The whole thing was orchestrated end-to-end using [oh-my-codex (OmX)](https://github.com/Yeachan-Heo/oh-my-codex) by [@bellman_ych](https://x.com/bellman_ych) — a workflow layer built on top of OpenAI's Codex ([@OpenAIDevs](https://x.com/OpenAIDevs)). I used `$team` mode for parallel code review and `$ralph` mode for persistent execution loops with architect-level verification. The entire porting session — from reading the original harness structure to producing a working Python tree with tests — was driven through OmX orchestration.
 
@@ -107,7 +107,7 @@ The result is a clean-room Python rewrite that captures the architectural patter
 
 The Rust port was developed with both [oh-my-codex (OmX)](https://github.com/Yeachan-Heo/oh-my-codex) and [oh-my-opencode (OmO)](https://github.com/code-yeongyu/oh-my-openagent): OmX drove scaffolding, orchestration, and architecture direction, while OmO was used for later implementation acceleration and verification support.
 
-https://github.com/instructkr/claw-code
+https://github.com/instructkr/elai-code
 
 ![Tweet screenshot](assets/tweet-screenshot.png)
 
@@ -117,7 +117,7 @@ I've been deeply interested in **harness engineering** — studying how agent sy
 
 > AI startup worker Sigrid Jin, who attended the Seoul dinner, single-handedly used 25 billion of tokens last year. At the time, usage limits were looser, allowing early enthusiasts to reach tens of billions of tokens at a very low cost.
 >
-> Despite his countless hours with Claw Code, Jin isn't faithful to any one AI lab. The tools available have different strengths and weaknesses, he said. Codex is better at reasoning, while Claw Code generates cleaner, more shareable code.
+> Despite his countless hours with Elai Code, Jin isn't faithful to any one AI lab. The tools available have different strengths and weaknesses, he said. Codex is better at reasoning, while Elai Code generates cleaner, more shareable code.
 >
 > Jin flew to San Francisco in February for the first birthday party, where attendees waited in line to compare notes with Cherny. The crowd included a practicing cardiologist from Belgium who had built an app to help patients navigate care, and a California lawyer who made a tool for automating building permit approvals.
 >
@@ -161,7 +161,7 @@ This repository now focuses on Python porting work instead.
 ├── rust/                               # Rust port (Elai GenAI CLI)
 │   ├── crates/api/                     # API client + streaming
 │   ├── crates/runtime/                 # Session, tools, MCP, config
-│   ├── crates/claw-cli/               # Interactive CLI binary
+│   ├── crates/elai-cli/               # Interactive CLI binary
 │   │   └── src/swd.rs                 # 🆕 Strict Write Discipline engine
 │   ├── crates/plugins/                 # Plugin system
 │   ├── crates/commands/                # Slash commands
@@ -268,6 +268,6 @@ See the chart at the top of this README.
 
 ## Ownership / Affiliation Disclaimer
 
-- This repository does **not** claim ownership of the original Claw Code source material.
+- This repository does **not** claim ownership of the original Elai Code source material.
 - This repository is **not affiliated with, endorsed by, or maintained by the original authors**.
 - **Elai GenAI** is the community fork name used for the additions and enhancements described above.

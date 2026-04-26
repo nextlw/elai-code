@@ -60,7 +60,7 @@ fn main() {
         eprintln!(
             "error: {error}
 
-Run `claw --help` for usage."
+Run `elai --help` for usage."
         );
         std::process::exit(1);
     }
@@ -107,7 +107,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Loads the first `.env` found walking up from the current directory (same idea as many Node tools).
 ///
 /// Large third-party `.env` files (e.g. Rails) can make `dotenvy` fail to parse the whole file; we then
-/// still pick up Claw-related keys with a small line-based pass.
+/// still pick up Elai-related keys with a small line-based pass.
 fn load_workspace_dotenv() {
     if let Ok(cwd) = env::current_dir() {
         for dir in cwd.ancestors().take(12) {
@@ -361,7 +361,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 1;
             }
             "-p" => {
-                // Claw Code compat: -p "prompt" = one-shot prompt
+                // Elai Code compat: -p "prompt" = one-shot prompt
                 let prompt = args[index + 1..].join(" ");
                 if prompt.trim().is_empty() {
                     return Err("-p requires a prompt string".to_string());
@@ -375,7 +375,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 });
             }
             "--print" => {
-                // Claw Code compat: --print makes output non-interactive
+                // Elai Code compat: --print makes output non-interactive
                 output_format = CliOutputFormat::Text;
                 index += 1;
             }
@@ -638,7 +638,7 @@ fn default_oauth_config() -> OAuthConfig {
         scopes: vec![
             String::from("user:profile"),
             String::from("user:inference"),
-            String::from("user:sessions:claw_code"),
+            String::from("user:sessions:elai_code"),
         ],
     }
 }
@@ -656,7 +656,7 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
         OAuthAuthorizationRequest::from_config(oauth, redirect_uri.clone(), state.clone(), &pkce)
             .build_url();
 
-    println!("Starting Claw OAuth login...");
+    println!("Starting Elai OAuth login...");
     println!("Listening for callback on {redirect_uri}");
     if let Err(error) = open_browser(&authorize_url) {
         eprintln!("warning: failed to open browser automatically: {error}");
@@ -691,13 +691,13 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
         expires_at: token_set.expires_at,
         scopes: token_set.scopes,
     })?;
-    println!("Claw OAuth login complete.");
+    println!("Elai OAuth login complete.");
     Ok(())
 }
 
 fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
     clear_oauth_credentials()?;
-    println!("Claw OAuth credentials cleared.");
+    println!("Elai OAuth credentials cleared.");
     Ok(())
 }
 
@@ -742,9 +742,9 @@ fn wait_for_oauth_callback(
     let callback = parse_oauth_callback_request_target(target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let body = if callback.error.is_some() {
-        "Claw OAuth login failed. You can close this window."
+        "Elai OAuth login failed. You can close this window."
     } else {
-        "Claw OAuth login succeeded. You can close this window."
+        "Elai OAuth login succeeded. You can close this window."
     };
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -1446,8 +1446,8 @@ fn append_budget_summary_to_memory(
     let cwd = std::env::current_dir().unwrap_or_default();
     let memory_path = if cwd.join("MEMORY.md").exists() {
         cwd.join("MEMORY.md")
-    } else if cwd.join("CLAW.md").exists() {
-        cwd.join("CLAW.md")
+    } else if cwd.join("ELAI.md").exists() {
+        cwd.join("ELAI.md")
     } else {
         cwd.join("MEMORY.md")
     };
@@ -1508,8 +1508,8 @@ Comandos disponíveis:\n\
   /cost          Mostrar custo estimado\n\
   /compact       Compactar histórico (mantém últimas 20 msgs)\n\
   /export        Exportar conversa para arquivo .txt\n\
-  /memory        Mostrar conteúdo do CLAW.md\n\
-  /init          Inicializar CLAW.md no projeto\n\
+  /memory        Mostrar conteúdo do ELAI.md\n\
+  /init          Inicializar ELAI.md no projeto\n\
   /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
   /version       Mostrar versão\n\
   /exit          Sair\n\
@@ -1607,7 +1607,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let filename = format!("claw-export-{ts}.txt");
+            let filename = format!("elai-export-{ts}.txt");
             let mut content = String::new();
             for msg in &guard.messages {
                 let role_str = match msg.role {
@@ -1639,7 +1639,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "memory" => {
             let cwd = env::current_dir().unwrap_or_default();
-            let found = ["CLAW.md", "CLAUDE.md", ".claw/memory.md"]
+            let found = ["ELAI.md", "CLAUDE.md", ".claw/memory.md"]
                 .iter()
                 .map(|f| cwd.join(f))
                 .find(|p| p.exists());
@@ -1656,7 +1656,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}"))),
                 },
                 None => app.push_chat(tui::ChatEntry::SystemNote(
-                    "Nenhum CLAW.md ou CLAUDE.md encontrado no diretório atual.".into(),
+                    "Nenhum ELAI.md ou CLAUDE.md encontrado no diretório atual.".into(),
                 )),
             }
         }
@@ -1664,7 +1664,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             let cwd = env::current_dir().unwrap_or_default();
             match initialize_repo(&cwd) {
                 Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
-                    "✅ CLAW.md inicializado com sucesso.".into(),
+                    "✅ ELAI.md inicializado com sucesso.".into(),
                 )),
                 Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
                     "❌ Erro no /init: {e}"
@@ -1697,7 +1697,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "agents" | "skills" => {
             app.push_chat(tui::ChatEntry::SystemNote(
-                "ℹ Use `claw agents` ou `claw skills` fora do modo TUI para listar.".to_string(),
+                "ℹ Use `elai agents` ou `elai skills` fora do modo TUI para listar.".to_string(),
             ));
         }
         "budget" => {
@@ -2469,7 +2469,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             return Err("generated commit message was empty".into());
         }
 
-        let path = write_temp_text_file("claw-commit-message.txt", &message)?;
+        let path = write_temp_text_file("elai-commit-message.txt", &message)?;
         let output = Command::new("git")
             .args(["commit", "--file"])
             .arg(&path)
@@ -2500,7 +2500,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             .ok_or_else(|| "failed to parse generated PR title/body".to_string())?;
 
         if command_exists("gh") {
-            let body_path = write_temp_text_file("claw-pr-body.md", &body)?;
+            let body_path = write_temp_text_file("elai-pr-body.md", &body)?;
             let output = Command::new("gh")
                 .args(["pr", "create", "--title", &title, "--body-file"])
                 .arg(&body_path)
@@ -2531,7 +2531,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             .ok_or_else(|| "failed to parse generated issue title/body".to_string())?;
 
         if command_exists("gh") {
-            let body_path = write_temp_text_file("claw-issue-body.md", &body)?;
+            let body_path = write_temp_text_file("elai-issue-body.md", &body)?;
             let output = Command::new("gh")
                 .args(["issue", "create", "--title", &title, "--body-file"])
                 .arg(&body_path)
@@ -2841,7 +2841,7 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     if project_context.instruction_files.is_empty() {
         lines.push("Discovered files".to_string());
         lines.push(
-            "  No CLAW instruction files discovered in the current directory ancestry.".to_string(),
+            "  No ELAI instruction files discovered in the current directory ancestry.".to_string(),
         );
     } else {
         lines.push("Discovered files".to_string());
@@ -3108,7 +3108,7 @@ fn render_version_report() -> String {
     let git_sha = GIT_SHA.unwrap_or("unknown");
     let target = BUILD_TARGET.unwrap_or("unknown");
     format!(
-        "Claw Code\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
+        "Elai Code\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
     )
 }
 
@@ -4964,40 +4964,40 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
 }
 
 fn print_help_to(out: &mut impl Write) -> io::Result<()> {
-    writeln!(out, "claw v{VERSION}")?;
+    writeln!(out, "elai v{VERSION}")?;
     writeln!(out)?;
     writeln!(out, "Usage:")?;
     writeln!(
         out,
-        "  claw [--model MODEL] [--allowedTools TOOL[,TOOL...]]"
+        "  elai [--model MODEL] [--allowedTools TOOL[,TOOL...]]"
     )?;
     writeln!(out, "      Start the interactive REPL")?;
     writeln!(
         out,
-        "  claw [--model MODEL] [--output-format text|json] prompt TEXT"
+        "  elai [--model MODEL] [--output-format text|json] prompt TEXT"
     )?;
     writeln!(out, "      Send one prompt and exit")?;
     writeln!(
         out,
-        "  claw [--model MODEL] [--output-format text|json] TEXT"
+        "  elai [--model MODEL] [--output-format text|json] TEXT"
     )?;
     writeln!(out, "      Shorthand non-interactive prompt mode")?;
     writeln!(
         out,
-        "  claw --resume SESSION.json [/status] [/compact] [...]"
+        "  elai --resume SESSION.json [/status] [/compact] [...]"
     )?;
     writeln!(
         out,
         "      Inspect or maintain a saved session without entering the REPL"
     )?;
-    writeln!(out, "  claw dump-manifests")?;
-    writeln!(out, "  claw bootstrap-plan")?;
-    writeln!(out, "  claw agents")?;
-    writeln!(out, "  claw skills")?;
-    writeln!(out, "  claw system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
-    writeln!(out, "  claw login")?;
-    writeln!(out, "  claw logout")?;
-    writeln!(out, "  claw init")?;
+    writeln!(out, "  elai dump-manifests")?;
+    writeln!(out, "  elai bootstrap-plan")?;
+    writeln!(out, "  elai agents")?;
+    writeln!(out, "  elai skills")?;
+    writeln!(out, "  elai system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
+    writeln!(out, "  elai login")?;
+    writeln!(out, "  elai logout")?;
+    writeln!(out, "  elai init")?;
     writeln!(out)?;
     writeln!(out, "Flags:")?;
     writeln!(
@@ -5035,23 +5035,23 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         .join(", ");
     writeln!(out, "Resume-safe commands: {resume_commands}")?;
     writeln!(out, "Examples:")?;
-    writeln!(out, "  claw --model opus \"summarize this repo\"")?;
+    writeln!(out, "  elai --model opus \"summarize this repo\"")?;
     writeln!(
         out,
-        "  claw --output-format json prompt \"explain src/main.rs\""
+        "  elai --output-format json prompt \"explain src/main.rs\""
     )?;
     writeln!(
         out,
-        "  claw --allowedTools read,glob \"summarize Cargo.toml\""
+        "  elai --allowedTools read,glob \"summarize Cargo.toml\""
     )?;
     writeln!(
         out,
-        "  claw --resume session.json /status /diff /export notes.txt"
+        "  elai --resume session.json /status /diff /export notes.txt"
     )?;
-    writeln!(out, "  claw agents")?;
-    writeln!(out, "  claw /skills")?;
-    writeln!(out, "  claw login")?;
-    writeln!(out, "  claw init")?;
+    writeln!(out, "  elai agents")?;
+    writeln!(out, "  elai /skills")?;
+    writeln!(out, "  elai login")?;
+    writeln!(out, "  elai init")?;
     Ok(())
 }
 
@@ -5500,10 +5500,10 @@ mod tests {
         let mut help = Vec::new();
         print_help_to(&mut help).expect("help should render");
         let help = String::from_utf8(help).expect("help should be utf8");
-        assert!(help.contains("claw init"));
-        assert!(help.contains("claw agents"));
-        assert!(help.contains("claw skills"));
-        assert!(help.contains("claw /skills"));
+        assert!(help.contains("elai init"));
+        assert!(help.contains("elai agents"));
+        assert!(help.contains("elai skills"));
+        assert!(help.contains("elai /skills"));
     }
 
     #[test]
@@ -5669,7 +5669,7 @@ mod tests {
     #[test]
     fn init_template_mentions_detected_rust_workspace() {
         let rendered = crate::init::render_init_elai_md(std::path::Path::new("."));
-        assert!(rendered.contains("# CLAW.md"));
+        assert!(rendered.contains("# ELAI.md"));
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
 

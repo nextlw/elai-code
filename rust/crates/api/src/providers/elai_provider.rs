@@ -44,7 +44,7 @@ impl AuthSource {
             (Some(api_key), None) => Ok(Self::ApiKey(api_key)),
             (None, Some(bearer_token)) => Ok(Self::BearerToken(bearer_token)),
             (None, None) => Err(ApiError::missing_credentials(
-                "Claw",
+                "Elai",
                 &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
             )),
         }
@@ -368,7 +368,7 @@ impl AuthSource {
             }
             Ok(Some(token_set)) => Ok(Self::BearerToken(token_set.access_token)),
             Ok(None) => Err(ApiError::missing_credentials(
-                "Claw",
+                "Elai",
                 &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
             )),
             Err(error) => Err(error),
@@ -415,7 +415,7 @@ where
 
     let Some(token_set) = load_saved_oauth_token()? else {
         return Err(ApiError::missing_credentials(
-            "Claw",
+            "Elai",
             &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
         ));
     };
@@ -515,7 +515,7 @@ fn read_api_key() -> Result<String, ApiError> {
         .or_else(|| auth.bearer_token())
         .map(ToOwned::to_owned)
         .ok_or(ApiError::missing_credentials(
-            "Claw",
+            "Elai",
             &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
         ))
 }

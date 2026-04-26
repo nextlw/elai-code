@@ -2,7 +2,7 @@
 
 A high-performance Rust rewrite of the Elai GenAI CLI agent harness. Built for speed, safety, and native tool execution.
 
-> Formerly known as *Claw Code*. Rebranded to **Elai GenAI** with new features including Strict Write Discipline (SWD), visual identity refresh, and TUI enhancements.
+> Formerly known as *Elai Code*. Rebranded to **Elai GenAI** with new features including Strict Write Discipline (SWD), visual identity refresh, and TUI enhancements.
 
 ## Quick Start
 
@@ -12,16 +12,16 @@ cd rust/
 cargo build --release
 
 # Run interactive TUI REPL
-./target/release/claw
+./target/release/elai
 
 # One-shot prompt
-./target/release/claw prompt "explain this codebase"
+./target/release/elai prompt "explain this codebase"
 
 # With specific model
-./target/release/claw --model sonnet prompt "fix the bug in main.rs"
+./target/release/elai --model sonnet prompt "fix the bug in main.rs"
 
 # With SWD full mode (transactional writes)
-./target/release/claw --swd full
+./target/release/elai --swd full
 ```
 
 ## Configuration
@@ -37,7 +37,7 @@ export ANTHROPIC_BASE_URL="https://your-proxy.com"
 Or authenticate via OAuth:
 
 ```bash
-claw login
+elai login
 ```
 
 ## Features
@@ -52,7 +52,7 @@ claw login
 | Sub-agent orchestration | ✅ |
 | Todo tracking | ✅ |
 | Notebook editing | ✅ |
-| CLAW.md / project memory | ✅ |
+| ELAI.md / project memory | ✅ |
 | Config file hierarchy (.claw.json) | ✅ |
 | Permission system | ✅ |
 | MCP server lifecycle | ✅ |
@@ -86,9 +86,9 @@ SWD is a transactional filesystem write engine that adds safety and auditability
 
 ```bash
 # CLI flag
-claw --swd full
-claw --swd partial
-claw --swd off
+elai --swd full
+elai --swd partial
+elai --swd off
 
 # REPL command (cycles through levels without argument)
 /swd
@@ -160,7 +160,7 @@ Short names resolve to the latest model versions:
 ## CLI Flags
 
 ```
-claw [OPTIONS] [COMMAND]
+elai [OPTIONS] [COMMAND]
 
 Options:
   --model MODEL                    Set the model (alias or full name)
@@ -193,7 +193,7 @@ Commands:
 | `/model [name]` | Show or switch model |
 | `/permissions` | Show or switch permission mode |
 | `/config [section]` | Show config (env, hooks, model) |
-| `/memory` | Show CLAW.md contents |
+| `/memory` | Show ELAI.md contents |
 | `/diff` | Show git diff |
 | `/export [path]` | Export conversation |
 | `/session [id]` | Resume a previous session |
@@ -213,7 +213,7 @@ rust/
     ├── commands/           # Shared slash-command registry
     ├── compat-harness/     # TS manifest extraction harness
     ├── runtime/            # Session, config, permissions, MCP, prompts, pricing
-    ├── claw-cli/           # Main CLI binary
+    ├── elai-cli/           # Main CLI binary
     │   └── src/
     │       ├── main.rs     # CLI entry, REPL, runtime wiring
     │       ├── tui.rs      # TUI (ratatui) — chat, overlays, SWD widget
@@ -229,14 +229,14 @@ rust/
 - **commands** — Slash command definitions and help text generation
 - **compat-harness** — Extracts tool/prompt manifests from upstream TS source
 - **runtime** — `ConversationRuntime` agentic loop, `ConfigLoader` hierarchy, `Session` persistence, permission policy, MCP client, system prompt assembly, usage tracking, model pricing
-- **claw-cli** — TUI REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing, **SWD engine**
+- **elai-cli** — TUI REPL, one-shot prompt, streaming display, tool call rendering, CLI argument parsing, **SWD engine**
 - **tools** — Tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, REPL runtimes
 
 ## Stats
 
 - **~20K+ lines** of Rust
 - **6 crates** in workspace
-- **Binary name:** `claw`
+- **Binary name:** `elai`
 - **Default model:** `claude-opus-4-6`
 - **Default permissions:** `danger-full-access`
 - **Default SWD:** `partial`

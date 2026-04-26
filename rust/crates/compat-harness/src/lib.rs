@@ -70,11 +70,11 @@ fn upstream_repo_candidates(primary_repo_root: &Path) -> Vec<PathBuf> {
     }
 
     for ancestor in primary_repo_root.ancestors().take(4) {
-        candidates.push(ancestor.join("claw-code"));
+        candidates.push(ancestor.join("elai-code"));
     }
 
-    candidates.push(primary_repo_root.join("reference-source").join("claw-code"));
-    candidates.push(primary_repo_root.join("vendor").join("claw-code"));
+    candidates.push(primary_repo_root.join("reference-source").join("elai-code"));
+    candidates.push(primary_repo_root.join("vendor").join("elai-code"));
 
     let mut deduped = Vec::new();
     for candidate in candidates {

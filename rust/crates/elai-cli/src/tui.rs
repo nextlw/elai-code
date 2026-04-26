@@ -493,7 +493,7 @@ fn slash_palette_items() -> Vec<(String, String)> {
         ("diff".into(), "Mostrar git diff".into()),
         ("export".into(), "Exportar conversa".into()),
         ("init".into(), "Inicializar projeto".into()),
-        ("memory".into(), "Mostrar CLAW.md".into()),
+        ("memory".into(), "Mostrar ELAI.md".into()),
         ("version".into(), "Mostrar versão".into()),
         ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
         ("budget".into(), "Budget limiter (tokens/custo)".into()),
@@ -1108,7 +1108,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "  Run /init to create a CLAW.md",
+            "  Run /init to create a ELAI.md",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(

@@ -108,21 +108,21 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "config",
         aliases: &[],
-        summary: "Inspect Claw config files or merged sections",
+        summary: "Inspect Elai config files or merged sections",
         argument_hint: Some("[env|hooks|model|plugins]"),
         resume_supported: true,
     },
     SlashCommandSpec {
         name: "memory",
         aliases: &[],
-        summary: "Inspect loaded Claw instruction memory files",
+        summary: "Inspect loaded Elai instruction memory files",
         argument_hint: None,
         resume_supported: true,
     },
     SlashCommandSpec {
         name: "init",
         aliases: &[],
-        summary: "Create a starter CLAW.md for this repo",
+        summary: "Create a starter ELAI.md for this repo",
         argument_hint: None,
         resume_supported: true,
     },
@@ -227,7 +227,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "plugin",
         aliases: &["plugins", "marketplace"],
-        summary: "Manage Claw Code plugins",
+        summary: "Manage Elai Code plugins",
         argument_hint: Some(
             "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
         ),
@@ -497,20 +497,20 @@ pub struct PluginsCommandResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DefinitionSource {
     ProjectCodex,
-    ProjectClaw,
+    ProjectElai,
     UserCodexHome,
     UserCodex,
-    UserClaw,
+    UserElai,
 }
 
 impl DefinitionSource {
     fn label(self) -> &'static str {
         match self {
             Self::ProjectCodex => "Project (.codex)",
-            Self::ProjectClaw => "Project (.claw)",
+            Self::ProjectElai => "Project (.claw)",
             Self::UserCodexHome => "User ($CODEX_HOME)",
             Self::UserCodex => "User (~/.codex)",
-            Self::UserClaw => "User (~/.claw)",
+            Self::UserElai => "User (~/.claw)",
         }
     }
 }
@@ -813,7 +813,7 @@ pub fn handle_commit_slash_command(message: &str, cwd: &Path) -> io::Result<Stri
     }
 
     git_status_ok(cwd, &["add", "-A"])?;
-    let path = write_temp_text_file("claw-commit-message", "txt", message)?;
+    let path = write_temp_text_file("elai-commit-message", "txt", message)?;
     let path_string = path.to_string_lossy().into_owned();
     git_status_ok(cwd, &["commit", "--file", path_string.as_str()])?;
 
@@ -872,7 +872,7 @@ pub fn handle_commit_push_pr_slash_command(
 
     git_status_ok(cwd, &["push", "--set-upstream", "origin", branch.as_str()])?;
 
-    let body_path = write_temp_text_file("claw-pr-body", "md", request.pr_body.trim())?;
+    let body_path = write_temp_text_file("elai-pr-body", "md", request.pr_body.trim())?;
     let body_path_string = body_path.to_string_lossy().into_owned();
     let create = Command::new("gh")
         .args([
@@ -1145,7 +1145,7 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
         );
         push_unique_root(
             &mut roots,
-            DefinitionSource::ProjectClaw,
+            DefinitionSource::ProjectElai,
             ancestor.join(".claw").join(leaf),
         );
     }
@@ -1167,7 +1167,7 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
         );
         push_unique_root(
             &mut roots,
-            DefinitionSource::UserClaw,
+            DefinitionSource::UserElai,
             home.join(".claw").join(leaf),
         );
     }
@@ -1187,7 +1187,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         );
         push_unique_skill_root(
             &mut roots,
-            DefinitionSource::ProjectClaw,
+            DefinitionSource::ProjectElai,
             ancestor.join(".claw").join("skills"),
             SkillOrigin::SkillsDir,
         );
@@ -1199,7 +1199,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         );
         push_unique_skill_root(
             &mut roots,
-            DefinitionSource::ProjectClaw,
+            DefinitionSource::ProjectElai,
             ancestor.join(".claw").join("commands"),
             SkillOrigin::LegacyCommandsDir,
         );
@@ -1237,13 +1237,13 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         );
         push_unique_skill_root(
             &mut roots,
-            DefinitionSource::UserClaw,
+            DefinitionSource::UserElai,
             home.join(".claw").join("skills"),
             SkillOrigin::SkillsDir,
         );
         push_unique_skill_root(
             &mut roots,
-            DefinitionSource::UserClaw,
+            DefinitionSource::UserElai,
             home.join(".claw").join("commands"),
             SkillOrigin::LegacyCommandsDir,
         );
@@ -1543,10 +1543,10 @@ fn render_agents_report(agents: &[AgentSummary]) -> String {
 
     for source in [
         DefinitionSource::ProjectCodex,
-        DefinitionSource::ProjectClaw,
+        DefinitionSource::ProjectElai,
         DefinitionSource::UserCodexHome,
         DefinitionSource::UserCodex,
-        DefinitionSource::UserClaw,
+        DefinitionSource::UserElai,
     ] {
         let group = agents
             .iter()
@@ -1601,10 +1601,10 @@ fn render_skills_report(skills: &[SkillSummary]) -> String {
 
     for source in [
         DefinitionSource::ProjectCodex,
-        DefinitionSource::ProjectClaw,
+        DefinitionSource::ProjectElai,
         DefinitionSource::UserCodexHome,
         DefinitionSource::UserCodex,
-        DefinitionSource::UserClaw,
+        DefinitionSource::UserElai,
     ] {
         let group = skills
             .iter()
@@ -1664,7 +1664,7 @@ fn render_agents_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Agents".to_string(),
         "  Usage            /agents".to_string(),
-        "  Direct CLI       claw agents".to_string(),
+        "  Direct CLI       elai agents".to_string(),
         "  Sources          .codex/agents, .claw/agents, $CODEX_HOME/agents".to_string(),
     ];
     if let Some(args) = unexpected {
@@ -1677,7 +1677,7 @@ fn render_skills_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Skills".to_string(),
         "  Usage            /skills".to_string(),
-        "  Direct CLI       claw skills".to_string(),
+        "  Direct CLI       elai skills".to_string(),
         "  Sources          .codex/skills, .claw/skills, legacy /commands".to_string(),
     ];
     if let Some(args) = unexpected {
@@ -1823,8 +1823,8 @@ mod tests {
             assert!(rename.status.success(), "git branch -m main should succeed");
         }
 
-        run_command(&root, "git", &["config", "user.name", "Claw Tests"]);
-        run_command(&root, "git", &["config", "user.email", "claw@example.com"]);
+        run_command(&root, "git", &["config", "user.name", "Elai Tests"]);
+        run_command(&root, "git", &["config", "user.email", "elai@example.com"]);
         fs::write(root.join("README.md"), "seed\n").expect("seed file");
         run_command(&root, "git", &["add", "README.md"]);
         run_command(&root, "git", &["commit", "-m", "chore: seed repo"]);
@@ -2317,7 +2317,7 @@ mod tests {
                 origin: SkillOrigin::SkillsDir,
             },
             SkillRoot {
-                source: DefinitionSource::ProjectClaw,
+                source: DefinitionSource::ProjectElai,
                 path: project_commands,
                 origin: SkillOrigin::LegacyCommandsDir,
             },
@@ -2351,7 +2351,7 @@ mod tests {
         let agents_help =
             super::handle_agents_slash_command(Some("help"), &cwd).expect("agents help");
         assert!(agents_help.contains("Usage            /agents"));
-        assert!(agents_help.contains("Direct CLI       claw agents"));
+        assert!(agents_help.contains("Direct CLI       elai agents"));
 
         let agents_unexpected =
             super::handle_agents_slash_command(Some("show planner"), &cwd).expect("agents usage");
