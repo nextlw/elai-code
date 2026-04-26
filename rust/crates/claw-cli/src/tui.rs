@@ -23,7 +23,9 @@
 
 use std::env;
 use std::io;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{
@@ -41,7 +43,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
+    ScrollbarState, Wrap,
 };
 use ratatui::Terminal;
 
@@ -56,6 +58,8 @@ pub enum TuiMsg {
     Usage { input_tokens: u32, output_tokens: u32 },
     Done,
     Error(String),
+    SwdResult(crate::swd::SwdTransaction),
+    SwdBatchResult(Vec<crate::swd::SwdTransaction>),
 }
 
 /// A permission request sent from the runtime thread; the reply channel is
@@ -83,6 +87,10 @@ pub enum ChatEntry {
     ToolCallEntry { name: String, input: String },
     ToolResultEntry { ok: bool, summary: String },
     SystemNote(String),
+    SwdLogEntry {
+        transactions: Vec<crate::swd::SwdTransaction>,
+        mode: crate::swd::SwdLevel,
+    },
 }
 
 // ─── Overlay states ───────────────────────────────────────────────────────────
@@ -138,6 +146,7 @@ pub struct UiApp {
     pub history_backup: String,
     pub spinner_frame: usize,
     pub read_mode: bool,
+    pub swd_level: Arc<AtomicU8>,
 }
 
 impl UiApp {
@@ -146,6 +155,7 @@ impl UiApp {
         permission_mode: String,
         session_id: String,
         recent_sessions: Vec<(String, usize)>,
+        swd_level: Arc<AtomicU8>,
     ) -> Self {
         Self {
             model,
@@ -167,6 +177,7 @@ impl UiApp {
             history_backup: String::new(),
             spinner_frame: 0,
             read_mode: false,
+            swd_level,
         }
     }
 
@@ -217,6 +228,29 @@ impl UiApp {
             TuiMsg::Error(msg) => {
                 self.thinking = false;
                 self.push_chat(ChatEntry::SystemNote(format!("❌ Error: {msg}")));
+            }
+            TuiMsg::SwdResult(tx) => {
+                let appended = matches!(
+                    self.chat.last_mut(),
+                    Some(ChatEntry::SwdLogEntry { .. })
+                );
+                if appended {
+                    if let Some(ChatEntry::SwdLogEntry { transactions, .. }) = self.chat.last_mut() {
+                        transactions.push(tx);
+                    }
+                    self.scroll_to_bottom();
+                } else {
+                    self.push_chat(ChatEntry::SwdLogEntry {
+                        transactions: vec![tx],
+                        mode: crate::swd::SwdLevel::Partial,
+                    });
+                }
+            }
+            TuiMsg::SwdBatchResult(txs) => {
+                self.push_chat(ChatEntry::SwdLogEntry {
+                    transactions: txs,
+                    mode: crate::swd::SwdLevel::Full,
+                });
             }
         }
     }
@@ -405,6 +439,7 @@ fn slash_palette_items() -> Vec<(String, String)> {
         ("init".into(), "Inicializar projeto".into()),
         ("memory".into(), "Mostrar CLAW.md".into()),
         ("version".into(), "Mostrar versão".into()),
+        ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
         ("exit".into(), "Sair".into()),
     ]
 }
@@ -943,9 +978,12 @@ const ELAI_ASCII: &str = "\
 ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
-    let ascii_style = Style::default().fg(Color::Indexed(215)); // pastel orange
+    let ascii_style = Style::default().fg(Color::Indexed(209)); // light reddish-orange
     let label_style = Style::default()
-        .fg(Color::Indexed(216))
+        .fg(Color::Indexed(209))
+        .add_modifier(Modifier::BOLD);
+    let label_i_style = Style::default()
+        .fg(Color::Indexed(202)) // stronger reddish-orange for the "I"
         .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
 
@@ -962,7 +1000,9 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     // Label after ASCII.
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled("ELAI Code", label_style),
+        Span::styled("ELA", label_style),
+        Span::styled("I", label_i_style),
+        Span::styled(" Code", label_style),
         Span::raw("  🚀"),
     ]));
     lines.push(Line::from(Span::styled(
@@ -973,7 +1013,7 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(Color::Indexed(209)));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
@@ -1056,7 +1096,7 @@ fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
 
     let display: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
 
-    let paragraph = Paragraph::new(display);
+    let paragraph = Paragraph::new(display).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 
     // Scrollbar.
@@ -1276,12 +1316,49 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 )));
                 result.push(Line::from(""));
             }
+            ChatEntry::SwdLogEntry { transactions, mode } => {
+                use crate::swd::SwdOutcome;
+                result.push(Line::from(Span::styled(
+                    format!(
+                        "  ⛨ SWD {} — {} operação(ões)",
+                        mode.as_str(),
+                        transactions.len()
+                    ),
+                    Style::default()
+                        .fg(Color::Indexed(215))
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for tx in transactions {
+                    let (icon, color) = match &tx.outcome {
+                        SwdOutcome::Verified => ("✓", Color::Green),
+                        SwdOutcome::Noop => ("·", Color::Yellow),
+                        SwdOutcome::Drift { .. } => ("~", Color::Yellow),
+                        SwdOutcome::Failed { .. } => ("✗", Color::Red),
+                        SwdOutcome::RolledBack => ("↩", Color::Red),
+                    };
+                    let short_path: String = if tx.path.len() > 45 {
+                        format!("…{}", &tx.path[tx.path.len() - 44..])
+                    } else {
+                        tx.path.clone()
+                    };
+                    result.push(Line::from(vec![
+                        Span::styled(format!("    {icon} "), Style::default().fg(color)),
+                        Span::styled(short_path, Style::default().fg(Color::White)),
+                        Span::styled(
+                            format!("  [{}]", tx.tool_name),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                result.push(Line::from(""));
+            }
         }
     }
 
     if app.thinking {
+        let frame = SPINNER[app.spinner_frame % SPINNER.len()];
         result.push(Line::from(Span::styled(
-            "  ⠋ Thinking…",
+            format!("  {frame} Thinking…"),
             Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
@@ -1293,6 +1370,9 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
 
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
+    if width == 0 {
+        return result;
+    }
     for raw_line in text.lines() {
         if raw_line.is_empty() {
             result.push(String::new());
@@ -1302,6 +1382,20 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         let mut current = String::new();
         for word in raw_line.split_whitespace() {
             let wlen = word.len();
+            // Break very long unspaced tokens (paths, URLs, JSON blobs) so they
+            // do not overflow/cut in the terminal viewport.
+            if wlen > width {
+                if !current.is_empty() {
+                    result.push(current.clone());
+                    current.clear();
+                    current_width = 0;
+                }
+                let chars = word.chars().collect::<Vec<_>>();
+                for chunk in chars.chunks(width) {
+                    result.push(chunk.iter().collect());
+                }
+                continue;
+            }
             if current_width > 0 && current_width + 1 + wlen > width {
                 result.push(current.clone());
                 current.clear();
@@ -1324,20 +1418,21 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 // ── Status footer ─────────────────────────────────────────────────────────────
 
 fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
-    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let spinner = if app.thinking {
         SPINNER[app.spinner_frame % SPINNER.len()]
     } else {
         "·"
     };
     let cost = estimate_cost(&app.model, app.input_tokens, app.output_tokens);
+    let swd_str = crate::swd::SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed)).as_str();
     let text = format!(
-        " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · {}",
+        " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{} · {}",
         app.model,
         app.permission_mode,
         app.input_tokens,
         app.output_tokens,
         cost,
+        swd_str,
         short_session_id(&app.session_id),
     );
     let style = if app.read_mode {
@@ -1670,6 +1765,8 @@ fn draw_tool_approval(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
 fn whoami_user() -> String {
@@ -1691,6 +1788,7 @@ mod tests {
             "danger-full-access".to_string(),
             "session-test".to_string(),
             vec![],
+            Arc::new(AtomicU8::new(crate::swd::SwdLevel::default() as u8)),
         )
     }
 

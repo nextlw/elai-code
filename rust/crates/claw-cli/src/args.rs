@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Debug, Clone, Parser, PartialEq, Eq)]
 #[command(name = "claw-cli", version, about = "Claw Code CLI")]
 pub struct Cli {
-    #[arg(long, default_value = "claude-opus-4-6")]
+    #[arg(long, default_value = "gpt-4o-mini")]
     pub model: String,
 
     #[arg(long, value_enum, default_value_t = PermissionMode::DangerFullAccess)]

@@ -1,6 +1,7 @@
 mod init;
 mod input;
 mod render;
+mod swd;
 mod tui;
 
 use std::collections::BTreeSet;
@@ -93,7 +94,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             allowed_tools,
             permission_mode,
             no_tui,
-        } => run_repl(model, allowed_tools, permission_mode, no_tui)?,
+            swd_level,
+        } => run_repl(model, allowed_tools, permission_mode, no_tui, swd_level)?,
         CliAction::Help => print_help(),
     }
     Ok(())
@@ -196,6 +198,7 @@ enum CliAction {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
         no_tui: bool,
+        swd_level: crate::swd::SwdLevel,
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
@@ -228,6 +231,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut allowed_tool_values = Vec::new();
     let mut rest = Vec::new();
     let mut no_tui = false;
+    let mut swd_level_arg = crate::swd::SwdLevel::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -275,6 +279,20 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--no-tui" => {
                 no_tui = true;
+                index += 1;
+            }
+            "--swd" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --swd".to_string())?;
+                swd_level_arg = crate::swd::SwdLevel::from_str(value)
+                    .ok_or_else(|| format!("invalid --swd: {value}"))?;
+                index += 2;
+            }
+            flag if flag.starts_with("--swd=") => {
+                let value = &flag[6..];
+                swd_level_arg = crate::swd::SwdLevel::from_str(value)
+                    .ok_or_else(|| format!("invalid --swd: {value}"))?;
                 index += 1;
             }
             "-p" => {
@@ -330,6 +348,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             allowed_tools,
             permission_mode,
             no_tui,
+            swd_level: swd_level_arg,
         });
     }
     if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) {
@@ -1033,10 +1052,11 @@ fn run_repl(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     no_tui: bool,
+    swd_level: crate::swd::SwdLevel,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Use TUI mode when stdout is a real terminal and --no-tui not specified.
     if !no_tui && std::io::stdout().is_terminal() {
-        return run_tui_repl(model, allowed_tools, permission_mode);
+        return run_tui_repl(model, allowed_tools, permission_mode, swd_level);
     }
 
     // Fallback: plain text REPL (piped/non-TTY).
@@ -1079,7 +1099,9 @@ fn run_tui_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    swd_level: crate::swd::SwdLevel,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::AtomicU8;
     use std::sync::Arc;
 
     // Channels: TUI msg (runtime → TUI) and perm request/decision.
@@ -1097,11 +1119,14 @@ fn run_tui_repl(
     let session_handle = create_managed_session_handle()?;
     let system_prompt = build_system_prompt()?;
 
+    let swd_atomic = Arc::new(AtomicU8::new(swd_level as u8));
+
     let mut app = tui::UiApp::new(
         model.clone(),
         permission_mode.as_str().to_string(),
         session_handle.id.clone(),
         recent_sessions,
+        Arc::clone(&swd_atomic),
     );
 
     // Install a panic hook that restores the terminal before printing the panic.
@@ -1160,7 +1185,16 @@ fn run_tui_repl(
                             &app.permission_mode
                         );
                         let allowed_clone = allowed_tools.clone();
-                        let prompt_clone = system_prompt.clone();
+                        let mut prompt_clone = system_prompt.clone();
+                        // Inject SWD full-mode system prompt if enabled at spawn time.
+                        {
+                            use std::sync::atomic::Ordering;
+                            if crate::swd::SwdLevel::from_u8(swd_atomic.load(Ordering::Relaxed))
+                                == crate::swd::SwdLevel::Full
+                            {
+                                prompt_clone.push(crate::swd::SWD_FULL_SYSTEM_PROMPT.to_string());
+                            }
+                        }
                         let session_clone = {
                             let guard = session.lock().unwrap();
                             guard.clone()
@@ -1169,6 +1203,7 @@ fn run_tui_repl(
                         let perm_tx_clone = perm_tx.clone();
                         let done_tx = thread_done_tx.clone();
                         let session_for_thread = Arc::clone(&session);
+                        let swd_atomic_clone = Arc::clone(&swd_atomic);
 
                         thread::spawn(move || {
                             let result: Result<(), String> = (|| {
@@ -1179,6 +1214,7 @@ fn run_tui_repl(
                                     allowed_clone,
                                     perm_clone,
                                     msg_tx_clone.clone(),
+                                    swd_atomic_clone,
                                 ).map_err(|e| {
                                     let msg = e.to_string();
                                     let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
@@ -1297,6 +1333,7 @@ Comandos disponíveis:\n\
   /export        Exportar conversa para arquivo .txt\n\
   /memory        Mostrar conteúdo do CLAW.md\n\
   /init          Inicializar CLAW.md no projeto\n\
+  /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
   /version       Mostrar versão\n\
   /exit          Sair\n\
 Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
@@ -1457,10 +1494,34 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 ))),
             }
         }
-        "agents" | "skills" => {
+        "swd" => {
+            use std::sync::atomic::Ordering;
+            use crate::swd::SwdLevel;
+            let current = SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed));
+            let new_level = if let Some(level_str) = arg {
+                match SwdLevel::from_str(level_str) {
+                    Some(l) => l,
+                    None => {
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "❌ SWD: nível inválido '{level_str}'. Use: off | partial | full"
+                        )));
+                        return;
+                    }
+                }
+            } else {
+                current.cycle()
+            };
+            app.swd_level.store(new_level as u8, Ordering::Relaxed);
             app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "ℹ Use `claw agents` ou `claw skills` fora do modo TUI para listar."
+                "✅ SWD alterado: {} → {}",
+                current.as_str(),
+                new_level.as_str()
             )));
+        }
+        "agents" | "skills" => {
+            app.push_chat(tui::ChatEntry::SystemNote(
+                "ℹ Use `claw agents` ou `claw skills` fora do modo TUI para listar.".to_string(),
+            ));
         }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
@@ -1533,12 +1594,12 @@ impl LiveCli {
             "\n\
 \x1b[38;5;215m╭──────────────────────────────────────────────────────────────────────────────╮\x1b[0m\n\
 \x1b[38;5;215m│\x1b[0m                                                                              \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m███████╗██╗      █████╗ ██╗\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m██╔════╝██║     ██╔══██╗██║\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m█████╗  ██║     ███████║██║\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m██╔══╝  ██║     ██╔══██║██║\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m███████╗███████╗██║  ██║██║\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
-\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m╚══════╝╚══════╝╚═╝  ╚═╝╚═╝\x1b[0m             \x1b[38;5;215m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m███████╗██╗      █████╗ ██╗\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m██╔════╝██║     ██╔══██╗██║\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m█████╗  ██║     ███████║██║\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m██╔══╝  ██║     ██╔══██║██║\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m███████╗███████╗██║  ██║██║\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
+\x1b[38;5;215m│\x1b[0m                                \x1b[38;5;216m╚══════╝╚══════╝╚═╝  ╚═╝╚═╝\x1b[0m             \x1b[38;5;202m│\x1b[0m\n\
 \x1b[38;5;215m│\x1b[0m                                                                              \x1b[38;5;215m│\x1b[0m\n\
 \x1b[38;5;215m│\x1b[0m   \x1b[2mModel\x1b[0m            {} \x1b[38;5;215m│\x1b[0m\n\
 \x1b[38;5;215m│\x1b[0m   \x1b[2mPermissions\x1b[0m      {} \x1b[38;5;215m│\x1b[0m\n\
@@ -3293,6 +3354,9 @@ fn build_runtime(
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
+    let swd_level = Arc::new(std::sync::atomic::AtomicU8::new(
+        crate::swd::SwdLevel::default() as u8,
+    ));
     Ok(ConversationRuntime::new_with_features(
         session,
         DefaultRuntimeClient::new(
@@ -3302,8 +3366,14 @@ fn build_runtime(
             allowed_tools.clone(),
             tool_registry.clone(),
             progress_reporter,
+            Arc::clone(&swd_level),
         )?,
-        CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
+        CliToolExecutor::new(
+            allowed_tools.clone(),
+            emit_output,
+            tool_registry.clone(),
+            Arc::clone(&swd_level),
+        ),
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
         &feature_config,
@@ -3318,6 +3388,7 @@ fn build_runtime_for_tui(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     tui_msg_tx: mpsc::Sender<tui::TuiMsg>,
+    swd_level: Arc<std::sync::atomic::AtomicU8>,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
@@ -3330,9 +3401,15 @@ fn build_runtime_for_tui(
             allowed_tools.clone(),
             tool_registry.clone(),
             None,
+            Arc::clone(&swd_level),
         )?.with_tui_sender(tui_msg_tx.clone()),
-        CliToolExecutor::new(allowed_tools.clone(), false, tool_registry.clone())
-            .with_tui_sender(tui_msg_tx),
+        CliToolExecutor::new(
+            allowed_tools.clone(),
+            false,
+            tool_registry.clone(),
+            Arc::clone(&swd_level),
+        )
+        .with_tui_sender(tui_msg_tx),
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
         &feature_config,
@@ -3477,6 +3554,7 @@ struct DefaultRuntimeClient {
     tool_registry: GlobalToolRegistry,
     progress_reporter: Option<InternalPromptProgressReporter>,
     tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
+    swd_level: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl DefaultRuntimeClient {
@@ -3487,6 +3565,7 @@ impl DefaultRuntimeClient {
         allowed_tools: Option<AllowedToolSet>,
         tool_registry: GlobalToolRegistry,
         progress_reporter: Option<InternalPromptProgressReporter>,
+        swd_level: Arc<std::sync::atomic::AtomicU8>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
@@ -3498,6 +3577,7 @@ impl DefaultRuntimeClient {
             tool_registry,
             progress_reporter,
             tui_sender: None,
+            swd_level,
         })
     }
 
@@ -3528,6 +3608,7 @@ impl ApiClient for DefaultRuntimeClient {
         // Clone sender before moving into async block.
         let tui_sender = self.tui_sender.clone();
         let emit_output = self.emit_output;
+        let swd_level_arc = Arc::clone(&self.swd_level);
 
         self.runtime.block_on(async {
             let mut stream = self
@@ -3547,6 +3628,7 @@ impl ApiClient for DefaultRuntimeClient {
             let mut events = Vec::new();
             let mut pending_tool: Option<(String, String, String)> = None;
             let mut saw_stop = false;
+            let mut full_text_buf = String::new();
 
             while let Some(event) = stream
                 .next_event()
@@ -3573,6 +3655,15 @@ impl ApiClient for DefaultRuntimeClient {
                             if !text.is_empty() {
                                 if let Some(progress_reporter) = &self.progress_reporter {
                                     progress_reporter.mark_text_phase(&text);
+                                }
+                                {
+                                    use std::sync::atomic::Ordering;
+                                    if crate::swd::SwdLevel::from_u8(
+                                        swd_level_arc.load(Ordering::Relaxed),
+                                    ) == crate::swd::SwdLevel::Full
+                                    {
+                                        full_text_buf.push_str(&text);
+                                    }
                                 }
                                 if let Some(ref tx) = tui_sender {
                                     let _ = tx.send(tui::TuiMsg::TextChunk(text.clone()));
@@ -3636,6 +3727,24 @@ impl ApiClient for DefaultRuntimeClient {
                                 write!(out, "{rendered}")
                                     .and_then(|()| out.flush())
                                     .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            }
+                        }
+                        {
+                            use std::sync::atomic::Ordering;
+                            if crate::swd::SwdLevel::from_u8(
+                                swd_level_arc.load(Ordering::Relaxed),
+                            ) == crate::swd::SwdLevel::Full
+                            {
+                                let actions = crate::swd::parse_file_actions(&full_text_buf);
+                                if !actions.is_empty() {
+                                    let txs = crate::swd::execute_file_actions(actions);
+                                    let _ = crate::swd::append_swd_log(&txs);
+                                    if let Some(ref sender) = tui_sender {
+                                        let _ = sender
+                                            .send(tui::TuiMsg::SwdBatchResult(txs));
+                                    }
+                                }
+                                full_text_buf.clear();
                             }
                         }
                         events.push(AssistantEvent::MessageStop);
@@ -4233,12 +4342,15 @@ fn response_to_events(
     Ok(events)
 }
 
+const SWD_WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "NotebookEdit"];
+
 struct CliToolExecutor {
     renderer: TerminalRenderer,
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
     tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
+    swd_level: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl CliToolExecutor {
@@ -4246,6 +4358,7 @@ impl CliToolExecutor {
         allowed_tools: Option<AllowedToolSet>,
         emit_output: bool,
         tool_registry: GlobalToolRegistry,
+        swd_level: Arc<std::sync::atomic::AtomicU8>,
     ) -> Self {
         Self {
             renderer: TerminalRenderer::new(),
@@ -4253,12 +4366,86 @@ impl CliToolExecutor {
             allowed_tools,
             tool_registry,
             tui_sender: None,
+            swd_level,
         }
     }
 
     fn with_tui_sender(mut self, tx: mpsc::Sender<tui::TuiMsg>) -> Self {
         self.tui_sender = Some(tx);
         self
+    }
+
+    fn execute_with_swd(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+        use std::sync::atomic::Ordering;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use crate::swd::{self, SwdOutcome, SwdTransaction};
+
+        let _ = self.swd_level.load(Ordering::Relaxed);
+
+        // Extract path from JSON input.
+        let path = serde_json::from_str::<serde_json::Value>(input)
+            .ok()
+            .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string))
+            .unwrap_or_default();
+
+        let (before_hash, before_bytes) = if path.is_empty() {
+            (None, None)
+        } else {
+            swd::snapshot(&path)
+        };
+
+        let value = serde_json::from_str(input)
+            .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
+        let result = self.tool_registry.execute(tool_name, &value);
+        let tool_ok = result.is_ok();
+
+        let (after_hash, _) = if path.is_empty() {
+            (None, None)
+        } else {
+            swd::snapshot(&path)
+        };
+        let outcome = swd::verify_outcome(&before_hash, &after_hash, tool_ok);
+
+        // Rollback if failed.
+        if matches!(outcome, SwdOutcome::Failed { .. }) && !path.is_empty() {
+            let _ = swd::rollback(&path, before_bytes.as_deref());
+        }
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        let tx_record = SwdTransaction {
+            tool_name: tool_name.to_string(),
+            path: path.clone(),
+            before_hash,
+            after_hash,
+            outcome,
+            timestamp_ms: ts,
+        };
+        let _ = swd::append_swd_log(&[tx_record.clone()]);
+
+        if let Some(ref sender) = self.tui_sender {
+            let _ = sender.send(tui::TuiMsg::SwdResult(tx_record));
+        }
+
+        // Also send normal ToolResult for UI display.
+        match &result {
+            Ok(output) => {
+                if let Some(ref tx_sender) = self.tui_sender {
+                    let summary = output.chars().take(80).collect::<String>();
+                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: true, summary });
+                }
+            }
+            Err(err) => {
+                if let Some(ref tx_sender) = self.tui_sender {
+                    let summary = err.chars().take(80).collect::<String>();
+                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: false, summary });
+                }
+            }
+        }
+
+        result.map_err(ToolError::new)
     }
 }
 
@@ -4273,6 +4460,32 @@ impl ToolExecutor for CliToolExecutor {
                 "tool `{tool_name}` is not enabled by the current --allowedTools setting"
             )));
         }
+
+        // SWD interception: full mode blocks writes; partial mode wraps them.
+        {
+            use std::sync::atomic::Ordering;
+            let swd_lv = crate::swd::SwdLevel::from_u8(self.swd_level.load(Ordering::Relaxed));
+            if swd_lv == crate::swd::SwdLevel::Full
+                && SWD_WRITE_TOOLS.contains(&tool_name)
+            {
+                let msg = format!(
+                    "SWD full mode: '{tool_name}' está bloqueada. Use [FILE_ACTION] blocks no texto."
+                );
+                if let Some(ref tx) = self.tui_sender {
+                    let _ = tx.send(tui::TuiMsg::ToolResult {
+                        ok: false,
+                        summary: msg.clone(),
+                    });
+                }
+                return Err(ToolError::new(msg));
+            }
+            if swd_lv == crate::swd::SwdLevel::Partial
+                && SWD_WRITE_TOOLS.contains(&tool_name)
+            {
+                return self.execute_with_swd(tool_name, input);
+            }
+        }
+
         let value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
         match self.tool_registry.execute(tool_name, &value) {
@@ -4506,6 +4719,7 @@ mod tests {
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
                 no_tui: false,
+                swd_level: crate::swd::SwdLevel::default(),
             }
         );
     }
@@ -4600,6 +4814,7 @@ mod tests {
                 allowed_tools: None,
                 permission_mode: PermissionMode::ReadOnly,
                 no_tui: false,
+                swd_level: crate::swd::SwdLevel::default(),
             }
         );
     }
@@ -4623,6 +4838,7 @@ mod tests {
                 ),
                 permission_mode: PermissionMode::DangerFullAccess,
                 no_tui: false,
+                swd_level: crate::swd::SwdLevel::default(),
             }
         );
     }

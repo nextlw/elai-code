@@ -1,10 +1,10 @@
 use crate::session::Session;
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_INPUT_COST_PER_MILLION: f64 = 15.0;
-const DEFAULT_OUTPUT_COST_PER_MILLION: f64 = 75.0;
-const DEFAULT_CACHE_CREATION_COST_PER_MILLION: f64 = 18.75;
-const DEFAULT_CACHE_READ_COST_PER_MILLION: f64 = 1.5;
+const DEFAULT_INPUT_COST_PER_MILLION: f64 = 3.0;
+const DEFAULT_OUTPUT_COST_PER_MILLION: f64 = 15.0;
+const DEFAULT_CACHE_CREATION_COST_PER_MILLION: f64 = 3.75;
+const DEFAULT_CACHE_READ_COST_PER_MILLION: f64 = 0.3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelPricing {
@@ -65,14 +65,55 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     }
     if normalized.contains("opus") {
         return Some(ModelPricing {
-            input_cost_per_million: 15.0,
-            output_cost_per_million: 75.0,
-            cache_creation_cost_per_million: 18.75,
-            cache_read_cost_per_million: 1.5,
+            input_cost_per_million: 5.0,
+            output_cost_per_million: 25.0,
+            cache_creation_cost_per_million: 6.25,
+            cache_read_cost_per_million: 0.5,
         });
     }
     if normalized.contains("sonnet") {
         return Some(ModelPricing::default_sonnet_tier());
+    }
+    // OpenAI — cache_creation = 0.0 (prompt caching is automatic, sem cobrança de write)
+    if normalized.contains("gpt-4.1-nano") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.10,
+            output_cost_per_million: 0.40,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.025,
+        });
+    }
+    if normalized.contains("gpt-4.1-mini") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.40,
+            output_cost_per_million: 1.60,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.10,
+        });
+    }
+    if normalized.contains("gpt-4.1") {
+        return Some(ModelPricing {
+            input_cost_per_million: 2.00,
+            output_cost_per_million: 8.00,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.50,
+        });
+    }
+    if normalized.contains("gpt-4o-mini") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.15,
+            output_cost_per_million: 0.60,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.075,
+        });
+    }
+    if normalized.contains("gpt-4o") {
+        return Some(ModelPricing {
+            input_cost_per_million: 2.50,
+            output_cost_per_million: 10.00,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 1.25,
+        });
     }
     None
 }
@@ -248,12 +289,12 @@ mod tests {
         };
 
         let cost = usage.estimate_cost_usd();
-        assert_eq!(format_usd(cost.input_cost_usd), "$15.0000");
-        assert_eq!(format_usd(cost.output_cost_usd), "$37.5000");
+        assert_eq!(format_usd(cost.input_cost_usd), "$3.0000");
+        assert_eq!(format_usd(cost.output_cost_usd), "$7.5000");
         let lines = usage.summary_lines_for_model("usage", Some("claude-sonnet-4-6"));
-        assert!(lines[0].contains("estimated_cost=$54.6750"));
+        assert!(lines[0].contains("estimated_cost=$10.9350"));
         assert!(lines[0].contains("model=claude-sonnet-4-6"));
-        assert!(lines[1].contains("cache_read=$0.3000"));
+        assert!(lines[1].contains("cache_read=$0.0600"));
     }
 
     #[test]
@@ -270,7 +311,7 @@ mod tests {
         let haiku_cost = usage.estimate_cost_usd_with_pricing(haiku);
         let opus_cost = usage.estimate_cost_usd_with_pricing(opus);
         assert_eq!(format_usd(haiku_cost.total_cost_usd()), "$3.5000");
-        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$52.5000");
+        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$17.5000");
     }
 
     #[test]
@@ -306,5 +347,21 @@ mod tests {
         let tracker = UsageTracker::from_session(&session);
         assert_eq!(tracker.turns(), 1);
         assert_eq!(tracker.cumulative_usage().total_tokens(), 8);
+    }
+
+    #[test]
+    fn supports_gpt_4o_mini_pricing() {
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        };
+
+        let gpt_4o_mini = pricing_for_model("gpt-4o-mini").expect("gpt-4o-mini pricing");
+        let cost = usage.estimate_cost_usd_with_pricing(gpt_4o_mini);
+        assert_eq!(format_usd(cost.input_cost_usd), "$0.1500");
+        assert_eq!(format_usd(cost.output_cost_usd), "$0.6000");
+        assert_eq!(format_usd(cost.total_cost_usd()), "$0.7500");
     }
 }
