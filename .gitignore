@@ -8,3 +8,4 @@ archive/
 # Claw Code local artifacts
 .claw/settings.local.json
 .claw/sessions/
+.DS_Store
