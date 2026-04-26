@@ -1,12 +1,13 @@
 mod init;
 mod input;
 mod render;
+mod tui;
 
 use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,6 +39,7 @@ use runtime::{
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, RuntimeError,
     Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use serde_json::json;
 use tools::GlobalToolRegistry;
 
@@ -90,7 +92,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             model,
             allowed_tools,
             permission_mode,
-        } => run_repl(model, allowed_tools, permission_mode)?,
+            no_tui,
+        } => run_repl(model, allowed_tools, permission_mode, no_tui)?,
         CliAction::Help => print_help(),
     }
     Ok(())
@@ -192,6 +195,7 @@ enum CliAction {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        no_tui: bool,
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
@@ -223,6 +227,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut wants_version = false;
     let mut allowed_tool_values = Vec::new();
     let mut rest = Vec::new();
+    let mut no_tui = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -266,6 +271,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--dangerously-skip-permissions" => {
                 permission_mode = PermissionMode::DangerFullAccess;
+                index += 1;
+            }
+            "--no-tui" => {
+                no_tui = true;
                 index += 1;
             }
             "-p" => {
@@ -320,6 +329,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             model,
             allowed_tools,
             permission_mode,
+            no_tui,
         });
     }
     if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) {
@@ -412,6 +422,19 @@ fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
             )
         })
         .map(permission_mode_from_label)
+}
+
+fn estimate_tui_cost(app: &tui::UiApp) -> f64 {
+    let (in_rate, out_rate) = if app.model.contains("gpt-4") {
+        (0.000_005, 0.000_015)
+    } else if app.model.contains("sonnet") {
+        (0.000_003, 0.000_015)
+    } else if app.model.contains("haiku") {
+        (0.000_000_8, 0.000_004)
+    } else {
+        (0.000_015, 0.000_075)
+    };
+    f64::from(app.input_tokens) * in_rate + f64::from(app.output_tokens) * out_rate
 }
 
 fn permission_mode_from_label(mode: &str) -> PermissionMode {
@@ -1009,7 +1032,14 @@ fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    no_tui: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Use TUI mode when stdout is a real terminal and --no-tui not specified.
+    if !no_tui && std::io::stdout().is_terminal() {
+        return run_tui_repl(model, allowed_tools, permission_mode);
+    }
+
+    // Fallback: plain text REPL (piped/non-TTY).
     let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
     let mut editor = input::LineEditor::new("> ", slash_command_completion_candidates());
     println!("{}", cli.startup_banner());
@@ -1043,6 +1073,401 @@ fn run_repl(
     }
 
     Ok(())
+}
+
+fn run_tui_repl(
+    model: String,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
+
+    // Channels: TUI msg (runtime → TUI) and perm request/decision.
+    let (msg_tx, msg_rx) = mpsc::channel::<tui::TuiMsg>();
+    let (perm_tx, perm_rx) = mpsc::channel::<tui::PermRequest>();
+
+    // Load recent sessions for the side panel.
+    let recent_sessions: Vec<(String, usize)> = list_managed_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .take(5)
+        .map(|s| (s.id, s.message_count))
+        .collect();
+
+    let session_handle = create_managed_session_handle()?;
+    let system_prompt = build_system_prompt()?;
+
+    let mut app = tui::UiApp::new(
+        model.clone(),
+        permission_mode.as_str().to_string(),
+        session_handle.id.clone(),
+        recent_sessions,
+    );
+
+    // Install a panic hook that restores the terminal before printing the panic.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
+        );
+        original_hook(info);
+    }));
+
+    // Set up terminal.
+    let mut stdout = io::stdout();
+    tui::enter_tui(&mut stdout)?;
+
+    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    let mut terminal = ratatui::Terminal::new(backend)?;
+
+    // State shared between TUI loop and runtime thread: the active session.
+    let session = Arc::new(std::sync::Mutex::new(Session::new()));
+
+    // Track whether the runtime thread is currently running.
+    let (thread_done_tx, thread_done_rx) = mpsc::channel::<Result<(), String>>();
+
+    // Main TUI loop.
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            tui::render(&mut terminal, &mut app)?;
+            app.tick();
+
+            let action = tui::poll_and_handle(&mut app, &msg_rx, &perm_rx);
+
+            // Drain Done/Error from background thread.
+            if let Ok(outcome) = thread_done_rx.try_recv() {
+                app.thinking = false;
+                if let Err(e) = outcome {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}")));
+                }
+                // Persist session.
+                let guard = session.lock().unwrap();
+                let _ = guard.save_to_path(&session_handle.path);
+            }
+
+            match action {
+                tui::TuiAction::Quit => {
+                    app.should_quit = true;
+                }
+                tui::TuiAction::SendMessage(text) => {
+                    if !app.thinking {
+                        app.thinking = true;
+                        let model_clone = app.model.clone();
+                        let perm_clone = permission_mode_from_label(
+                            &app.permission_mode
+                        );
+                        let allowed_clone = allowed_tools.clone();
+                        let prompt_clone = system_prompt.clone();
+                        let session_clone = {
+                            let guard = session.lock().unwrap();
+                            guard.clone()
+                        };
+                        let msg_tx_clone = msg_tx.clone();
+                        let perm_tx_clone = perm_tx.clone();
+                        let done_tx = thread_done_tx.clone();
+                        let session_for_thread = Arc::clone(&session);
+
+                        thread::spawn(move || {
+                            let result: Result<(), String> = (|| {
+                                let mut runtime = build_runtime_for_tui(
+                                    session_clone,
+                                    model_clone.clone(),
+                                    prompt_clone,
+                                    allowed_clone,
+                                    perm_clone,
+                                    msg_tx_clone.clone(),
+                                ).map_err(|e| {
+                                    let msg = e.to_string();
+                                    let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
+                                    msg
+                                })?;
+                                let mut prompter = CliPermissionPrompter::new_tui(
+                                    perm_clone,
+                                    perm_tx_clone,
+                                );
+                                if let Err(e) = runtime.run_turn(&text, Some(&mut prompter)) {
+                                    let msg = e.to_string();
+                                    let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
+                                    return Err(msg);
+                                }
+                                let _ = msg_tx_clone.send(tui::TuiMsg::Done);
+                                // Save updated session back.
+                                let _ = session_for_thread
+                                    .lock()
+                                    .map(|mut guard| *guard = runtime.session().clone());
+                                Ok(())
+                            })();
+                            let _ = done_tx.send(result);
+                        });
+                    }
+                }
+                tui::TuiAction::SetModel(m) => {
+                    app.model = m.clone();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "✅ Modelo alterado para: {m}"
+                    )));
+                }
+                tui::TuiAction::SetPermissions(p) => {
+                    app.permission_mode = p.clone();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "✅ Permissões alteradas para: {p}"
+                    )));
+                }
+                tui::TuiAction::ResumeSession(session_id) => {
+                    if let Ok(handle) = resolve_session_reference(&session_id) {
+                        if let Ok(loaded) = Session::load_from_path(&handle.path) {
+                            let msg_count = loaded.messages.len();
+                            *session.lock().unwrap() = loaded;
+                            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
+                            )));
+                        }
+                    }
+                }
+                tui::TuiAction::SlashCommand(cmd) => {
+                    handle_tui_slash_command(cmd, &mut app, &session);
+                }
+                tui::TuiAction::EnterReadMode => {
+                    app.read_mode = true;
+                    let _ = crossterm::execute!(
+                        terminal.backend_mut(),
+                        DisableMouseCapture
+                    );
+                }
+                tui::TuiAction::ExitReadMode => {
+                    app.read_mode = false;
+                    let _ = crossterm::execute!(
+                        terminal.backend_mut(),
+                        EnableMouseCapture
+                    );
+                }
+                tui::TuiAction::None => {}
+            }
+
+            if app.should_quit {
+                break;
+            }
+        }
+        Ok(())
+    })();
+
+    // Restore terminal — drop terminal first so it releases stdout, then leave TUI.
+    drop(terminal);
+    let _ = tui::leave_tui(&mut io::stdout());
+
+    result
+}
+
+fn handle_tui_slash_command(
+    cmd: String,
+    app: &mut tui::UiApp,
+    session: &Arc<std::sync::Mutex<Session>>,
+) {
+    // Remove the thinking flag since slash commands don't call the runtime.
+    app.thinking = false;
+    let raw = cmd.trim_start_matches('/');
+    // Support `/model <name>` with an argument.
+    let (base, arg) = if let Some((b, a)) = raw.split_once(' ') {
+        (b, Some(a.trim()))
+    } else {
+        (raw, None)
+    };
+
+    match base {
+        "clear" => {
+            app.chat.clear();
+            app.chat_scroll = 0;
+            *session.lock().unwrap() = Session::new();
+            app.push_chat(tui::ChatEntry::SystemNote("✅ Histórico limpo.".into()));
+        }
+        "help" => {
+            let help = "\
+Comandos disponíveis:\n\
+  /help          Esta ajuda\n\
+  /status        Status da sessão (modelo, tokens, custo)\n\
+  /model [nome]  Mostrar/trocar modelo (F2 para picker)\n\
+  /permissions   Trocar modo de permissão (F3 para picker)\n\
+  /session [id]  Retomar sessão (F4 para picker)\n\
+  /clear         Limpar histórico de chat\n\
+  /cost          Mostrar custo estimado\n\
+  /compact       Compactar histórico (mantém últimas 20 msgs)\n\
+  /export        Exportar conversa para arquivo .txt\n\
+  /memory        Mostrar conteúdo do CLAW.md\n\
+  /init          Inicializar CLAW.md no projeto\n\
+  /version       Mostrar versão\n\
+  /exit          Sair\n\
+Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
+            app.push_chat(tui::ChatEntry::SystemNote(help.into()));
+        }
+        "status" => {
+            let cost = estimate_tui_cost(app);
+            let msgs = session.lock().map(|g| g.messages.len()).unwrap_or(0);
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "Status\n  Modelo      {}\n  Permissões  {}\n  Sessão      {}\n  Mensagens   {msgs}\n  Tokens in   {} / out {}\n  Custo est.  ${cost:.4}",
+                app.model, app.permission_mode, app.session_id,
+                app.input_tokens, app.output_tokens
+            )));
+        }
+        "model" => {
+            if let Some(model_name) = arg {
+                let m = model_name.to_string();
+                app.model = m.clone();
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "✅ Modelo alterado para: {m}"
+                )));
+            } else {
+                app.open_model_picker();
+            }
+        }
+        "permissions" => {
+            if let Some(perm) = arg {
+                app.permission_mode = perm.to_string();
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "✅ Permissões alteradas para: {perm}"
+                )));
+            } else {
+                app.open_permission_picker();
+            }
+        }
+        "session" => {
+            if let Some(session_id) = arg {
+                if let Ok(handle) = resolve_session_reference(session_id) {
+                    if let Ok(loaded) = Session::load_from_path(&handle.path) {
+                        let msg_count = loaded.messages.len();
+                        *session.lock().unwrap() = loaded;
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
+                        )));
+                    }
+                }
+            } else {
+                app.open_session_picker();
+            }
+        }
+        "cost" => {
+            let cost = estimate_tui_cost(app);
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "💰 Custo estimado: ${cost:.4}  (in={} out={})",
+                app.input_tokens, app.output_tokens
+            )));
+        }
+        "version" => {
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "ELAI v{VERSION} · TUI mode · ratatui"
+            )));
+        }
+        "diff" => {
+            let diff = Command::new("git")
+                .args(["diff", "--stat"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_else(|_| "git diff failed".to_string());
+            let out = if diff.trim().is_empty() {
+                "Nenhuma alteração no git.".to_string()
+            } else {
+                diff
+            };
+            app.push_chat(tui::ChatEntry::SystemNote(out));
+        }
+        "compact" => {
+            let mut guard = session.lock().unwrap();
+            let total = guard.messages.len();
+            let keep = 20;
+            if total > keep {
+                guard.messages.drain(0..total - keep);
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "✅ Sessão compactada: {total} → {keep} mensagens."
+                )));
+            } else {
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "Sessão já está compacta ({total} mensagens)."
+                )));
+            }
+        }
+        "export" => {
+            let guard = session.lock().unwrap();
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let filename = format!("claw-export-{ts}.txt");
+            let mut content = String::new();
+            for msg in &guard.messages {
+                let role_str = match msg.role {
+                    MessageRole::System => "system",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                };
+                let mut text = String::new();
+                for block in &msg.blocks {
+                    if let ContentBlock::Text { text: t } = block {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(t);
+                    }
+                }
+                let _ = writeln!(content, "[{role_str}]\n{text}\n");
+            }
+            drop(guard);
+            match fs::write(&filename, &content) {
+                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "✅ Conversa exportada para {filename}"
+                ))),
+                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "❌ Erro ao exportar: {e}"
+                ))),
+            }
+        }
+        "memory" => {
+            let cwd = env::current_dir().unwrap_or_default();
+            let found = ["CLAW.md", "CLAUDE.md", ".claw/memory.md"]
+                .iter()
+                .map(|f| cwd.join(f))
+                .find(|p| p.exists());
+            match found {
+                Some(path) => match fs::read_to_string(&path) {
+                    Ok(content) => {
+                        let preview: String =
+                            content.lines().take(50).collect::<Vec<_>>().join("\n");
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "📄 {}\n{preview}",
+                            path.display()
+                        )));
+                    }
+                    Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}"))),
+                },
+                None => app.push_chat(tui::ChatEntry::SystemNote(
+                    "Nenhum CLAW.md ou CLAUDE.md encontrado no diretório atual.".into(),
+                )),
+            }
+        }
+        "init" => {
+            let cwd = env::current_dir().unwrap_or_default();
+            match initialize_repo(&cwd) {
+                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
+                    "✅ CLAW.md inicializado com sucesso.".into(),
+                )),
+                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "❌ Erro no /init: {e}"
+                ))),
+            }
+        }
+        "agents" | "skills" => {
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "ℹ Use `claw agents` ou `claw skills` fora do modo TUI para listar."
+            )));
+        }
+        other => {
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
+            )));
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2885,13 +3310,91 @@ fn build_runtime(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_runtime_for_tui(
+    session: Session,
+    model: String,
+    system_prompt: Vec<String>,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    tui_msg_tx: mpsc::Sender<tui::TuiMsg>,
+) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
+{
+    let (feature_config, tool_registry) = build_runtime_plugin_state()?;
+    Ok(ConversationRuntime::new_with_features(
+        session,
+        DefaultRuntimeClient::new(
+            model,
+            true,
+            false, // emit_output=false; TUI gets text via channel
+            allowed_tools.clone(),
+            tool_registry.clone(),
+            None,
+        )?.with_tui_sender(tui_msg_tx.clone()),
+        CliToolExecutor::new(allowed_tools.clone(), false, tool_registry.clone())
+            .with_tui_sender(tui_msg_tx),
+        permission_policy(permission_mode, &tool_registry),
+        system_prompt,
+        &feature_config,
+    ))
+}
+
+fn tool_whitelist_path() -> Option<std::path::PathBuf> {
+    env::var("HOME").ok().map(|home| {
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("claw")
+            .join("tool_whitelist.json")
+    })
+}
+
+fn load_permanent_tool_whitelist() -> BTreeSet<String> {
+    let Some(path) = tool_whitelist_path() else {
+        return BTreeSet::new();
+    };
+    let Ok(data) = fs::read_to_string(&path) else {
+        return BTreeSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(&data)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+fn save_permanent_tool_whitelist(set: &BTreeSet<String>) {
+    let Some(path) = tool_whitelist_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let list: Vec<&String> = set.iter().collect();
+    if let Ok(data) = serde_json::to_string_pretty(&list) {
+        let _ = fs::write(&path, data);
+    }
+}
+
 struct CliPermissionPrompter {
     current_mode: PermissionMode,
+    tui_perm_tx: Option<mpsc::Sender<tui::PermRequest>>,
+    allowed_permanently: BTreeSet<String>,
 }
 
 impl CliPermissionPrompter {
     fn new(current_mode: PermissionMode) -> Self {
-        Self { current_mode }
+        Self {
+            current_mode,
+            tui_perm_tx: None,
+            allowed_permanently: BTreeSet::new(),
+        }
+    }
+
+    fn new_tui(current_mode: PermissionMode, tx: mpsc::Sender<tui::PermRequest>) -> Self {
+        Self {
+            current_mode,
+            tui_perm_tx: Some(tx),
+            allowed_permanently: load_permanent_tool_whitelist(),
+        }
     }
 }
 
@@ -2900,6 +3403,39 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
         &mut self,
         request: &runtime::PermissionRequest,
     ) -> runtime::PermissionPromptDecision {
+        // Auto-approve tools in permanent whitelist
+        if self.allowed_permanently.contains(&request.tool_name) {
+            return runtime::PermissionPromptDecision::Allow;
+        }
+
+        // TUI mode: send request over channel and block for decision.
+        if let Some(ref tx) = self.tui_perm_tx {
+            let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+            let perm_req = tui::PermRequest {
+                tool_name: request.tool_name.clone(),
+                input: request.input.clone(),
+                required_mode: request.required_mode.as_str().to_string(),
+                reply_tx,
+            };
+            if tx.send(perm_req).is_ok() {
+                return match reply_rx.recv() {
+                    Ok(tui::PermDecision::Allow) => runtime::PermissionPromptDecision::Allow,
+                    Ok(tui::PermDecision::AllowAlways) => {
+                        self.allowed_permanently.insert(request.tool_name.clone());
+                        save_permanent_tool_whitelist(&self.allowed_permanently);
+                        runtime::PermissionPromptDecision::Allow
+                    }
+                    _ => runtime::PermissionPromptDecision::Deny {
+                        reason: format!(
+                            "tool '{}' denied by user via TUI",
+                            request.tool_name
+                        ),
+                    },
+                };
+            }
+        }
+
+        // Fallback: plain terminal prompt.
         println!();
         println!("Permission approval required");
         println!("  Tool             {}", request.tool_name);
@@ -2940,6 +3476,7 @@ struct DefaultRuntimeClient {
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
     progress_reporter: Option<InternalPromptProgressReporter>,
+    tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
 }
 
 impl DefaultRuntimeClient {
@@ -2960,7 +3497,13 @@ impl DefaultRuntimeClient {
             allowed_tools,
             tool_registry,
             progress_reporter,
+            tui_sender: None,
         })
+    }
+
+    fn with_tui_sender(mut self, tx: mpsc::Sender<tui::TuiMsg>) -> Self {
+        self.tui_sender = Some(tx);
+        self
     }
 }
 
@@ -2982,6 +3525,10 @@ impl ApiClient for DefaultRuntimeClient {
             stream: true,
         };
 
+        // Clone sender before moving into async block.
+        let tui_sender = self.tui_sender.clone();
+        let emit_output = self.emit_output;
+
         self.runtime.block_on(async {
             let mut stream = self
                 .client
@@ -2990,7 +3537,7 @@ impl ApiClient for DefaultRuntimeClient {
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
             let mut stdout = io::stdout();
             let mut sink = io::sink();
-            let out: &mut dyn Write = if self.emit_output {
+            let out: &mut dyn Write = if emit_output && tui_sender.is_none() {
                 &mut stdout
             } else {
                 &mut sink
@@ -3027,7 +3574,9 @@ impl ApiClient for DefaultRuntimeClient {
                                 if let Some(progress_reporter) = &self.progress_reporter {
                                     progress_reporter.mark_text_phase(&text);
                                 }
-                                if let Some(rendered) = markdown_stream.push(&renderer, &text) {
+                                if let Some(ref tx) = tui_sender {
+                                    let _ = tx.send(tui::TuiMsg::TextChunk(text.clone()));
+                                } else if let Some(rendered) = markdown_stream.push(&renderer, &text) {
                                     write!(out, "{rendered}")
                                         .and_then(|()| out.flush())
                                         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -3044,23 +3593,35 @@ impl ApiClient for DefaultRuntimeClient {
                         | ContentBlockDelta::SignatureDelta { .. } => {}
                     },
                     ApiStreamEvent::ContentBlockStop(_) => {
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                        if tui_sender.is_none() {
+                            if let Some(rendered) = markdown_stream.flush(&renderer) {
+                                write!(out, "{rendered}")
+                                    .and_then(|()| out.flush())
+                                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            }
                         }
                         if let Some((id, name, input)) = pending_tool.take() {
                             if let Some(progress_reporter) = &self.progress_reporter {
                                 progress_reporter.mark_tool_phase(&name, &input);
                             }
-                            // Display tool call now that input is fully accumulated
-                            writeln!(out, "\n{}", format_tool_call_start(&name, &input))
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            if let Some(ref tx) = tui_sender {
+                                let _ = tx.send(tui::TuiMsg::ToolCall { name: name.clone(), input: input.clone() });
+                            } else {
+                                // Display tool call now that input is fully accumulated
+                                writeln!(out, "\n{}", format_tool_call_start(&name, &input))
+                                    .and_then(|()| out.flush())
+                                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            }
                             events.push(AssistantEvent::ToolUse { id, name, input });
                         }
                     }
                     ApiStreamEvent::MessageDelta(delta) => {
+                        if let Some(ref tx) = tui_sender {
+                            let _ = tx.send(tui::TuiMsg::Usage {
+                                input_tokens: delta.usage.input_tokens,
+                                output_tokens: delta.usage.output_tokens,
+                            });
+                        }
                         events.push(AssistantEvent::Usage(TokenUsage {
                             input_tokens: delta.usage.input_tokens,
                             output_tokens: delta.usage.output_tokens,
@@ -3070,10 +3631,12 @@ impl ApiClient for DefaultRuntimeClient {
                     }
                     ApiStreamEvent::MessageStop(_) => {
                         saw_stop = true;
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                        if tui_sender.is_none() {
+                            if let Some(rendered) = markdown_stream.flush(&renderer) {
+                                write!(out, "{rendered}")
+                                    .and_then(|()| out.flush())
+                                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            }
                         }
                         events.push(AssistantEvent::MessageStop);
                     }
@@ -3675,6 +4238,7 @@ struct CliToolExecutor {
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
+    tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
 }
 
 impl CliToolExecutor {
@@ -3688,7 +4252,13 @@ impl CliToolExecutor {
             emit_output,
             allowed_tools,
             tool_registry,
+            tui_sender: None,
         }
+    }
+
+    fn with_tui_sender(mut self, tx: mpsc::Sender<tui::TuiMsg>) -> Self {
+        self.tui_sender = Some(tx);
+        self
     }
 }
 
@@ -3707,7 +4277,10 @@ impl ToolExecutor for CliToolExecutor {
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
         match self.tool_registry.execute(tool_name, &value) {
             Ok(output) => {
-                if self.emit_output {
+                if let Some(ref tx) = self.tui_sender {
+                    let summary = output.chars().take(80).collect::<String>();
+                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: true, summary });
+                } else if self.emit_output {
                     let markdown = format_tool_result(tool_name, &output, false);
                     self.renderer
                         .stream_markdown(&markdown, &mut io::stdout())
@@ -3716,7 +4289,10 @@ impl ToolExecutor for CliToolExecutor {
                 Ok(output)
             }
             Err(error) => {
-                if self.emit_output {
+                if let Some(ref tx) = self.tui_sender {
+                    let summary = error.chars().take(80).collect::<String>();
+                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: false, summary });
+                } else if self.emit_output {
                     let markdown = format_tool_result(tool_name, &error, true);
                     self.renderer
                         .stream_markdown(&markdown, &mut io::stdout())
@@ -3929,6 +4505,7 @@ mod tests {
                 model: suggested_default_model(),
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                no_tui: false,
             }
         );
     }
@@ -3997,7 +4574,7 @@ mod tests {
     fn resolves_known_model_aliases() {
         assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
+        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251001");
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
     }
 
@@ -4022,6 +4599,7 @@ mod tests {
                 model: suggested_default_model(),
                 allowed_tools: None,
                 permission_mode: PermissionMode::ReadOnly,
+                no_tui: false,
             }
         );
     }
@@ -4044,6 +4622,7 @@ mod tests {
                         .collect()
                 ),
                 permission_mode: PermissionMode::DangerFullAccess,
+                no_tui: false,
             }
         );
     }

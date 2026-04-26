@@ -14,7 +14,7 @@ api = { path = "../api" }
 commands = { path = "../commands" }
 dotenvy = "0.15"
 compat-harness = { path = "../compat-harness" }
-crossterm = "0.28"
+crossterm = "0.29"
 pulldown-cmark = "0.13"
 rustyline = "15"
 runtime = { path = "../runtime" }
@@ -23,6 +23,7 @@ serde_json.workspace = true
 syntect = "5"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 tools = { path = "../tools" }
+ratatui = "0.30.0"
 
 [lints]
 workspace = true

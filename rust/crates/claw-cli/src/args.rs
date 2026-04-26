@@ -60,7 +60,7 @@ mod tests {
         let cli = Cli::parse_from([
             "claw-cli",
             "--model",
-            "claude-haiku-4-5-20251213",
+            "claude-haiku-4-5-20251001",
             "--permission-mode",
             "read-only",
             "--config",
@@ -72,7 +72,7 @@ mod tests {
             "world",
         ]);
 
-        assert_eq!(cli.model, "claude-haiku-4-5-20251213");
+        assert_eq!(cli.model, "claude-haiku-4-5-20251001");
         assert_eq!(cli.permission_mode, PermissionMode::ReadOnly);
         assert_eq!(
             cli.config.as_deref(),
