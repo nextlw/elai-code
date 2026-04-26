@@ -27,7 +27,8 @@ use api::{
 
 use commands::{
     handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
-    render_slash_command_help, resume_supported_slash_commands, slash_command_specs, SlashCommand,
+    handle_tools_slash_command, render_slash_command_help, resume_supported_slash_commands,
+    slash_command_specs, SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
@@ -557,8 +558,52 @@ fn default_permission_mode() -> PermissionMode {
 fn filter_tool_specs(
     tool_registry: &GlobalToolRegistry,
     allowed_tools: Option<&AllowedToolSet>,
+    catalog: &runtime::ToolCatalog,
+    active_skill: Option<&runtime::Skill>,
 ) -> Vec<ToolDefinition> {
-    tool_registry.definitions(allowed_tools.map(Vec::as_slice))
+    use runtime::{run_pipeline, set_turn_snapshot, FilterPattern, PipelineTool, ToolBudgetConfig};
+
+    // Build the list of all tools from the registry (no pre-filtering).
+    let all_tools: Vec<PipelineTool> = tool_registry
+        .definitions(None)
+        .into_iter()
+        .map(|def| PipelineTool { name: def.name })
+        .collect();
+
+    // Convert MatcherPattern → FilterPattern for the pipeline.
+    let filter_patterns: Option<Vec<FilterPattern>> = allowed_tools.map(|patterns| {
+        patterns
+            .iter()
+            .map(|p| match p {
+                MatcherPattern::Exact(s) => FilterPattern::Exact(s.clone()),
+                MatcherPattern::Prefix(s) => FilterPattern::Prefix(s.clone()),
+            })
+            .collect()
+    });
+
+    let result = run_pipeline(
+        all_tools,
+        catalog,
+        filter_patterns.as_deref(),
+        active_skill,
+        &ToolBudgetConfig::default(),
+    );
+
+    // Persist snapshot for `/tools why`.
+    set_turn_snapshot(result.clone());
+
+    // Reconstruct ordered ToolDefinition list using the accepted names.
+    let all_defs: std::collections::HashMap<String, ToolDefinition> = tool_registry
+        .definitions(None)
+        .into_iter()
+        .map(|def| (def.name.clone(), def))
+        .collect();
+
+    result
+        .tool_names
+        .into_iter()
+        .filter_map(|name| all_defs.get(&name).cloned())
+        .collect()
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
@@ -1125,6 +1170,7 @@ fn run_resume_command(
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
         | SlashCommand::Budget { .. }
+        | SlashCommand::Tools { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -2046,6 +2092,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             }
             SlashCommand::Budget { .. } => {
                 Self::repl_feature_not_wired("budget command available in TUI mode")
+            }
+            SlashCommand::Tools { subcommand } => {
+                println!("{}", handle_tools_slash_command(subcommand.as_deref()));
+                false
             }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))
@@ -3878,7 +3928,7 @@ impl ApiClient for DefaultRuntimeClient {
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: self
                 .enable_tools
-                .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),
+                .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref(), &runtime::ToolCatalog::default(), None)),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
         };
@@ -5388,7 +5438,7 @@ mod tests {
             MatcherPattern::Exact("read_file".to_string()),
             MatcherPattern::Exact("grep_search".to_string()),
         ];
-        let filtered = filter_tool_specs(&GlobalToolRegistry::builtin(), Some(&allowed));
+        let filtered = filter_tool_specs(&GlobalToolRegistry::builtin(), Some(&allowed), &runtime::ToolCatalog::default(), None);
         let names = filtered
             .into_iter()
             .map(|spec| spec.name)
@@ -5398,7 +5448,7 @@ mod tests {
 
     #[test]
     fn filtered_tool_specs_include_plugin_tools() {
-        let filtered = filter_tool_specs(&registry_with_plugin_tool(), None);
+        let filtered = filter_tool_specs(&registry_with_plugin_tool(), None, &runtime::ToolCatalog::default(), None);
         let names = filtered
             .into_iter()
             .map(|definition| definition.name)
@@ -5474,7 +5524,7 @@ mod tests {
             names,
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-                "version", "export", "agents", "skills", "budget",
+                "version", "export", "agents", "skills", "budget", "tools",
             ]
         );
     }

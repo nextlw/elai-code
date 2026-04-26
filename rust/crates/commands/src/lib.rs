@@ -254,6 +254,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[tokens] [usd] | off"),
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "tools",
+        aliases: &[],
+        summary: "Inspect tool selection for the current session",
+        argument_hint: Some("[why]"),
+        resume_supported: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +336,9 @@ pub enum SlashCommand {
     },
     Budget {
         args: Option<String>,
+    },
+    Tools {
+        subcommand: Option<String>,
     },
     Unknown(String),
 }
@@ -418,6 +428,9 @@ impl SlashCommand {
             },
             "budget" => Self::Budget {
                 args: remainder_after_command(trimmed, command),
+            },
+            "tools" => Self::Tools {
+                subcommand: parts.next().map(ToOwned::to_owned),
             },
             other => Self::Unknown(other.to_string()),
         })
@@ -1712,6 +1725,10 @@ pub fn handle_slash_command(
             message: render_slash_command_help(),
             session: session.clone(),
         }),
+        SlashCommand::Tools { subcommand } => Some(SlashCommandResult {
+            message: handle_tools_slash_command(subcommand.as_deref()),
+            session: session.clone(),
+        }),
         SlashCommand::Status
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
@@ -1740,6 +1757,48 @@ pub fn handle_slash_command(
         | SlashCommand::Skills { .. }
         | SlashCommand::Budget { .. }
         | SlashCommand::Unknown(_) => None,
+    }
+}
+
+/// Handles the `/tools` slash command and its sub-commands.
+///
+/// - `/tools` or `/tools list` — placeholder (full wiring in a future integration phase)
+/// - `/tools why` — lists tools rejected in the last pipeline run with their reason
+pub fn handle_tools_slash_command(subcommand: Option<&str>) -> String {
+    use runtime::{last_rejected, RejectionReason};
+
+    match subcommand.map(str::trim) {
+        Some("why") => {
+            let rejected = last_rejected();
+            if rejected.is_empty() {
+                return "Tools\n  No tools were rejected in the last turn (or no turn has run yet).".to_string();
+            }
+            let mut lines = vec![
+                "Tools — rejected in last turn".to_string(),
+                String::new(),
+                format!("  {:<40} {}", "Tool", "Reason"),
+                format!("  {:<40} {}", "----", "------"),
+            ];
+            for r in &rejected {
+                let reason = match &r.reason {
+                    RejectionReason::Disabled => "disabled in catalog".to_string(),
+                    RejectionReason::SkillIncompatible(skill) => {
+                        format!("incompatible with skill '{skill}'")
+                    }
+                    RejectionReason::UserFilter => "--allowedTools filter".to_string(),
+                    RejectionReason::BudgetCap => "budget cap (top-N)".to_string(),
+                };
+                lines.push(format!("  {:<40} {reason}", r.id));
+            }
+            lines.join("\n")
+        }
+        None | Some("list") | Some("") => {
+            // Future: list active tools in current session.
+            "Tools\n  Use `/tools why` to see rejected tools from the last turn.".to_string()
+        }
+        Some(other) => format!(
+            "Unknown /tools subcommand '{other}'. Use `/tools why` to see rejected tools."
+        ),
     }
 }
 
