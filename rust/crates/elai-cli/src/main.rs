@@ -631,8 +631,8 @@ fn print_bootstrap_plan() {
 fn default_oauth_config() -> OAuthConfig {
     OAuthConfig {
         client_id: String::from("9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
-        authorize_url: String::from("https://platform.claw.dev/oauth/authorize"),
-        token_url: String::from("https://platform.claw.dev/v1/oauth/token"),
+        authorize_url: String::from("https://platform.elai.dev/oauth/authorize"),
+        token_url: String::from("https://platform.elai.dev/v1/oauth/token"),
         callback_port: None,
         manual_redirect_url: None,
         scopes: vec![
@@ -1205,7 +1205,7 @@ fn run_tui_repl(
 
     let swd_atomic = Arc::new(AtomicU8::new(swd_level as u8));
 
-    // Resolve budget tracker: CLI flags → .claw/budget.json → disabled
+    // Resolve budget tracker: CLI flags → .elai/budget.json → disabled
     let effective_budget = if let Some(cfg) = budget_config {
         BudgetTracker::new(cfg)
     } else {
@@ -1639,7 +1639,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "memory" => {
             let cwd = env::current_dir().unwrap_or_default();
-            let found = ["ELAI.md", "CLAUDE.md", ".claw/memory.md"]
+            let found = ["ELAI.md", "CLAUDE.md", ".elai/memory.md"]
                 .iter()
                 .map(|f| cwd.join(f))
                 .find(|p| p.exists());
@@ -2554,7 +2554,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
 fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    let path = cwd.join(".claw").join("sessions");
+    let path = cwd.join(".elai").join("sessions");
     fs::create_dir_all(&path)?;
     Ok(path)
 }
@@ -3662,7 +3662,7 @@ fn tool_whitelist_path() -> Option<std::path::PathBuf> {
     env::var("HOME").ok().map(|home| {
         std::path::PathBuf::from(home)
             .join(".config")
-            .join("claw")
+            .join("elai")
             .join("tool_whitelist.json")
     })
 }
@@ -5185,7 +5185,7 @@ mod tests {
     fn resolves_known_model_aliases() {
         assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251001");
+        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
     }
 

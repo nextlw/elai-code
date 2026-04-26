@@ -111,7 +111,7 @@ execute_with_swd()                producing Vec<SwdTransaction>
 
 ### Step 1: Add `CorrectionContext` struct to `swd.rs`
 
-**File:** `crates/claw-cli/src/swd.rs`
+**File:** `crates/elai-cli/src/swd.rs`
 **Location:** After the `SwdTransaction` struct (line ~98)
 
 ```rust
@@ -196,7 +196,7 @@ pub fn build_correction_prompt(failures: &[SwdTransaction]) -> String {
 
 ### Step 2: Add `TuiMsg::CorrectionRetry` variant and TUI rendering
 
-**File:** `crates/claw-cli/src/tui.rs`
+**File:** `crates/elai-cli/src/tui.rs`
 
 **2a.** Add new variant to `TuiMsg` enum (line ~62):
 ```rust
@@ -236,7 +236,7 @@ ChatEntry::CorrectionRetryEntry { attempt, max_attempts } => {
 
 ### Step 3: Wire correction loop into the TUI background thread (Full mode)
 
-**File:** `crates/claw-cli/src/main.rs`
+**File:** `crates/elai-cli/src/main.rs`
 **Location:** Inside `DefaultRuntimeClient::stream()`, the `MessageStop` handler (lines 3732-3749)
 
 Currently the code executes file actions and sends `SwdBatchResult`. Modify to:
@@ -288,7 +288,7 @@ This method contains the retry loop internally, capped by `correction_ctx.can_re
 
 ### Step 4: Wire correction feedback into partial mode (tool-level)
 
-**File:** `crates/claw-cli/src/main.rs`
+**File:** `crates/elai-cli/src/main.rs`
 **Location:** `CliToolExecutor::execute_with_swd()` (lines 4378-4449)
 
 For partial mode, the correction happens at the tool level. When `execute_with_swd()` detects a failure:
@@ -343,7 +343,7 @@ Check this counter in `execute_with_swd()`:
 
 ### Step 5: Reset correction state on new user turns
 
-**File:** `crates/claw-cli/src/main.rs`
+**File:** `crates/elai-cli/src/main.rs`
 **Locations:**
 - TUI thread spawn (line ~1208): Before calling `runtime.run_turn()`, reset correction state
 - Non-TUI REPL loop: Same reset before each turn
@@ -361,7 +361,7 @@ For `DefaultRuntimeClient`, add `correction_ctx.reset()` at the top of `stream()
 
 ### Step 6: Tests
 
-**File:** `crates/claw-cli/src/swd.rs` (add `#[cfg(test)] mod tests`)
+**File:** `crates/elai-cli/src/swd.rs` (add `#[cfg(test)] mod tests`)
 
 **6a. Unit tests for `CorrectionContext`:**
 - `test_correction_context_new` — starts at 0, can_retry is true
@@ -388,14 +388,14 @@ For `DefaultRuntimeClient`, add `correction_ctx.reset()` at the top of `stream()
 
 | File | Changes |
 |------|---------|
-| `crates/claw-cli/src/swd.rs` | Add `CorrectionContext`, `build_correction_prompt()`, `MAX_CORRECTION_ATTEMPTS`, unit tests |
-| `crates/claw-cli/src/tui.rs` | Add `TuiMsg::CorrectionRetry`, `ChatEntry::CorrectionRetryEntry`, handle + render |
-| `crates/claw-cli/src/main.rs` | Modify `DefaultRuntimeClient::stream()` for full-mode correction loop; modify `CliToolExecutor` for partial-mode rich errors + retry counters; add `swd_retry_counts` field; reset logic |
+| `crates/elai-cli/src/swd.rs` | Add `CorrectionContext`, `build_correction_prompt()`, `MAX_CORRECTION_ATTEMPTS`, unit tests |
+| `crates/elai-cli/src/tui.rs` | Add `TuiMsg::CorrectionRetry`, `ChatEntry::CorrectionRetryEntry`, handle + render |
+| `crates/elai-cli/src/main.rs` | Modify `DefaultRuntimeClient::stream()` for full-mode correction loop; modify `CliToolExecutor` for partial-mode rich errors + retry counters; add `swd_retry_counts` field; reset logic |
 
 **Files NOT modified:**
 - `crates/runtime/src/conversation.rs` — the generic runtime loop is not touched; correction is handled at the CLI layer
 - `crates/runtime/src/*` — no runtime crate changes needed
-- `crates/claw-cli/src/swd.rs` verification/rollback logic — unchanged, only new code added
+- `crates/elai-cli/src/swd.rs` verification/rollback logic — unchanged, only new code added
 
 ---
 
@@ -419,4 +419,4 @@ For `DefaultRuntimeClient`, add `correction_ctx.reset()` at the top of `stream()
 - [ ] TUI shows `"↩ SWD retry 1/2"` indicator during correction turns
 - [ ] Correction counter resets on each new user turn
 - [ ] All new unit tests pass
-- [ ] No changes to `crates/runtime/` — all correction logic lives in `crates/claw-cli/`
+- [ ] No changes to `crates/runtime/` — all correction logic lives in `crates/elai-cli/`

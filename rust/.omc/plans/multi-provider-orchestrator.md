@@ -14,10 +14,10 @@
 The `crates/api/` crate has a clean provider abstraction:
 
 - **`Provider` trait** (`providers/mod.rs:12-24`): Generic trait with associated `Stream` type, `send_message` and `stream_message` methods returning `ProviderFuture<T>`.
-- **`ProviderClient` enum** (`client.rs:22-26`): Dispatch enum with variants `ClawApi(ClawApiClient)`, `Xai(OpenAiCompatClient)`, `OpenAi(OpenAiCompatClient)`. Routes by model name to the correct backend.
-- **`ClawApiClient`** (`claw_provider.rs`): Anthropic API client with built-in retry (exponential backoff, max 2 retries), OAuth support, SSE streaming.
+- **`ProviderClient` enum** (`client.rs:22-26`): Dispatch enum with variants `ElaiApi(ElaiApiClient)`, `Xai(OpenAiCompatClient)`, `OpenAi(OpenAiCompatClient)`. Routes by model name to the correct backend.
+- **`ElaiApiClient`** (`elai_provider.rs`): Anthropic API client with built-in retry (exponential backoff, max 2 retries), OAuth support, SSE streaming.
 - **`OpenAiCompatClient`** (`openai_compat.rs`): OpenAI-compatible client (xAI/OpenAI) with same retry pattern.
-- **`DefaultRuntimeClient`** (`claw-cli/src/main.rs:3547-3558`): Wraps `ProviderClient` + a Tokio runtime. Implements the `ApiClient` trait (sync `stream(&mut self, request) -> Vec<AssistantEvent>`) which is what `ConversationRuntime<C, T>` consumes.
+- **`DefaultRuntimeClient`** (`elai-cli/src/main.rs:3547-3558`): Wraps `ProviderClient` + a Tokio runtime. Implements the `ApiClient` trait (sync `stream(&mut self, request) -> Vec<AssistantEvent>`) which is what `ConversationRuntime<C, T>` consumes.
 
 ### Key architectural constraints
 
@@ -30,7 +30,7 @@ The `crates/api/` crate has a clean provider abstraction:
 
 ## Work Objectives
 
-Port the mythos-router orchestration pattern (EMA metrics, circuit breaker, deterministic routing, automatic fallback) into claw's Rust crate, respecting Rust's ownership/concurrency model.
+Port the mythos-router orchestration pattern (EMA metrics, circuit breaker, deterministic routing, automatic fallback) into elai's Rust crate, respecting Rust's ownership/concurrency model.
 
 ---
 
@@ -190,8 +190,8 @@ pub trait UnifiedProvider: Send + Sync {
 **Adapter implementations** -- wrap existing clients:
 
 ```rust
-pub struct ClawUnifiedAdapter {
-    client: ClawApiClient,
+pub struct ElaiUnifiedAdapter {
+    client: ElaiApiClient,
     capabilities: HashSet<ProviderCapability>,
 }
 
@@ -221,7 +221,7 @@ pub(crate) struct ProviderSlot {
 - `UnifiedProvider` is object-safe (`dyn UnifiedProvider` compiles)
 - Adapters pass `Send + Sync` bounds
 - `ProviderSlot` uses `AtomicUsize`/`AtomicU64` for concurrency and degraded_until (no Mutex needed for these hot-path counters)
-- Unit test: `ClawUnifiedAdapter` correctly delegates to underlying client mock
+- Unit test: `ElaiUnifiedAdapter` correctly delegates to underlying client mock
 
 ---
 
@@ -373,7 +373,7 @@ Add orchestrator-aware construction:
 ```rust
 pub enum ProviderClient {
     // Existing single-provider variants (unchanged)
-    ClawApi(ClawApiClient),
+    ElaiApi(ElaiApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
     // New: orchestrated multi-provider
@@ -392,9 +392,9 @@ impl ProviderClient {
         let mut count = 0;
 
         // Register Anthropic if key available
-        if let Ok(client) = ClawApiClient::from_env() {
+        if let Ok(client) = ElaiApiClient::from_env() {
             orchestrator.register_provider(
-                Box::new(ClawUnifiedAdapter::new(client)),
+                Box::new(ElaiUnifiedAdapter::new(client)),
                 ProviderConfig { id: "anthropic".into(), priority: 0, enabled: true, max_concurrency: 3 },
             );
             count += 1;
@@ -425,10 +425,10 @@ impl ProviderClient {
 }
 ```
 
-**Modify** `crates/claw-cli/src/main.rs` -- `DefaultRuntimeClient::new`:
+**Modify** `crates/elai-cli/src/main.rs` -- `DefaultRuntimeClient::new`:
 
 ```rust
-// When --orchestrate flag is passed (or env CLAW_ORCHESTRATE=1):
+// When --orchestrate flag is passed (or env ELAI_ORCHESTRATE=1):
 let client = if orchestrate_mode {
     ProviderClient::orchestrated()?
 } else {
@@ -441,7 +441,7 @@ let client = if orchestrate_mode {
 **Acceptance criteria:**
 - `ProviderClient::Orchestrated` variant handles `send_message` and `stream_message` by delegating to `ProviderOrchestrator`
 - Single-provider path is unchanged (no performance regression)
-- CLI flag `--orchestrate` or env `CLAW_ORCHESTRATE=1` enables multi-provider mode
+- CLI flag `--orchestrate` or env `ELAI_ORCHESTRATE=1` enables multi-provider mode
 - Existing tests pass without modification
 
 ---
@@ -470,10 +470,10 @@ struct PersistedProviderMetrics {
 }
 
 fn metrics_path() -> PathBuf {
-    // ~/.config/claw/orchestrator-metrics.json
-    let config_dir = std::env::var("CLAW_CONFIG_HOME")
+    // ~/.config/elai/orchestrator-metrics.json
+    let config_dir = std::env::var("ELAI_CONFIG_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::config_dir().unwrap().join("claw"));
+        .unwrap_or_else(|_| dirs::config_dir().unwrap().join("elai"));
     config_dir.join("orchestrator-metrics.json")
 }
 
@@ -520,7 +520,7 @@ Load at orchestrator construction; save periodically (every N calls or on sessio
 | `crates/api/src/lib.rs` | Add `pub mod orchestrator`, export key types |
 | `crates/api/src/client.rs` | Add `Orchestrated` variant to `ProviderClient` enum |
 | `crates/api/Cargo.toml` | Add deps: `sha2`, `async-trait`, `dirs` |
-| `crates/claw-cli/src/main.rs` | Add `--orchestrate` flag, wire into `DefaultRuntimeClient` |
+| `crates/elai-cli/src/main.rs` | Add `--orchestrate` flag, wire into `DefaultRuntimeClient` |
 | `crates/api/tests/orchestrator_integration.rs` | New integration test file |
 
 ### New dependencies
@@ -554,5 +554,5 @@ Load at orchestrator construction; save periodically (every N calls or on sessio
 4. Multi-provider mode correctly falls back when primary provider returns 429/502/503
 5. Circuit breaker prevents repeated calls to failing provider for 5 minutes
 6. Same input deterministically routes to same provider
-7. Metrics persist across CLI sessions via `~/.config/claw/orchestrator-metrics.json`
+7. Metrics persist across CLI sessions via `~/.config/elai/orchestrator-metrics.json`
 8. `ProviderOrchestrator` is `Send + Sync`

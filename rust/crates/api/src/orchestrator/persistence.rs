@@ -25,7 +25,7 @@ pub fn metrics_path() -> PathBuf {
         |_| {
             dirs::config_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("claw")
+                .join("elai")
         },
         PathBuf::from,
     );

@@ -8,21 +8,21 @@
 
 ## Contexto
 
-O projeto claw-code (CLI de IA em Rust) precisa de um comando `/dream` que comprime entradas antigas do arquivo de memoria (CLAW.md / CLAUDE.md) usando o modelo de IA para sumarizar. A referencia TypeScript (`mythos-router/src/commands/dream.ts`) mostra o fluxo: ler MEMORY.md, separar as 20 entradas mais recentes (manter intactas), enviar as mais antigas ao modelo para sumarizacao, reescrever o arquivo com `[COMPRESSED SUMMARY]` + 20 entradas recentes.
+O projeto elai-code (CLI de IA em Rust) precisa de um comando `/dream` que comprime entradas antigas do arquivo de memoria (ELAI.md / CLAUDE.md) usando o modelo de IA para sumarizar. A referencia TypeScript (`mythos-router/src/commands/dream.ts`) mostra o fluxo: ler MEMORY.md, separar as 20 entradas mais recentes (manter intactas), enviar as mais antigas ao modelo para sumarizacao, reescrever o arquivo com `[COMPRESSED SUMMARY]` + 20 entradas recentes.
 
-**Diferenca chave vs TypeScript:** No TS, o formato e uma tabela Markdown com `| Timestamp | Action | Result |`. No Rust/claw, o arquivo de memoria e CLAW.md (Markdown livre, nao tabular). O parsing precisa adaptar-se a secoes Markdown (`## heading` ou `---` como separadores de entradas).
+**Diferenca chave vs TypeScript:** No TS, o formato e uma tabela Markdown com `| Timestamp | Action | Result |`. No Rust/elai, o arquivo de memoria e ELAI.md (Markdown livre, nao tabular). O parsing precisa adaptar-se a secoes Markdown (`## heading` ou `---` como separadores de entradas).
 
 ### Arquitetura existente relevante
 
 - **SlashCommand enum** em `crates/commands/src/lib.rs` (linhas 253-324) -- onde adicionar `Dream { force: bool }`
 - **SlashCommand::parse()** em `crates/commands/src/lib.rs` (linhas 326-411) -- onde adicionar `"dream"` match arm
 - **SLASH_COMMAND_SPECS** em `crates/commands/src/lib.rs` (linhas 51-250) -- onde registrar spec
-- **handle_repl_command()** em `crates/claw-cli/src/main.rs` (~linha 1710) -- onde rotear `SlashCommand::Dream`
-- **handle_tui_slash_command()** em `crates/claw-cli/src/main.rs` (~linha 1300) -- onde rotear na TUI
-- **resume_command()** em `crates/claw-cli/src/main.rs` (~linha 917) -- onde adicionar ao match
-- **run_internal_prompt_text()** em `crates/claw-cli/src/main.rs` (~linha 2158) -- padrao para chamar a API com tools=false (bughunter, commit, pr usam isso)
+- **handle_repl_command()** em `crates/elai-cli/src/main.rs` (~linha 1710) -- onde rotear `SlashCommand::Dream`
+- **handle_tui_slash_command()** em `crates/elai-cli/src/main.rs` (~linha 1300) -- onde rotear na TUI
+- **resume_command()** em `crates/elai-cli/src/main.rs` (~linha 917) -- onde adicionar ao match
+- **run_internal_prompt_text()** em `crates/elai-cli/src/main.rs` (~linha 2158) -- padrao para chamar a API com tools=false (bughunter, commit, pr usam isso)
 - **ProviderClient::send_message()** em `crates/api/src/client.rs` -- API subjacente
-- **Arquivos de memoria**: `CLAW.md`, `CLAW.local.md`, `.claw/CLAW.md`, `.claw/instructions.md` -- descobertos por `discover_instruction_files()` em `crates/runtime/src/prompt.rs`
+- **Arquivos de memoria**: `ELAI.md`, `ELAI.local.md`, `.elai/ELAI.md`, `.elai/instructions.md` -- descobertos por `discover_instruction_files()` em `crates/runtime/src/prompt.rs`
 
 ---
 
@@ -37,8 +37,8 @@ O projeto claw-code (CLI de IA em Rust) precisa de um comando `/dream` que compr
 
 ### MUST NOT
 - Nao alterar a logica de `discover_instruction_files` no runtime crate
-- Nao adicionar dependencias externas novas ao claw-cli (ja tem tokio, api, etc.)
-- Nao compactar arquivos que nao sao do projeto atual (nao tocar `~/.claw/`)
+- Nao adicionar dependencias externas novas ao elai-cli (ja tem tokio, api, etc.)
+- Nao compactar arquivos que nao sao do projeto atual (nao tocar `~/.elai/`)
 
 ---
 
@@ -79,7 +79,7 @@ O projeto claw-code (CLI de IA em Rust) precisa de um comando `/dream` que compr
 
 ### Step 2: Criar modulo `dream.rs` com logica principal
 
-**Arquivo novo:** `crates/claw-cli/src/dream.rs`
+**Arquivo novo:** `crates/elai-cli/src/dream.rs`
 
 **Structs e funcoes:**
 
@@ -103,7 +103,7 @@ pub struct DreamResult {
 **Funcoes:**
 
 1. **`fn find_memory_file(cwd: &Path) -> Option<PathBuf>`**
-   - Procura `CLAW.md`, `CLAUDE.md`, `.claw/CLAW.md`, `.claw/instructions.md` (somente no CWD, nao ancestrais)
+   - Procura `ELAI.md`, `CLAUDE.md`, `.elai/ELAI.md`, `.elai/instructions.md` (somente no CWD, nao ancestrais)
    - Retorna o primeiro que existir
 
 2. **`fn parse_memory_sections(content: &str) -> MemoryParseResult`**
@@ -142,7 +142,7 @@ pub struct DreamResult {
 
 ### Step 3: Integrar no REPL e handler de commands
 
-**Arquivo:** `crates/claw-cli/src/main.rs`
+**Arquivo:** `crates/elai-cli/src/main.rs`
 
 **Modificacoes:**
 
@@ -177,7 +177,7 @@ pub struct DreamResult {
 
 ### Step 4: Integrar na TUI
 
-**Arquivo:** `crates/claw-cli/src/main.rs`
+**Arquivo:** `crates/elai-cli/src/main.rs`
 
 **Modificacoes:**
 
@@ -199,7 +199,7 @@ pub struct DreamResult {
 
 ### Step 5: Testes
 
-**Arquivo:** `crates/claw-cli/src/dream.rs` (section `#[cfg(test)]`)
+**Arquivo:** `crates/elai-cli/src/dream.rs` (section `#[cfg(test)]`)
 
 **Testes:**
 
@@ -211,7 +211,7 @@ pub struct DreamResult {
 6. **`test_rewrite_output_format`**: verifica que arquivo reescrito contem marcadores e entradas recentes
 7. **`test_build_compression_prompt`**: verifica que prompt contem instrucoes chave e entradas
 
-**Criterio de aceitacao:** `cargo test -p claw-cli -- dream` passa todos os 7 testes.
+**Criterio de aceitacao:** `cargo test -p elai-cli -- dream` passa todos os 7 testes.
 
 ---
 
@@ -220,18 +220,18 @@ pub struct DreamResult {
 | Acao     | Arquivo                              | O que muda                                       |
 |----------|--------------------------------------|--------------------------------------------------|
 | MODIFICAR | `crates/commands/src/lib.rs`        | +SlashCommandSpec, +enum variant, +parse arm     |
-| CRIAR    | `crates/claw-cli/src/dream.rs`       | Modulo novo com toda a logica de dream            |
-| MODIFICAR | `crates/claw-cli/src/main.rs`       | +mod dream, +REPL handler, +TUI handler, +help   |
-| MODIFICAR | `crates/claw-cli/Cargo.toml`        | Nenhuma dependencia nova necessaria (tempfile para testes: use std::fs) |
+| CRIAR    | `crates/elai-cli/src/dream.rs`       | Modulo novo com toda a logica de dream            |
+| MODIFICAR | `crates/elai-cli/src/main.rs`       | +mod dream, +REPL handler, +TUI handler, +help   |
+| MODIFICAR | `crates/elai-cli/Cargo.toml`        | Nenhuma dependencia nova necessaria (tempfile para testes: use std::fs) |
 
 ---
 
 ## Success Criteria
 
-1. `claw /dream` no modo REPL comprime entradas antigas de CLAW.md usando a API do modelo
+1. `elai /dream` no modo REPL comprime entradas antigas de ELAI.md usando a API do modelo
 2. `/dream` na TUI pede confirmacao antes de executar
 3. Arquivo original e preservado como `.bak`
 4. Com <= 20 entradas, o comando nao faz nada (a nao ser com `--force`)
 5. Saida mostra: entradas comprimidas, tamanho antes/depois, summary gerado
-6. Todos os testes passam: `cargo test -p claw-cli -- dream`
+6. Todos os testes passam: `cargo test -p elai-cli -- dream`
 7. `cargo clippy --workspace --all-targets -- -D warnings` limpo

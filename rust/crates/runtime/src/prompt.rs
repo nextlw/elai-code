@@ -228,8 +228,8 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
         for candidate in [
             dir.join("ELAI.md"),
             dir.join("ELAI.local.md"),
-            dir.join(".claw").join("ELAI.md"),
-            dir.join(".claw").join("instructions.md"),
+            dir.join(".elai").join("ELAI.md"),
+            dir.join(".elai").join("instructions.md"),
         ] {
             push_context_file(&mut files, candidate)?;
         }
@@ -581,23 +581,23 @@ mod tests {
     fn discovers_instruction_files_from_ancestor_chain() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
+        fs::create_dir_all(nested.join(".elai")).expect("nested elai dir");
         fs::write(root.join("ELAI.md"), "root instructions").expect("write root instructions");
         fs::write(root.join("ELAI.local.md"), "local instructions")
             .expect("write local instructions");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
-        fs::create_dir_all(root.join("apps").join(".claw")).expect("apps claw dir");
+        fs::create_dir_all(root.join("apps").join(".elai")).expect("apps elai dir");
         fs::write(root.join("apps").join("ELAI.md"), "apps instructions")
             .expect("write apps instructions");
         fs::write(
-            root.join("apps").join(".claw").join("instructions.md"),
+            root.join("apps").join(".elai").join("instructions.md"),
             "apps dot elai instructions",
         )
         .expect("write apps dot elai instructions");
-        fs::write(nested.join(".claw").join("ELAI.md"), "nested rules")
+        fs::write(nested.join(".elai").join("ELAI.md"), "nested rules")
             .expect("write nested rules");
         fs::write(
-            nested.join(".claw").join("instructions.md"),
+            nested.join(".elai").join("instructions.md"),
             "nested instructions",
         )
         .expect("write nested instructions");
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn displays_context_paths_compactly() {
         assert_eq!(
-            display_context_path(Path::new("/tmp/project/.claw/ELAI.md")),
+            display_context_path(Path::new("/tmp/project/.elai/ELAI.md")),
             "ELAI.md"
         );
     }
@@ -733,10 +733,10 @@ mod tests {
     #[test]
     fn load_system_prompt_reads_elai_files_and_config() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claw")).expect("elai dir");
+        fs::create_dir_all(root.join(".elai")).expect("elai dir");
         fs::write(root.join("ELAI.md"), "Project rules").expect("write instructions");
         fs::write(
-            root.join(".claw").join("settings.json"),
+            root.join(".elai").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -775,10 +775,10 @@ mod tests {
     #[test]
     fn renders_elai_code_style_sections_with_project_context() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claw")).expect("elai dir");
+        fs::create_dir_all(root.join(".elai")).expect("elai dir");
         fs::write(root.join("ELAI.md"), "Project rules").expect("write ELAI.md");
         fs::write(
-            root.join(".claw").join("settings.json"),
+            root.join(".elai").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -817,9 +817,9 @@ mod tests {
     fn discovers_dot_elai_instructions_markdown() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
+        fs::create_dir_all(nested.join(".elai")).expect("nested elai dir");
         fs::write(
-            nested.join(".claw").join("instructions.md"),
+            nested.join(".elai").join("instructions.md"),
             "instruction markdown",
         )
         .expect("write instructions.md");
@@ -828,7 +828,7 @@ mod tests {
         assert!(context
             .instruction_files
             .iter()
-            .any(|file| file.path.ends_with(".claw/instructions.md")));
+            .any(|file| file.path.ends_with(".elai/instructions.md")));
         assert!(
             render_instruction_files(&context.instruction_files).contains("instruction markdown")
         );

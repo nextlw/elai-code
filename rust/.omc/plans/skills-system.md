@@ -8,8 +8,8 @@
 
 ## Context
 
-The claw CLI already has a partial skills infrastructure in `crates/commands/src/lib.rs`:
-- `discover_skill_roots()` finds SKILL.md files across `.claw/skills/`, `.codex/skills/`, `~/.claw/skills/`, etc.
+The elai CLI already has a partial skills infrastructure in `crates/commands/src/lib.rs`:
+- `discover_skill_roots()` finds SKILL.md files across `.elai/skills/`, `.codex/skills/`, `~/.elai/skills/`, etc.
 - `parse_skill_frontmatter()` extracts only `name` and `description` (2 fields)
 - `/skills list` slash command works but is display-only
 - **Skills are never loaded into the system prompt** -- this is the core gap
@@ -173,7 +173,7 @@ Changes:
 4. In `lib.rs`, add `mod skills;` and export public types.
 
 **Acceptance Criteria:**
-- [ ] Skills appear in system prompt output (verifiable via `claw --print-system-prompt`)
+- [ ] Skills appear in system prompt output (verifiable via `elai --print-system-prompt`)
 - [ ] Skills are ordered by priority (highest first)
 - [ ] Empty skills dir produces no skill sections
 - [ ] Existing tests in `prompt.rs` continue to pass
@@ -220,7 +220,7 @@ Update `render_skills_report()` to display the extra metadata.
 
 ### Step 4: Expose Budget Multiplier + Provider to CLI
 
-**Files:** `crates/runtime/src/prompt.rs`, `crates/claw-cli/src/main.rs`
+**Files:** `crates/runtime/src/prompt.rs`, `crates/elai-cli/src/main.rs`
 
 The `build_skill_prompt_sections()` returns a `SkillPromptResult` with `budget_multiplier` and `force_provider`. These need to be surfaced to the caller so the CLI can act on them.
 
@@ -289,7 +289,7 @@ Test cases:
 | `crates/runtime/src/lib.rs` | MODIFY | Add `mod skills;` and public exports |
 | `crates/runtime/src/prompt.rs` | MODIFY | Add `with_skills()` to builder, inject sections in `build()`, change `load_system_prompt()` return |
 | `crates/commands/src/lib.rs` | MODIFY | Enrich `SkillSummary` with metadata, update rendering |
-| `crates/claw-cli/src/main.rs` | MODIFY | Adapt to new `SystemPromptOutput` return type |
+| `crates/elai-cli/src/main.rs` | MODIFY | Adapt to new `SystemPromptOutput` return type |
 
 ## Dependencies
 
@@ -299,6 +299,6 @@ Test cases:
 
 ## Open Design Decisions
 
-1. **Skill activation model:** Currently the plan loads ALL discovered skills into the prompt. Should there be an explicit activation mechanism (e.g., `active_skills` list in `.claw/settings.json`)? The TS reference requires explicit `skillNames` to be passed. Recommend: load all discovered skills by default (matching how instruction files work), but allow disabling via settings.
+1. **Skill activation model:** Currently the plan loads ALL discovered skills into the prompt. Should there be an explicit activation mechanism (e.g., `active_skills` list in `.elai/settings.json`)? The TS reference requires explicit `skillNames` to be passed. Recommend: load all discovered skills by default (matching how instruction files work), but allow disabling via settings.
 2. **Shared root discovery:** The `discover_skill_roots()` logic lives in the `commands` crate. The runtime crate needs similar logic. Options: (A) move it to runtime and re-export, (B) duplicate with slight variation, (C) accept root dirs as parameter. Recommend (C) -- have `load_system_prompt` accept skill dirs, let the CLI resolve them.
 3. **Budget multiplier consumption:** No explicit budget system exists yet. The multiplier is surfaced but not consumed. This is intentional scaffolding for future budget features.

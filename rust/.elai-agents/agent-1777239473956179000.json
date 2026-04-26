@@ -1,0 +1,14 @@
+{
+  "agentId": "agent-1777239473956179000",
+  "name": "ship-audit",
+  "description": "Review the branch",
+  "subagentType": "general-purpose",
+  "model": "claude-opus-4-6",
+  "status": "failed",
+  "outputFile": "/Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/.elai-agents/agent-1777239473956179000.md",
+  "manifestFile": "/Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/.elai-agents/agent-1777239473956179000.json",
+  "createdAt": "1777239473",
+  "startedAt": "1777239473",
+  "completedAt": "1777239474",
+  "error": "missing Elai credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before calling the Elai API"
+}

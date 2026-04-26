@@ -1,0 +1,14 @@
+{
+  "agentId": "agent-1777235090422244000",
+  "name": "verify-the-branch",
+  "description": "Verify the branch",
+  "subagentType": "Explore",
+  "model": "claude-opus-4-6",
+  "status": "failed",
+  "outputFile": "/Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/.elai-agents/agent-1777235090422244000.md",
+  "manifestFile": "/Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/.elai-agents/agent-1777235090422244000.json",
+  "createdAt": "1777235090",
+  "startedAt": "1777235090",
+  "completedAt": "1777235090",
+  "error": "missing Elai credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before calling the Elai API"
+}

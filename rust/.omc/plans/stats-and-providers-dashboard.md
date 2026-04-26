@@ -2,17 +2,17 @@
 
 **Data:** 2026-04-26
 **Complexidade estimada:** MEDIUM
-**Escopo:** ~6 arquivos a criar/modificar em 2 crates (`commands`, `claw-cli`)
+**Escopo:** ~6 arquivos a criar/modificar em 2 crates (`commands`, `elai-cli`)
 
 ---
 
 ## Contexto
 
-O projeto claw-cli usa um modelo de comandos duplo:
+O projeto elai-cli usa um modelo de comandos duplo:
 1. **CLI subcommands** via `CliAction` enum em `main.rs` (parsed manualmente por `parse_args`)
 2. **Slash commands** via `SlashCommand` enum em `crates/commands/src/lib.rs` (parsing por `SlashCommand::parse`, dispatch em `LiveCli`)
 
-Sessoes ficam em `.claw/sessions/{id}.json` (formato `Session` do crate `runtime`).
+Sessoes ficam em `.elai/sessions/{id}.json` (formato `Session` do crate `runtime`).
 O crate `runtime::usage` ja tem `TokenUsage`, `ModelPricing`, `pricing_for_model()`, `UsageCostEstimate` e `format_usd()` prontos para reuso.
 
 Nao existe telemetria persistida por-request hoje. O `UsageTracker` e in-memory e por-sessao. Portanto, **o primeiro passo e definir o formato de telemetria JSONL** que sera a fonte de dados para `stats`.
@@ -71,7 +71,7 @@ impl TelemetryWriter {
     pub fn append(&self, entry: &TelemetryEntry) -> io::Result<()>;  // append JSONL line
 }
 
-pub fn default_telemetry_path() -> PathBuf;  // ~/.claw/telemetry.jsonl
+pub fn default_telemetry_path() -> PathBuf;  // ~/.elai/telemetry.jsonl
 
 pub fn load_entries(path: &Path, since: Option<chrono_free_cutoff_secs>) -> io::Result<Vec<TelemetryEntry>>;
 // Nota: "since" e um unix timestamp i64; calcular cutoff como:
@@ -91,7 +91,7 @@ pub fn load_entries(path: &Path, since: Option<chrono_free_cutoff_secs>) -> io::
 
 ### Step 2 -- Emitir telemetria no loop de request do CLI
 
-**Arquivo a modificar:** `crates/claw-cli/src/main.rs`
+**Arquivo a modificar:** `crates/elai-cli/src/main.rs`
 
 **O que fazer:**
 - Apos cada resposta da API (onde `TokenUsage` e extraido), chamar `TelemetryWriter::append` com os dados do turn
@@ -99,7 +99,7 @@ pub fn load_entries(path: &Path, since: Option<chrono_free_cutoff_secs>) -> io::
 - Capturar: model, project (basename de cwd), session_id, tokens, custo via `pricing_for_model`, latencia (Instant antes/depois do request)
 
 **Acceptance criteria:**
-- Apos um `claw "hello"`, o arquivo `~/.claw/telemetry.jsonl` contem pelo menos 1 linha valida
+- Apos um `elai "hello"`, o arquivo `~/.elai/telemetry.jsonl` contem pelo menos 1 linha valida
 - Entry contem todos os campos obrigatorios
 
 ---
@@ -111,7 +111,7 @@ pub fn load_entries(path: &Path, since: Option<chrono_free_cutoff_secs>) -> io::
 
 **Arquivos a modificar:**
 - `crates/commands/src/lib.rs` -- adicionar `pub mod stats;`, novo `SlashCommandSpec`, novo variante `SlashCommand::Stats`
-- `crates/claw-cli/src/main.rs` -- adicionar `CliAction::Stats` e dispatch para `parse_args`, adicionar handler no slash command match
+- `crates/elai-cli/src/main.rs` -- adicionar `CliAction::Stats` e dispatch para `parse_args`, adicionar handler no slash command match
 
 **Structs e funcoes em `stats.rs`:**
 
@@ -162,7 +162,7 @@ fn render_stats_table(...) -> String {
 }
 ```
 
-**CLI args:** `claw stats [--days N] [--by-model] [--by-project]`
+**CLI args:** `elai stats [--days N] [--by-model] [--by-project]`
 **Slash command:** `/stats [--days N]` (by-model e default dentro da TUI)
 
 **CliAction::Stats:**
@@ -182,9 +182,9 @@ Stats {
 ```
 
 **Acceptance criteria:**
-- `claw stats` imprime tabela com overall + by-model
-- `claw stats --days 7` filtra ultimos 7 dias
-- `claw stats --by-project` mostra breakdown por projeto
+- `elai stats` imprime tabela com overall + by-model
+- `elai stats --days 7` filtra ultimos 7 dias
+- `elai stats --by-project` mostra breakdown por projeto
 - `/stats` na TUI funciona e imprime como system message
 - Tabela alinha corretamente com dados de largura variavel
 
@@ -197,7 +197,7 @@ Stats {
 
 **Arquivos a modificar:**
 - `crates/commands/src/lib.rs` -- adicionar `pub mod providers;`, novo `SlashCommandSpec`, novo variante `SlashCommand::Providers`
-- `crates/claw-cli/src/main.rs` -- handler no slash command match
+- `crates/elai-cli/src/main.rs` -- handler no slash command match
 
 **Structs e funcoes em `providers.rs`:**
 
@@ -304,7 +304,7 @@ Provider Health & Orchestration State
 |------|---------|
 | CRIAR | `crates/runtime/src/telemetry.rs` |
 | MODIFICAR | `crates/runtime/src/lib.rs` (add `pub mod telemetry`) |
-| MODIFICAR | `crates/claw-cli/src/main.rs` (emit telemetry + CliAction::Stats + dispatch) |
+| MODIFICAR | `crates/elai-cli/src/main.rs` (emit telemetry + CliAction::Stats + dispatch) |
 | CRIAR | `crates/commands/src/stats.rs` |
 | CRIAR | `crates/commands/src/providers.rs` |
 | MODIFICAR | `crates/commands/src/lib.rs` (add mods, SlashCommandSpec, SlashCommand variants, parse/dispatch) |
@@ -315,7 +315,7 @@ Provider Health & Orchestration State
 
 1. **Sem chrono crate** -- timestamps ISO 8601 gerados com `SystemTime` + helper manual (ou `time` crate se ja presente no workspace). Parsing do filtro --days: converter para unix timestamp e comparar.
 
-2. **Telemetria em `~/.claw/telemetry.jsonl`** (nao por-projeto) -- permite aggregation cross-project no `stats --by-project`. O campo `project` na entry identifica a origem.
+2. **Telemetria em `~/.elai/telemetry.jsonl`** (nao por-projeto) -- permite aggregation cross-project no `stats --by-project`. O campo `project` na entry identifica a origem.
 
 3. **EMA com alpha=0.3** -- mesmo valor do TypeScript reference. Formula: `ema[0] = latency[0]; ema[i] = alpha * latency[i] + (1-alpha) * ema[i-1]`.
 
@@ -327,10 +327,10 @@ Provider Health & Orchestration State
 
 ## Success Criteria
 
-- [ ] `claw stats` executa e imprime tabela formatada
-- [ ] `claw stats --days 7 --by-model` filtra e agrupa corretamente
+- [ ] `elai stats` executa e imprime tabela formatada
+- [ ] `elai stats --days 7 --by-model` filtra e agrupa corretamente
 - [ ] `/stats` funciona como slash command na TUI
 - [ ] `/providers` funciona como slash command na TUI
-- [ ] `~/.claw/telemetry.jsonl` e populado apos cada request da API
+- [ ] `~/.elai/telemetry.jsonl` e populado apos cada request da API
 - [ ] `cargo test -p runtime -p commands` passa sem regressoes
 - [ ] Nenhuma dependencia nova adicionada aos Cargo.toml

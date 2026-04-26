@@ -1,6 +1,6 @@
 target/
 .omx/
-.clawd-agents/
-# Claw Code local artifacts
-.claw/settings.local.json
-.claw/sessions/
+.elaid-agents/
+# Elai Code local artifacts
+.elai/settings.local.json
+.elai/sessions/

@@ -8,7 +8,7 @@
 
 ## Context
 
-O projeto claw-code/rust ja possui infraestrutura solida de tracking de uso em `crates/runtime/src/usage.rs`:
+O projeto elai-code/rust ja possui infraestrutura solida de tracking de uso em `crates/runtime/src/usage.rs`:
 - `ModelPricing` — tabela de precos por modelo (Sonnet, Haiku, Opus, GPT-4o, GPT-4.1, etc.)
 - `TokenUsage` — struct com input/output/cache_creation/cache_read tokens
 - `UsageCostEstimate` — calculo de custo USD com `total_cost_usd()`
@@ -136,10 +136,10 @@ pub struct BudgetUsagePct {
 
 **Persistencia** (`budget.json`):
 ```rust
-/// Carrega de ~/.config/claw/budget.json ou .claw/budget.json
+/// Carrega de ~/.config/elai/budget.json ou .elai/budget.json
 pub fn load_budget_config(cwd: &Path) -> Option<BudgetConfig> { ... }
 
-/// Salva para .claw/budget.json (projeto local)
+/// Salva para .elai/budget.json (projeto local)
 pub fn save_budget_config(cwd: &Path, config: &BudgetConfig) -> io::Result<()> { ... }
 ```
 
@@ -156,7 +156,7 @@ pub fn save_budget_config(cwd: &Path, config: &BudgetConfig) -> io::Result<()> {
 
 ### Step 2: CLI Flags `--budget-tokens`, `--budget-usd`, `--budget-turns`, `--no-budget`
 
-**Arquivo:** `crates/claw-cli/src/main.rs`
+**Arquivo:** `crates/elai-cli/src/main.rs`
 
 Adicionar ao `parse_args()` (seguindo o padrao de `--swd`):
 
@@ -204,7 +204,7 @@ Propagar `budget_config` para `run_repl()` e `run_tui_repl()`.
 
 ### Step 3: Integracao com TUI — footer com barra de progresso
 
-**Arquivos:** `crates/claw-cli/src/tui.rs`, `crates/claw-cli/src/main.rs`
+**Arquivos:** `crates/elai-cli/src/tui.rs`, `crates/elai-cli/src/main.rs`
 
 3a. Adicionar campos ao `UiApp`:
 ```rust
@@ -269,7 +269,7 @@ match budget_status {
 
 ### Step 4: `/budget` Slash Command
 
-**Arquivos:** `crates/commands/src/lib.rs`, `crates/claw-cli/src/main.rs`
+**Arquivos:** `crates/commands/src/lib.rs`, `crates/elai-cli/src/main.rs`
 
 4a. Adicionar ao enum `SlashCommand`:
 ```rust
@@ -318,7 +318,7 @@ Uso:
 
 ### Step 5: Graceful Save (MEMORY.md) ao Atingir Limite
 
-**Arquivo:** `crates/claw-cli/src/main.rs`
+**Arquivo:** `crates/elai-cli/src/main.rs`
 
 Quando `BudgetStatus::Exhausted`:
 1. Gerar resumo:
@@ -331,7 +331,7 @@ Quando `BudgetStatus::Exhausted`:
    - Session: {session_id}
    - Last topic: {last_user_message_preview}
    ```
-2. Append ao `MEMORY.md` no diretorio do projeto (ou `CLAW.md` se existir)
+2. Append ao `MEMORY.md` no diretorio do projeto (ou `ELAI.md` se existir)
 3. Salvar sessao normalmente (ja acontece em `thread_done_rx`)
 4. Mostrar mensagem no chat com instrucoes de como aumentar limite
 
@@ -344,15 +344,15 @@ Quando `BudgetStatus::Exhausted`:
 
 ### Step 6: Persistencia de Budget Config em `budget.json`
 
-**Arquivo:** `crates/runtime/src/budget.rs` (funcoes de I/O), `crates/claw-cli/src/main.rs` (carregamento)
+**Arquivo:** `crates/runtime/src/budget.rs` (funcoes de I/O), `crates/elai-cli/src/main.rs` (carregamento)
 
 Fluxo:
 1. No startup (`run_tui_repl` / `run_repl`):
    - Se CLI flags presentes -> usa como config
-   - Senao, tenta carregar `.claw/budget.json`
+   - Senao, tenta carregar `.elai/budget.json`
    - Senao, budget desativado
-2. `/budget 500000 5.0` -> salva em `.claw/budget.json`
-3. `/budget off` -> remove `.claw/budget.json`
+2. `/budget 500000 5.0` -> salva em `.elai/budget.json`
+3. `/budget off` -> remove `.elai/budget.json`
 
 Formato `budget.json`:
 ```json
@@ -379,19 +379,19 @@ Formato `budget.json`:
 | CRIAR | `crates/runtime/src/budget.rs` | BudgetConfig, BudgetTracker, BudgetStatus, BudgetUsagePct, persistencia |
 | MODIFICAR | `crates/runtime/src/lib.rs` | `pub mod budget;` + re-exports |
 | MODIFICAR | `crates/commands/src/lib.rs` | `SlashCommand::Budget` variant + parse |
-| MODIFICAR | `crates/claw-cli/src/main.rs` | CLI flags, CliAction::Repl fields, run_tui_repl integracao, handle_tui_slash_command, graceful save |
-| MODIFICAR | `crates/claw-cli/src/tui.rs` | UiApp.budget_tracker, TuiMsg variants, draw_status barra, apply_tui_msg handlers, slash palette |
+| MODIFICAR | `crates/elai-cli/src/main.rs` | CLI flags, CliAction::Repl fields, run_tui_repl integracao, handle_tui_slash_command, graceful save |
+| MODIFICAR | `crates/elai-cli/src/tui.rs` | UiApp.budget_tracker, TuiMsg variants, draw_status barra, apply_tui_msg handlers, slash palette |
 
 ---
 
 ## Success Criteria
 
 1. `cargo test -p runtime` passa — inclui novos testes de BudgetTracker
-2. `cargo test -p claw-cli` passa — inclui testes de parse de CLI flags
-3. `claw --budget-usd 0.50` inicia com budget ativo, footer mostra barra
+2. `cargo test -p elai-cli` passa — inclui testes de parse de CLI flags
+3. `elai --budget-usd 0.50` inicia com budget ativo, footer mostra barra
 4. Ao atingir $0.50, sessao encerra gracefully com resumo em MEMORY.md
-5. `/budget 1000000` atualiza limite em runtime e persiste em `.claw/budget.json`
-6. Restart sem flags carrega budget de `.claw/budget.json`
+5. `/budget 1000000` atualiza limite em runtime e persiste em `.elai/budget.json`
+6. Restart sem flags carrega budget de `.elai/budget.json`
 7. `--no-budget` ignora tudo e roda sem limites
 
 ---

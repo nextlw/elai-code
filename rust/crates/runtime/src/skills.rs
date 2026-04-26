@@ -1,6 +1,6 @@
 //! Skill model, parser, loader, validator, and prompt builder.
 //!
-//! Skills are SKILL.md files discovered under `.claw/skills/`, `.codex/skills/`,
+//! Skills are SKILL.md files discovered under `.elai/skills/`, `.codex/skills/`,
 //! and their home-directory equivalents. Each file has a YAML frontmatter block
 //! followed by markdown instruction text injected into the system prompt.
 
@@ -317,7 +317,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<PathBuf> {
     };
 
     for ancestor in cwd.ancestors() {
-        push(&mut dirs, ancestor.join(".claw").join("skills"));
+        push(&mut dirs, ancestor.join(".elai").join("skills"));
         push(&mut dirs, ancestor.join(".codex").join("skills"));
     }
 
@@ -327,7 +327,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<PathBuf> {
 
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        push(&mut dirs, home.join(".claw").join("skills"));
+        push(&mut dirs, home.join(".elai").join("skills"));
         push(&mut dirs, home.join(".codex").join("skills"));
     }
 
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn test_load_all_skills_from_dir() {
         let root = tmp();
-        let skills_dir = root.join(".claw").join("skills");
+        let skills_dir = root.join(".elai").join("skills");
         fs::create_dir_all(&skills_dir).unwrap();
         make_skill_md(&skills_dir, "skill-high", "---\nname: skill-high\npriority: 90\n---\nHigh.");
         make_skill_md(&skills_dir, "skill-low", "---\nname: skill-low\npriority: 10\n---\nLow.");
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn test_empty_skills_dir() {
         let root = tmp();
-        let skills_dir = root.join(".claw").join("skills");
+        let skills_dir = root.join(".elai").join("skills");
         fs::create_dir_all(&skills_dir).unwrap();
         let skills = load_all_skills(&root);
         assert!(skills.is_empty());
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_deduplication_by_name() {
         let root = tmp();
-        let skills_dir = root.join(".claw").join("skills");
+        let skills_dir = root.join(".elai").join("skills");
         let other_dir = root.join(".codex").join("skills");
         fs::create_dir_all(&skills_dir).unwrap();
         fs::create_dir_all(&other_dir).unwrap();

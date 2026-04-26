@@ -8,17 +8,17 @@
 
 ## Contexto
 
-O projeto claw-cli ja possui o comando `/memory` que exibe arquivos CLAW.md descobertos. O `verify` vai alem: percorre a arvore do projeto (respeitando .gitignore), extrai paths mencionados nos arquivos de instrucao (CLAW.md, CLAUDE.md, .claw/memory.md), e compara os dois conjuntos para categorizar cada entrada como verified, missing, untracked ou drift.
+O projeto elai-cli ja possui o comando `/memory` que exibe arquivos ELAI.md descobertos. O `verify` vai alem: percorre a arvore do projeto (respeitando .gitignore), extrai paths mencionados nos arquivos de instrucao (ELAI.md, CLAUDE.md, .elai/memory.md), e compara os dois conjuntos para categorizar cada entrada como verified, missing, untracked ou drift.
 
 Referencia TypeScript: `mythos-router/src/commands/verify.ts` -- usa walkDirectory com depth limit=10, ignorePatterns simples (nome ou extensao), e extrai paths via regex `CREATE|MODIFY|DELETE|READ|chat:` do MEMORY.md.
 
-No claw-cli, a "memoria" sao os instruction files descobertos por `ProjectContext::discover()` em `crates/runtime/src/prompt.rs`. Os paths mencionados neles serao comparados contra o filesystem real.
+No elai-cli, a "memoria" sao os instruction files descobertos por `ProjectContext::discover()` em `crates/runtime/src/prompt.rs`. Os paths mencionados neles serao comparados contra o filesystem real.
 
 ---
 
 ## Objetivos
 
-1. `claw verify` como subcomando CLI (nao-interativo, saida direta no terminal)
+1. `elai verify` como subcomando CLI (nao-interativo, saida direta no terminal)
 2. `/verify` como slash command na TUI e no runtime REPL
 3. Saida colorida em tabela ASCII com contadores sumarios
 4. Sem dependencias externas novas (sem crate `ignore` ou `globset`) -- walker proprio lendo .gitignore manualmente
@@ -32,21 +32,21 @@ No claw-cli, a "memoria" sao os instruction files descobertos por `ProjectContex
 - Ignorar sempre: `.git/`, `target/`, `node_modules/`, `.DS_Store`, `.omc/`
 - Depth limit: 15 niveis de recursao (safety)
 - Categorias: verified, missing, untracked, drift
-- Testes com diretorio temporario e CLAW.md simulado
+- Testes com diretorio temporario e ELAI.md simulado
 
 ### Must NOT Have
 - TUI full-screen para o verify (apenas output de texto)
 - Dependencia em crates externas para walk/gitignore
-- Modificacao do CLAW.md (verify e read-only)
+- Modificacao do ELAI.md (verify e read-only)
 - Reescrita da logica de `ProjectContext::discover`
 
 ---
 
 ## Task Flow
 
-### Step 1: Criar `crates/claw-cli/src/verify.rs` (novo modulo)
+### Step 1: Criar `crates/elai-cli/src/verify.rs` (novo modulo)
 
-**Arquivo:** `crates/claw-cli/src/verify.rs` (NOVO)
+**Arquivo:** `crates/elai-cli/src/verify.rs` (NOVO)
 
 **Structs e tipos:**
 
@@ -54,7 +54,7 @@ No claw-cli, a "memoria" sao os instruction files descobertos por `ProjectContex
 /// Uma entrada extraida dos instruction files com path mencionado
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryEntry {
-    pub path: PathBuf,          // path relativo encontrado no CLAW.md
+    pub path: PathBuf,          // path relativo encontrado no ELAI.md
     pub source_file: PathBuf,   // qual instruction file mencionou
     pub line_number: usize,     // linha onde foi encontrado
 }
@@ -77,7 +77,7 @@ pub struct VerifyReport {
 /// Percorre arvore do projeto respeitando .gitignore e hardcoded ignores
 pub fn walk_project(root: &Path) -> io::Result<Vec<PathBuf>>
 
-/// Extrai paths mencionados nos instruction files (CLAW.md, etc)
+/// Extrai paths mencionados nos instruction files (ELAI.md, etc)
 pub fn parse_memory_entries(instruction_files: &[ContextFile]) -> Vec<MemoryEntry>
 
 /// Compara filesystem vs memoria e gera o report
@@ -96,7 +96,7 @@ pub fn run_verify() -> Result<String, Box<dyn std::error::Error>>
 
 **Logica de `walk_project`:**
 1. Ler `.gitignore` na raiz (se existir) -- linhas nao-vazias, sem `#`
-2. Merge com hardcoded: `[".git", "target", "node_modules", ".DS_Store", ".omc", ".claw/sessions"]`
+2. Merge com hardcoded: `[".git", "target", "node_modules", ".DS_Store", ".omc", ".elai/sessions"]`
 3. Recursao `walk_inner(dir, root, &patterns, depth)` com depth max 15
 4. Para cada entry: se nome bate com pattern (exato ou `*.ext`), skip. Se hidden (`.` prefix) e nao explicitamente listado, skip.
 5. Retornar Vec<PathBuf> com paths relativos ao root
@@ -148,24 +148,24 @@ Summary: 20 verified | 2 drift | 1 missing | 119 untracked
 
 ---
 
-### Step 2: Integrar como subcomando CLI (`claw verify`)
+### Step 2: Integrar como subcomando CLI (`elai verify`)
 
 **Arquivos a modificar:**
 
-1. **`crates/claw-cli/src/main.rs`**
+1. **`crates/elai-cli/src/main.rs`**
    - Adicionar `mod verify;` no topo (junto com `mod init; mod swd;`)
    - Adicionar variante `Verify` ao `enum CliAction` (linha ~168)
    - Adicionar match arm em `run()` (linha ~71): `CliAction::Verify => run_verify_command()`
    - Adicionar case `"verify"` no `match rest[0].as_str()` (linha ~361, junto com "login", "logout", etc)
    - Adicionar funcao `fn run_verify_command()` que chama `verify::run_verify()` e imprime resultado
 
-2. **`crates/claw-cli/src/args.rs`**
+2. **`crates/elai-cli/src/args.rs`**
    - Adicionar `Verify` ao `enum Command` com doc comment `/// Verify codebase vs memory sync`
    - Adicionar test case em `parses_login_and_logout_commands` ou novo test
 
 **Acceptance Criteria:**
-- [x] `claw verify` executa e imprime report
-- [x] `claw --help` lista verify como subcomando disponivel
+- [x] `elai verify` executa e imprime report
+- [x] `elai --help` lista verify como subcomando disponivel
 - [x] Exit code 0 se tudo ok, 1 se drift/missing encontrado
 
 ---
@@ -189,7 +189,7 @@ Summary: 20 verified | 2 drift | 1 missing | 119 untracked
    - Adicionar case `"verify" => Self::Verify` no `parse()` (linha ~385)
    - Adicionar `SlashCommand::Verify` aos patterns de `resume_supported` (linha ~1634 area)
 
-2. **`crates/claw-cli/src/main.rs`**
+2. **`crates/elai-cli/src/main.rs`**
    - Adicionar handler no `resume_slash_command` match (linha ~989 area):
      ```rust
      SlashCommand::Verify => Ok(ResumeCommandOutcome {
@@ -207,12 +207,12 @@ Summary: 20 verified | 2 drift | 1 missing | 119 untracked
      }
      ```
 
-3. **`crates/claw-cli/src/tui.rs`**
+3. **`crates/elai-cli/src/tui.rs`**
    - Adicionar `("verify".into(), "Verificar codebase vs memoria".into())` na lista de comandos (linha ~443)
 
-4. **`crates/claw-cli/src/main.rs`** -- help text
+4. **`crates/elai-cli/src/main.rs`** -- help text
    - Adicionar `/verify` na string de help da TUI (linha ~1334):
-     `  /verify        Verificar codebase vs memoria (CLAW.md)\n\`
+     `  /verify        Verificar codebase vs memoria (ELAI.md)\n\`
 
 **Acceptance Criteria:**
 - [x] `/verify` funciona no REPL e na TUI
@@ -262,7 +262,7 @@ impl IgnoreRules {
 
 ### Step 5: Testes
 
-**Arquivo:** `crates/claw-cli/src/verify.rs` -- secao `#[cfg(test)] mod tests`
+**Arquivo:** `crates/elai-cli/src/verify.rs` -- secao `#[cfg(test)] mod tests`
 
 **Casos de teste:**
 
@@ -272,7 +272,7 @@ impl IgnoreRules {
    - Verifica: main.rs presente, debug.log ausente, target/ ausente
 
 2. **`test_parse_memory_entries_extracts_paths`**
-   - Cria ContextFile com conteudo tipo CLAW.md mencionando `src/main.rs`, `Cargo.toml`
+   - Cria ContextFile com conteudo tipo ELAI.md mencionando `src/main.rs`, `Cargo.toml`
    - Verifica extracoes corretas e deduplicacao
 
 3. **`test_diff_entries_categorizes_correctly`**
@@ -293,7 +293,7 @@ impl IgnoreRules {
    - Verifica que walk para em 15
 
 **Acceptance Criteria:**
-- [x] Todos os 6 testes passam com `cargo test -p claw-cli`
+- [x] Todos os 6 testes passam com `cargo test -p elai-cli`
 - [x] Testes usam tmpdir e fazem cleanup
 - [x] Nenhum teste depende de estado externo
 
@@ -303,19 +303,19 @@ impl IgnoreRules {
 
 | Arquivo | Acao | Descricao |
 |---------|------|-----------|
-| `crates/claw-cli/src/verify.rs` | CRIAR | Modulo principal: walker, parser, diff, render |
-| `crates/claw-cli/src/main.rs` | MODIFICAR | `mod verify`, CliAction::Verify, handlers TUI + REPL |
-| `crates/claw-cli/src/args.rs` | MODIFICAR | Command::Verify no enum clap |
-| `crates/claw-cli/src/tui.rs` | MODIFICAR | Adicionar verify na paleta de comandos |
+| `crates/elai-cli/src/verify.rs` | CRIAR | Modulo principal: walker, parser, diff, render |
+| `crates/elai-cli/src/main.rs` | MODIFICAR | `mod verify`, CliAction::Verify, handlers TUI + REPL |
+| `crates/elai-cli/src/args.rs` | MODIFICAR | Command::Verify no enum clap |
+| `crates/elai-cli/src/tui.rs` | MODIFICAR | Adicionar verify na paleta de comandos |
 | `crates/commands/src/lib.rs` | MODIFICAR | SlashCommandSpec + SlashCommand::Verify + parse |
 
 ---
 
 ## Criterios de Sucesso
 
-1. `claw verify` imprime report correto num projeto real
+1. `elai verify` imprime report correto num projeto real
 2. `/verify` funciona em REPL e TUI
 3. .gitignore do projeto e respeitado
 4. Zero dependencias novas no Cargo.toml
-5. `cargo test -p claw-cli` passa incluindo os novos testes
-6. `cargo clippy -p claw-cli` sem warnings
+5. `cargo test -p elai-cli` passa incluindo os novos testes
+6. `cargo clippy -p elai-cli` sem warnings

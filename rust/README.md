@@ -53,7 +53,7 @@ elai login
 | Todo tracking | ✅ |
 | Notebook editing | ✅ |
 | ELAI.md / project memory | ✅ |
-| Config file hierarchy (.claw.json) | ✅ |
+| Config file hierarchy (.elai.json) | ✅ |
 | Permission system | ✅ |
 | MCP server lifecycle | ✅ |
 | Session persistence + resume | ✅ |
@@ -79,7 +79,7 @@ SWD is a transactional filesystem write engine that adds safety and auditability
 | Level | Description |
 |-------|-------------|
 | `off` | Normal tool execution — no write interception |
-| `partial` *(default)* | Every write tool call is wrapped with SHA-256 before/after snapshots; failures trigger automatic rollback; all operations are logged to `.claw/swd.log` |
+| `partial` *(default)* | Every write tool call is wrapped with SHA-256 before/after snapshots; failures trigger automatic rollback; all operations are logged to `.elai/swd.log` |
 | `full` | Write tools (`write_file`, `edit_file`, `NotebookEdit`) are **blocked**; the model must emit `[FILE_ACTION]` blocks in its text output, which are executed transactionally with hash verification and full rollback on any failure |
 
 ### Usage
@@ -122,7 +122,7 @@ The engine:
 
 ### Audit Log
 
-All SWD transactions are appended to `.claw/swd.log` as JSON-lines:
+All SWD transactions are appended to `.elai/swd.log` as JSON-lines:
 
 ```json
 {"ts":1711843200000,"tool":"write_file","path":"src/main.rs","outcome":"Verified","before":"abc123...","after":"def456..."}

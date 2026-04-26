@@ -161,7 +161,7 @@ impl BudgetTracker {
 }
 
 pub fn budget_config_path(cwd: &Path) -> PathBuf {
-    cwd.join(".claw").join("budget.json")
+    cwd.join(".elai").join("budget.json")
 }
 
 pub fn load_budget_config(cwd: &Path) -> Option<BudgetConfig> {

@@ -1,4 +1,4 @@
-# Plan: Deterministic Response Cache for Claw CLI
+# Plan: Deterministic Response Cache for Elai CLI
 
 **Date:** 2026-04-26
 **Complexity:** MEDIUM
@@ -85,7 +85,7 @@ pub struct CacheEntry {
 }
 
 pub struct ResponseCache {
-    db_path: PathBuf,              // ~/.claw/cache.json
+    db_path: PathBuf,              // ~/.elai/cache.json
     ttl_ms: u64,                   // default 3_600_000 (1h)
     enabled: bool,
     entries: BTreeMap<String, CachedResponse>,  // lazy-loaded
@@ -139,7 +139,7 @@ fn contains_tool_content(messages: &[ConversationMessage]) -> bool {
 - [x] `generate_cache_key` returns `None` when any message has tool content
 - [x] `get` returns `None` for expired entries and increments `hit_count` on hit
 - [x] `put` is a no-op when `enabled == false`
-- [x] `flush` writes sorted JSON to `~/.claw/cache.json`
+- [x] `flush` writes sorted JSON to `~/.elai/cache.json`
 - [x] `evict_expired` removes entries older than TTL
 
 ---
@@ -164,7 +164,7 @@ pub use response_cache::{
 
 ### Step 3: Wire Cache into CLI Request Pipeline
 
-**Modified file:** `crates/claw-cli/src/app.rs`
+**Modified file:** `crates/elai-cli/src/app.rs`
 
 The interception point is `render_response()` (line 309), which calls `self.conversation_client.run_turn()`.
 
@@ -202,14 +202,14 @@ In `render_response`, before calling `run_turn`:
 
 ### Step 4: Add `--no-cache` Flag and `/cache` Slash Command
 
-**Modified file:** `crates/claw-cli/src/args.rs`
+**Modified file:** `crates/elai-cli/src/args.rs`
 
 ```rust
 #[arg(long)]
 pub no_cache: bool,
 ```
 
-**Modified file:** `crates/claw-cli/src/app.rs`
+**Modified file:** `crates/elai-cli/src/app.rs`
 
 Add to `SlashCommand` enum:
 ```rust
@@ -280,8 +280,8 @@ Required test cases:
 |---|---|---|
 | `crates/runtime/src/response_cache.rs` | CREATE | Core cache module: CacheKey, ResponseCache, generate_cache_key |
 | `crates/runtime/src/lib.rs` | MODIFY | Add `mod response_cache` + re-exports |
-| `crates/claw-cli/src/app.rs` | MODIFY | Wire cache into CliApp, add /cache slash commands |
-| `crates/claw-cli/src/args.rs` | MODIFY | Add `--no-cache` flag |
+| `crates/elai-cli/src/app.rs` | MODIFY | Wire cache into CliApp, add /cache slash commands |
+| `crates/elai-cli/src/args.rs` | MODIFY | Add `--no-cache` flag |
 
 ---
 
@@ -299,7 +299,7 @@ Required test cases:
 3. Running the same prompt twice in the REPL results in an instant response on the second call (cache hit)
 4. Adding a tool call to the conversation causes subsequent requests to bypass cache
 5. `--no-cache` flag prevents all caching
-6. `/cache clear` empties `~/.claw/cache.json`
+6. `/cache clear` empties `~/.elai/cache.json`
 7. Cache file is valid JSON that can be inspected manually
 
 ---

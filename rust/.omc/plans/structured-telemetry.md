@@ -1,4 +1,4 @@
-# Plan: Structured Telemetry for Claw CLI
+# Plan: Structured Telemetry for Elai CLI
 
 **Date:** 2026-04-26
 **Complexity:** MEDIUM
@@ -8,7 +8,7 @@
 
 ## Context
 
-The TypeScript reference (`mythos-router`) uses SQLite with a batching queue (2s / 10 events) to persist routing decisions, provider metrics, and failures. For Claw (Rust), we adopt JSON-lines (`~/.config/claw/telemetry.jsonl`) as the storage backend to avoid the `rusqlite` dependency. The existing `UsageTracker` in `crates/runtime/src/usage.rs` tracks per-session token counts but has no persistence -- telemetry fills that gap.
+The TypeScript reference (`mythos-router`) uses SQLite with a batching queue (2s / 10 events) to persist routing decisions, provider metrics, and failures. For Elai (Rust), we adopt JSON-lines (`~/.config/elai/telemetry.jsonl`) as the storage backend to avoid the `rusqlite` dependency. The existing `UsageTracker` in `crates/runtime/src/usage.rs` tracks per-session token counts but has no persistence -- telemetry fills that gap.
 
 **Key design decisions carried from the TS reference:**
 - Async batch queue (mpsc channel) so the main thread never blocks on I/O
@@ -23,7 +23,7 @@ The TypeScript reference (`mythos-router`) uses SQLite with a batching queue (2s
 ### Must Have
 - Zero impact on request latency (all I/O on background task)
 - Serde-based serialization with `#[serde(tag = "type")]` for easy grep/jq
-- Telemetry disabled when `CLAW_TELEMETRY=off` env var is set
+- Telemetry disabled when `ELAI_TELEMETRY=off` env var is set
 - All events carry a `timestamp_ms: u64` (Unix epoch millis)
 
 ### Must NOT Have
@@ -97,12 +97,12 @@ pub struct TelemetryWorker { /* private */ }
 - Flush trigger: `tokio::select!` over (a) buffer reaching 10 events, (b) `tokio::time::interval(Duration::from_secs(5))` tick, (c) a oneshot shutdown signal.
 - Flush writes each event as one JSON line (`serde_json::to_string` + `\n`) via `tokio::fs::OpenOptions` append mode.
 - After flush, check line count. If > 10,000, truncate by reading all lines, keeping the last 8,000, rewriting the file (simple rotation -- no archive).
-- `TelemetryHandle::noop()` returns a handle whose channel is immediately closed (for `CLAW_TELEMETRY=off` or test contexts).
+- `TelemetryHandle::noop()` returns a handle whose channel is immediately closed (for `ELAI_TELEMETRY=off` or test contexts).
 
 **File path:** `crates/runtime/src/telemetry.rs`
 
 **Dependencies to add to `crates/runtime/Cargo.toml`:**
-- `dirs = "6"` (for `dirs::config_dir()` to get `~/.config/claw/`)
+- `dirs = "6"` (for `dirs::config_dir()` to get `~/.config/elai/`)
 - `chrono` is NOT needed -- use `std::time::SystemTime` for timestamps
 
 **Wire into `crates/runtime/src/lib.rs`:**
@@ -152,14 +152,14 @@ pub struct TelemetryWorker { /* private */ }
 
 ---
 
-### Task 3 -- Wire telemetry in `claw-cli/src/main.rs`
+### Task 3 -- Wire telemetry in `elai-cli/src/main.rs`
 
 **What:** Start the `TelemetryWorker`, pass the handle through to the runtime, emit `ProviderSelected` and `SessionEnd` events, and flush on exit.
 
-**Changes to `crates/claw-cli/src/main.rs`:**
+**Changes to `crates/elai-cli/src/main.rs`:**
 
 1. **Startup (`build_runtime` / `LiveCli::new`):**
-   - Check `std::env::var("CLAW_TELEMETRY")`. If `"off"`, use `TelemetryHandle::noop()`.
+   - Check `std::env::var("ELAI_TELEMETRY")`. If `"off"`, use `TelemetryHandle::noop()`.
    - Otherwise, call `TelemetryWorker::start()` which returns `(TelemetryHandle, TelemetryShutdown)`. The `TelemetryShutdown` is a oneshot sender that triggers final flush.
    - Pass `TelemetryHandle` into the runtime via `.with_telemetry(handle)`.
    - Store `TelemetryShutdown` in `LiveCli` (or at the `run_repl` / `run_tui_repl` scope level).
@@ -183,15 +183,15 @@ pub struct TelemetryWorker { /* private */ }
 4. **`SessionEnd` event:** Emit in `LiveCli::persist_session()` or at REPL exit, pulling `turns` and `total_cost` from the `UsageTracker`, and `duration_ms` from a session start `Instant`.
 
 **Acceptance criteria:**
-- [ ] `claw` starts without error when `CLAW_TELEMETRY` is unset (telemetry active by default)
-- [ ] `CLAW_TELEMETRY=off claw -p "hi"` produces no telemetry file
-- [ ] After a normal session, `~/.config/claw/telemetry.jsonl` contains at least `ProviderSelected` and `TokenUsage` events
+- [ ] `elai` starts without error when `ELAI_TELEMETRY` is unset (telemetry active by default)
+- [ ] `ELAI_TELEMETRY=off elai -p "hi"` produces no telemetry file
+- [ ] After a normal session, `~/.config/elai/telemetry.jsonl` contains at least `ProviderSelected` and `TokenUsage` events
 - [ ] On `/exit` or Ctrl-C, pending events are flushed before process terminates
 - [ ] `DefaultRuntimeClient` field additions do not change its public API (it is a private struct)
 
 ---
 
-### Task 4 -- `claw stats` command
+### Task 4 -- `elai stats` command
 
 **What:** Add a `stats` subcommand that reads `telemetry.jsonl` and prints an ASCII summary table.
 
@@ -200,7 +200,7 @@ pub struct TelemetryWorker { /* private */ }
 1. **`CliAction` enum:** Add variant `Stats`.
 2. **`parse_args`:** Match `"stats"` as a positional subcommand.
 3. **New function `run_stats()`:**
-   - Read `~/.config/claw/telemetry.jsonl` line by line.
+   - Read `~/.config/elai/telemetry.jsonl` line by line.
    - Deserialize each line as `TelemetryEvent`.
    - Aggregate:
      - **By model:** total requests, total input/output tokens, total cost, avg latency
@@ -224,7 +224,7 @@ pub struct TelemetryWorker { /* private */ }
 4. **Wire in `run()`:** Add `CliAction::Stats => run_stats(),` to the match block.
 
 **Acceptance criteria:**
-- [ ] `claw stats` runs without error even when no telemetry file exists (prints "No telemetry data found")
+- [ ] `elai stats` runs without error even when no telemetry file exists (prints "No telemetry data found")
 - [ ] Handles malformed lines gracefully (skips them, does not panic)
 - [ ] Output is human-readable with aligned columns
 - [ ] Aggregation correctly sums tokens and costs across events
@@ -237,7 +237,7 @@ pub struct TelemetryWorker { /* private */ }
 
 **Files:**
 - Tests inside `crates/runtime/src/telemetry.rs` (inline `#[cfg(test)] mod tests`)
-- Integration-level test in `crates/claw-cli/tests/` if the project has integration tests (otherwise inline)
+- Integration-level test in `crates/elai-cli/tests/` if the project has integration tests (otherwise inline)
 
 **Test cases:**
 
@@ -266,7 +266,7 @@ pub struct TelemetryWorker { /* private */ }
 
 | Crate | Addition | Why |
 |-------|----------|-----|
-| `crates/runtime/Cargo.toml` | `dirs = "6"` | Resolve `~/.config/claw/` cross-platform |
+| `crates/runtime/Cargo.toml` | `dirs = "6"` | Resolve `~/.config/elai/` cross-platform |
 | (already present) | `tokio` with `fs`, `sync`, `time` | Async worker, mpsc, interval timer |
 | (already present) | `serde`, `serde_json` | Event serialization |
 
@@ -282,8 +282,8 @@ pub struct TelemetryWorker { /* private */ }
 | `crates/runtime/src/telemetry.rs` | CREATE | `TelemetryEvent`, `TelemetryHandle`, `TelemetryWorker`, flush logic, retention, tests |
 | `crates/runtime/src/lib.rs` | MODIFY | Add `mod telemetry;` and re-exports |
 | `crates/runtime/src/conversation.rs` | MODIFY | Add `telemetry` + `model_name` fields, emit `TokenUsage` in `run_turn` |
-| `crates/claw-cli/src/main.rs` | MODIFY | Wire telemetry startup/shutdown, emit `ProviderSelected`/`RequestFailed`/`SessionEnd`, add `Stats` action, `run_stats()` |
-| `crates/claw-cli/Cargo.toml` | MODIFY | (only if needed for `dirs` re-export -- likely not, since runtime already re-exports) |
+| `crates/elai-cli/src/main.rs` | MODIFY | Wire telemetry startup/shutdown, emit `ProviderSelected`/`RequestFailed`/`SessionEnd`, add `Stats` action, `run_stats()` |
+| `crates/elai-cli/Cargo.toml` | MODIFY | (only if needed for `dirs` re-export -- likely not, since runtime already re-exports) |
 
 ---
 
@@ -291,8 +291,8 @@ pub struct TelemetryWorker { /* private */ }
 
 1. `cargo build` compiles with no warnings
 2. `cargo test -p runtime` passes all existing + new tests
-3. Running `claw` interactively produces `~/.config/claw/telemetry.jsonl` with correctly structured events
-4. `claw stats` prints a readable summary table
-5. `CLAW_TELEMETRY=off claw -p "test"` produces no telemetry file
+3. Running `elai` interactively produces `~/.config/elai/telemetry.jsonl` with correctly structured events
+4. `elai stats` prints a readable summary table
+5. `ELAI_TELEMETRY=off elai -p "test"` produces no telemetry file
 6. Ctrl-C during a session still flushes pending events
 7. Sustained usage does not grow the file beyond ~10,000 lines

@@ -8,7 +8,7 @@
 
 ## Context
 
-The claw CLI (Rust) already implements SWD (Strict Write Discipline) in `crates/claw-cli/src/swd.rs` with transactional file writes, snapshots, rollback, and `[FILE_ACTION]` parsing. In full mode, when the assistant finishes a response, `parse_file_actions` extracts actions and `execute_file_actions` applies them atomically. Results are displayed in the TUI as a compact log (`SwdLogEntry`).
+The elai CLI (Rust) already implements SWD (Strict Write Discipline) in `crates/elai-cli/src/swd.rs` with transactional file writes, snapshots, rollback, and `[FILE_ACTION]` parsing. In full mode, when the assistant finishes a response, `parse_file_actions` extracts actions and `execute_file_actions` applies them atomically. Results are displayed in the TUI as a compact log (`SwdLogEntry`).
 
 The TypeScript reference in `mythos-router/src/diff.ts` implements a Myers diff algorithm with backtracking that produces `DiffLine { op, val }` entries and renders them with ANSI colors and line numbers. The `swd-cli.ts` file shows the integration: before applying each `FileAction`, the old content is snapshotted, a diff is computed against the new content, rendered, and the user is prompted to accept or reject each action individually.
 
@@ -61,9 +61,9 @@ Alternative considered (hand-rolled from `diff.ts`): rejected because it would r
 ### Step 1: Add `similar` dependency and create `diff.rs` module
 
 **Files:**
-- `crates/claw-cli/Cargo.toml` -- add `similar = "2"`
-- `crates/claw-cli/src/diff.rs` -- new file
-- `crates/claw-cli/src/main.rs` -- add `mod diff;`
+- `crates/elai-cli/Cargo.toml` -- add `similar = "2"`
+- `crates/elai-cli/src/diff.rs` -- new file
+- `crates/elai-cli/src/main.rs` -- add `mod diff;`
 
 **Implementation:**
 
@@ -106,7 +106,7 @@ Internally uses `similar::TextDiff::from_lines` and groups changes into hunks wi
 ### Step 2: Add `SwdDiffPreview` to TUI chat model and message channel
 
 **Files:**
-- `crates/claw-cli/src/tui.rs` -- modify `TuiMsg`, `ChatEntry`, `OverlayKind`
+- `crates/elai-cli/src/tui.rs` -- modify `TuiMsg`, `ChatEntry`, `OverlayKind`
 
 **Changes:**
 
@@ -146,7 +146,7 @@ SwdConfirmApply {
 ### Step 3: Render diff hunks in `chat_to_lines`
 
 **Files:**
-- `crates/claw-cli/src/tui.rs` -- add `SwdDiffEntry` arm in `chat_to_lines`
+- `crates/elai-cli/src/tui.rs` -- add `SwdDiffEntry` arm in `chat_to_lines`
 
 **Rendering rules** (matching `diff.ts` reference style):
 
@@ -177,7 +177,7 @@ SwdConfirmApply {
 ### Step 4: Integrate diff preview into SWD full-mode execution flow
 
 **Files:**
-- `crates/claw-cli/src/main.rs` -- modify the SWD full-mode block (~line 3732-3749)
+- `crates/elai-cli/src/main.rs` -- modify the SWD full-mode block (~line 3732-3749)
 
 **Current flow:**
 ```
@@ -211,7 +211,7 @@ MessageStop -> parse_file_actions -> for each action: snapshot old content, comp
 ### Step 5: Handle keyboard input for SwdConfirmApply overlay
 
 **Files:**
-- `crates/claw-cli/src/tui.rs` -- add key handling in the overlay match block
+- `crates/elai-cli/src/tui.rs` -- add key handling in the overlay match block
 
 **Overlay rendering:**
 ```
@@ -248,11 +248,11 @@ No other new dependencies required. `ratatui`, `crossterm`, `sha2`, `hex` are al
 
 | File | Change |
 |------|--------|
-| `crates/claw-cli/Cargo.toml` | Add `similar = "2"` |
-| `crates/claw-cli/src/diff.rs` | **NEW** -- diff computation module |
-| `crates/claw-cli/src/main.rs` | Add `mod diff;` + modify SWD full-mode block |
-| `crates/claw-cli/src/tui.rs` | Add `SwdDiffPreview` msg, `SwdDiffEntry` chat entry, `SwdConfirmApply` overlay, diff rendering in `chat_to_lines`, key handling |
-| `crates/claw-cli/src/swd.rs` | No changes needed (snapshot already exposes raw bytes) |
+| `crates/elai-cli/Cargo.toml` | Add `similar = "2"` |
+| `crates/elai-cli/src/diff.rs` | **NEW** -- diff computation module |
+| `crates/elai-cli/src/main.rs` | Add `mod diff;` + modify SWD full-mode block |
+| `crates/elai-cli/src/tui.rs` | Add `SwdDiffPreview` msg, `SwdDiffEntry` chat entry, `SwdConfirmApply` overlay, diff rendering in `chat_to_lines`, key handling |
+| `crates/elai-cli/src/swd.rs` | No changes needed (snapshot already exposes raw bytes) |
 
 ---
 

@@ -461,7 +461,7 @@ fn now_ms() -> u64 {
 pub fn swd_log_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".claw")
+        .join(".elai")
         .join("swd.log")
 }
 
