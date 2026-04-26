@@ -653,6 +653,10 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
         "stream": request.stream,
     });
 
+    if request.stream {
+        payload["stream_options"] = json!({ "include_usage": true });
+    }
+
     if let Some(tools) = &request.tools {
         payload["tools"] =
             Value::Array(tools.iter().map(openai_tool_definition).collect::<Vec<_>>());
