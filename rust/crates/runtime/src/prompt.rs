@@ -731,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn load_system_prompt_reads_claw_files_and_config() {
+    fn load_system_prompt_reads_elai_files_and_config() {
         let root = temp_dir();
         fs::create_dir_all(root.join(".claw")).expect("claw dir");
         fs::write(root.join("CLAW.md"), "Project rules").expect("write instructions");
@@ -744,9 +744,9 @@ mod tests {
         let _guard = env_lock();
         let previous = std::env::current_dir().expect("cwd");
         let original_home = std::env::var("HOME").ok();
-        let original_claw_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_claw_home = std::env::var("ELAI_CONFIG_HOME").ok();
         std::env::set_var("HOME", &root);
-        std::env::set_var("CLAW_CONFIG_HOME", root.join("missing-home"));
+        std::env::set_var("ELAI_CONFIG_HOME", root.join("missing-home"));
         std::env::set_current_dir(&root).expect("change cwd");
         let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8")
             .expect("system prompt should load")
@@ -762,9 +762,9 @@ mod tests {
             std::env::remove_var("HOME");
         }
         if let Some(value) = original_claw_home {
-            std::env::set_var("CLAW_CONFIG_HOME", value);
+            std::env::set_var("ELAI_CONFIG_HOME", value);
         } else {
-            std::env::remove_var("CLAW_CONFIG_HOME");
+            std::env::remove_var("ELAI_CONFIG_HOME");
         }
 
         assert!(prompt.contains("Project rules"));
@@ -773,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_claw_code_style_sections_with_project_context() {
+    fn renders_elai_code_style_sections_with_project_context() {
         let root = temp_dir();
         fs::create_dir_all(root.join(".claw")).expect("claw dir");
         fs::write(root.join("CLAW.md"), "Project rules").expect("write CLAW.md");
@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn discovers_dot_claw_instructions_markdown() {
+    fn discovers_dot_elai_instructions_markdown() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
         fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");

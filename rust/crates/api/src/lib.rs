@@ -12,10 +12,10 @@ pub use client::{
 };
 pub use error::ApiError;
 pub use orchestrator::{
-    ClawUnifiedAdapter, HealthReport, OpenAiUnifiedAdapter, ProviderCapability, ProviderConfig,
+    ElaiUnifiedAdapter, HealthReport, OpenAiUnifiedAdapter, ProviderCapability, ProviderConfig,
     ProviderOrchestrator, ProviderStatus, RequestOptions, TaskType,
 };
-pub use providers::claw_provider::{AuthSource, ClawApiClient, ClawApiClient as ApiClient};
+pub use providers::elai_provider::{AuthSource, ElaiApiClient, ElaiApiClient as ApiClient};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, resolve_model_alias, suggested_default_model,

@@ -21,7 +21,7 @@ pub struct PersistedProviderMetrics {
 
 #[must_use]
 pub fn metrics_path() -> PathBuf {
-    let config_dir = std::env::var("CLAW_CONFIG_HOME").map_or_else(
+    let config_dir = std::env::var("ELAI_CONFIG_HOME").map_or_else(
         |_| {
             dirs::config_dir()
                 .unwrap_or_else(|| PathBuf::from("."))

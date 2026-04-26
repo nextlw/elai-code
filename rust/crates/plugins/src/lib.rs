@@ -302,14 +302,14 @@ impl PluginTool {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("CLAW_PLUGIN_ID", &self.plugin_id)
-            .env("CLAW_PLUGIN_NAME", &self.plugin_name)
-            .env("CLAW_TOOL_NAME", &self.definition.name)
-            .env("CLAW_TOOL_INPUT", &input_json);
+            .env("ELAI_PLUGIN_ID", &self.plugin_id)
+            .env("ELAI_PLUGIN_NAME", &self.plugin_name)
+            .env("ELAI_TOOL_NAME", &self.definition.name)
+            .env("ELAI_TOOL_INPUT", &input_json);
         if let Some(root) = &self.root {
             process
                 .current_dir(root)
-                .env("CLAW_PLUGIN_ROOT", root.display().to_string());
+                .env("ELAI_PLUGIN_ROOT", root.display().to_string());
         }
 
         let mut child = process.spawn()?;
@@ -2122,7 +2122,7 @@ mod tests {
         let script_path = root.join("tools").join("echo-json.sh");
         write_file(
             &script_path,
-            "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAW_PLUGIN_ID\" \"$CLAW_TOOL_NAME\" \"$INPUT\"\n",
+            "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$ELAI_PLUGIN_ID\" \"$ELAI_TOOL_NAME\" \"$INPUT\"\n",
         );
         #[cfg(unix)]
         {

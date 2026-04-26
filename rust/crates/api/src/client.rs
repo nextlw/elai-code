@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::orchestrator::{
-    ClawUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig, ProviderOrchestrator, RequestOptions,
+    ElaiUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig, ProviderOrchestrator, RequestOptions,
 };
-use crate::providers::claw_provider::{self, AuthSource, ClawApiClient};
+use crate::providers::elai_provider::{self, AuthSource, ElaiApiClient};
 use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{
@@ -29,7 +29,7 @@ async fn stream_via_provider<P: Provider>(
 
 #[derive(Debug, Clone)]
 pub enum ProviderClient {
-    ClawApi(ClawApiClient),
+    ElaiApi(ElaiApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
     Orchestrated(Arc<ProviderOrchestrator>),
@@ -46,9 +46,9 @@ impl ProviderClient {
     ) -> Result<Self, ApiError> {
         let resolved_model = providers::resolve_model_alias(model);
         match providers::detect_provider_kind(&resolved_model) {
-            ProviderKind::ClawApi => Ok(Self::ClawApi(match default_auth {
-                Some(auth) => ClawApiClient::from_auth(auth),
-                None => ClawApiClient::from_env()?,
+            ProviderKind::ElaiApi => Ok(Self::ElaiApi(match default_auth {
+                Some(auth) => ElaiApiClient::from_auth(auth),
+                None => ElaiApiClient::from_env()?,
             })),
             ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::xai(),
@@ -66,10 +66,10 @@ impl ProviderClient {
         let mut priority = 0_usize;
         let mut registered_any = false;
 
-        if claw_provider::has_auth_from_env_or_saved().unwrap_or(false) {
-            if let Ok(client) = ClawApiClient::from_env() {
+        if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
+            if let Ok(client) = ElaiApiClient::from_env() {
                 orchestrator.register_provider(
-                    Box::new(ClawUnifiedAdapter::new(client)),
+                    Box::new(ElaiUnifiedAdapter::new(client)),
                     ProviderConfig {
                         id: "anthropic".to_string(),
                         priority,
@@ -126,7 +126,7 @@ impl ProviderClient {
     #[must_use]
     pub fn provider_kind(&self) -> ProviderKind {
         match self {
-            Self::ClawApi(_) | Self::Orchestrated(_) => ProviderKind::ClawApi,
+            Self::ElaiApi(_) | Self::Orchestrated(_) => ProviderKind::ElaiApi,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
         }
@@ -137,7 +137,7 @@ impl ProviderClient {
         request: &MessageRequest,
     ) -> Result<MessageResponse, ApiError> {
         match self {
-            Self::ClawApi(client) => send_via_provider(client, request).await,
+            Self::ElaiApi(client) => send_via_provider(client, request).await,
             Self::Xai(client) | Self::OpenAi(client) => send_via_provider(client, request).await,
             Self::Orchestrated(orchestrator) => {
                 orchestrator
@@ -152,9 +152,9 @@ impl ProviderClient {
         request: &MessageRequest,
     ) -> Result<MessageStream, ApiError> {
         match self {
-            Self::ClawApi(client) => stream_via_provider(client, request)
+            Self::ElaiApi(client) => stream_via_provider(client, request)
                 .await
-                .map(MessageStream::ClawApi),
+                .map(MessageStream::ElaiApi),
             Self::Xai(client) | Self::OpenAi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
@@ -172,7 +172,7 @@ impl ProviderClient {
 
 #[derive(Debug)]
 pub enum MessageStream {
-    ClawApi(claw_provider::MessageStream),
+    ElaiApi(elai_provider::MessageStream),
     OpenAiCompat(openai_compat::MessageStream),
     Collected(CollectedMessageStream),
 }
@@ -181,7 +181,7 @@ impl MessageStream {
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         match self {
-            Self::ClawApi(stream) => stream.request_id(),
+            Self::ElaiApi(stream) => stream.request_id(),
             Self::OpenAiCompat(stream) => stream.request_id(),
             Self::Collected(stream) => stream.request_id(),
         }
@@ -189,7 +189,7 @@ impl MessageStream {
 
     pub async fn next_event(&mut self) -> Result<Option<StreamEvent>, ApiError> {
         match self {
-            Self::ClawApi(stream) => stream.next_event().await,
+            Self::ElaiApi(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
             Self::Collected(stream) => stream.next_event().await,
         }
@@ -267,12 +267,12 @@ impl CollectedMessageStream {
     }
 }
 
-pub use claw_provider::{
+pub use elai_provider::{
     oauth_token_is_expired, resolve_saved_oauth_token, resolve_startup_auth_source, OAuthTokenSet,
 };
 #[must_use]
 pub fn read_base_url() -> String {
-    claw_provider::read_base_url()
+    elai_provider::read_base_url()
 }
 
 #[must_use]
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(detect_provider_kind("grok-3"), ProviderKind::Xai);
         assert_eq!(
             detect_provider_kind("claude-sonnet-4-6"),
-            ProviderKind::ClawApi
+            ProviderKind::ElaiApi
         );
     }
 }

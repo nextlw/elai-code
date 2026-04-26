@@ -4,7 +4,7 @@ use std::pin::Pin;
 use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
-pub mod claw_provider;
+pub mod elai_provider;
 pub mod openai_compat;
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + Send + 'a>>;
@@ -25,7 +25,7 @@ pub trait Provider {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
-    ClawApi,
+    ElaiApi,
     Xai,
     OpenAi,
 }
@@ -42,55 +42,55 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     (
         "opus",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
         "sonnet",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
         "haiku",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
         "claude-opus-4-6",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
         "claude-sonnet-4-6",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
         "claude-haiku-4-5-20251213",
         ProviderMetadata {
-            provider: ProviderKind::ClawApi,
+            provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: claw_provider::DEFAULT_BASE_URL,
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
         },
     ),
     (
@@ -148,7 +148,7 @@ pub fn resolve_model_alias(model: &str) -> String {
         .iter()
         .find_map(|(alias, metadata)| {
             (*alias == lower).then_some(match metadata.provider {
-                ProviderKind::ClawApi => match *alias {
+                ProviderKind::ElaiApi => match *alias {
                     "opus" => "claude-opus-4-6",
                     "sonnet" => "claude-sonnet-4-6",
                     "haiku" => "claude-haiku-4-5-20251213",
@@ -207,8 +207,8 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
     }
-    if claw_provider::has_auth_from_env_or_saved().unwrap_or(false) {
-        return ProviderKind::ClawApi;
+    if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
+        return ProviderKind::ElaiApi;
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return ProviderKind::OpenAi;
@@ -216,7 +216,7 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if openai_compat::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
     }
-    ProviderKind::ClawApi
+    ProviderKind::ElaiApi
 }
 
 /// OpenAI Chat Completions rejects requests when `max_tokens` exceeds the model's completion limit
@@ -244,7 +244,7 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 }
 
 fn openai_max_completion_tokens(lower: &str) -> u32 {
-    if let Ok(raw) = std::env::var("CLAW_OPENAI_MAX_COMPLETION_TOKENS") {
+    if let Ok(raw) = std::env::var("ELAI_OPENAI_MAX_COMPLETION_TOKENS") {
         if let Ok(parsed) = raw.trim().parse::<u32>() {
             if (1..=128_000).contains(&parsed) {
                 return parsed;
@@ -263,12 +263,12 @@ fn openai_max_completion_tokens(lower: &str) -> u32 {
 pub fn suggested_default_model() -> String {
     const FALLBACK: &str = "gpt-4o-mini";
     if openai_compat::has_api_key("OPENAI_API_KEY") {
-        return std::env::var("CLAW_DEFAULT_OPENAI_MODEL")
+        return std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| FALLBACK.to_string());
     }
-    if claw_provider::has_auth_from_env_or_saved().unwrap_or(false) {
+    if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
         return FALLBACK.to_string();
     }
     if openai_compat::has_api_key("XAI_API_KEY") {
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(detect_provider_kind("grok"), ProviderKind::Xai);
         assert_eq!(
             detect_provider_kind("claude-sonnet-4-6"),
-            ProviderKind::ClawApi
+            ProviderKind::ElaiApi
         );
         assert_eq!(detect_provider_kind("gpt-4o"), ProviderKind::OpenAi);
     }

@@ -19,7 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    max_tokens_for_model, resolve_model_alias, suggested_default_model, AuthSource, ClawApiClient,
+    max_tokens_for_model, resolve_model_alias, suggested_default_model, AuthSource, ElaiApiClient,
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
     OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
     ToolResultContentBlock,
@@ -114,7 +114,7 @@ fn load_workspace_dotenv() {
             let path = dir.join(".env");
             if path.is_file() {
                 let _ = dotenvy::from_path(&path);
-                claw_env_fill_missing_from_file(&path);
+                elai_env_fill_missing_from_file(&path);
                 return;
             }
         }
@@ -122,12 +122,12 @@ fn load_workspace_dotenv() {
 }
 
 /// Sets only known API keys from `path` when they are not already in the process environment.
-fn claw_env_fill_missing_from_file(path: &Path) {
+fn elai_env_fill_missing_from_file(path: &Path) {
     const KEYS: &[&str] = &[
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
-        "CLAW_DEFAULT_OPENAI_MODEL",
+        "ELAI_DEFAULT_OPENAI_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "XAI_API_KEY",
@@ -290,7 +290,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 1;
             }
             "--orchestrate" => {
-                env::set_var("CLAW_ORCHESTRATE", "1");
+                env::set_var("ELAI_ORCHESTRATE", "1");
                 index += 1;
             }
             "--swd" => {
@@ -546,7 +546,7 @@ fn permission_mode_from_label(mode: &str) -> PermissionMode {
 }
 
 fn default_permission_mode() -> PermissionMode {
-    env::var("CLAW_PERMISSION_MODE")
+    env::var("ELAI_PERMISSION_MODE")
         .ok()
         .as_deref()
         .and_then(normalize_permission_mode)
@@ -623,7 +623,7 @@ fn dump_manifests() {
 }
 
 fn print_bootstrap_plan() {
-    for phase in runtime::BootstrapPlan::claw_default().phases() {
+    for phase in runtime::BootstrapPlan::elai_default().phases() {
         println!("- {phase:?}");
     }
 }
@@ -680,7 +680,7 @@ fn run_login() -> Result<(), Box<dyn std::error::Error>> {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "oauth state mismatch").into());
     }
 
-    let client = ClawApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
+    let client = ElaiApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
     let exchange_request =
         OAuthTokenExchangeRequest::from_config(oauth, code, state, pkce.verifier, redirect_uri);
     let runtime = tokio::runtime::Runtime::new()?;
@@ -1072,7 +1072,7 @@ fn run_resume_command(
         }),
         SlashCommand::Init => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(init_claw_md()?),
+            message: Some(init_elai_md()?),
         }),
         SlashCommand::Diff => Ok(ResumeCommandOutcome {
             session: session.clone(),
@@ -2866,13 +2866,13 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     ))
 }
 
-fn init_claw_md() -> Result<String, Box<dyn std::error::Error>> {
+fn init_elai_md() -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     Ok(initialize_repo(&cwd)?.render())
 }
 
 fn run_init() -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", init_claw_md()?);
+    println!("{}", init_elai_md()?);
     Ok(())
 }
 
@@ -3810,7 +3810,7 @@ impl DefaultRuntimeClient {
         progress_reporter: Option<InternalPromptProgressReporter>,
         swd_level: Arc<std::sync::atomic::AtomicU8>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let orchestrate = env::var("CLAW_ORCHESTRATE")
+        let orchestrate = env::var("ELAI_ORCHESTRATE")
             .ok()
             .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
@@ -5668,7 +5668,7 @@ mod tests {
 
     #[test]
     fn init_template_mentions_detected_rust_workspace() {
-        let rendered = crate::init::render_init_claw_md(std::path::Path::new("."));
+        let rendered = crate::init::render_init_elai_md(std::path::Path::new("."));
         assert!(rendered.contains("# CLAW.md"));
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
@@ -5816,7 +5816,7 @@ mod tests {
             task_label: "ship plugin progress".to_string(),
             step: 3,
             phase: "running read_file".to_string(),
-            detail: Some("reading rust/crates/claw-cli/src/main.rs".to_string()),
+            detail: Some("reading rust/crates/elai-cli/src/main.rs".to_string()),
             saw_final_text: false,
         };
 
@@ -5863,8 +5863,8 @@ mod tests {
             "reading src/main.rs"
         );
         assert!(
-            describe_tool_progress("bash", r#"{"command":"cargo test -p claw-cli"}"#)
-                .contains("cargo test -p claw-cli")
+            describe_tool_progress("bash", r#"{"command":"cargo test -p elai-cli"}"#)
+                .contains("cargo test -p elai-cli")
         );
         assert_eq!(
             describe_tool_progress("grep_search", r#"{"pattern":"ultraplan","path":"rust"}"#),

@@ -250,29 +250,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "claw-cli"
-version = "0.1.0"
-dependencies = [
- "api",
- "commands",
- "compat-harness",
- "crossterm",
- "dotenvy",
- "hex",
- "plugins",
- "pulldown-cmark",
- "ratatui",
- "runtime",
- "rustyline",
- "serde_json",
- "sha2",
- "similar",
- "syntect",
- "tokio",
- "tools",
-]
-
-[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,6 +497,29 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "elai-cli"
+version = "0.1.0"
+dependencies = [
+ "api",
+ "commands",
+ "compat-harness",
+ "crossterm",
+ "dotenvy",
+ "hex",
+ "plugins",
+ "pulldown-cmark",
+ "ratatui",
+ "runtime",
+ "rustyline",
+ "serde_json",
+ "sha2",
+ "similar",
+ "syntect",
+ "tokio",
+ "tools",
+]
 
 [[package]]
 name = "endian-type"

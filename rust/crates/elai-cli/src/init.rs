@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STARTER_CLAW_JSON: &str = concat!(
+const STARTER_ELAI_JSON: &str = concat!(
     "{\n",
     "  \"permissions\": {\n",
     "    \"defaultMode\": \"dontAsk\"\n",
@@ -89,7 +89,7 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
     let claw_json = cwd.join(".claw.json");
     artifacts.push(InitArtifact {
         name: ".claw.json",
-        status: write_file_if_missing(&claw_json, STARTER_CLAW_JSON)?,
+        status: write_file_if_missing(&claw_json, STARTER_ELAI_JSON)?,
     });
 
     let gitignore = cwd.join(".gitignore");
@@ -99,7 +99,7 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
     });
 
     let claw_md = cwd.join("CLAW.md");
-    let content = render_init_claw_md(cwd);
+    let content = render_init_elai_md(cwd);
     artifacts.push(InitArtifact {
         name: "CLAW.md",
         status: write_file_if_missing(&claw_md, &content)?,
@@ -159,7 +159,7 @@ fn ensure_gitignore_entries(path: &Path) -> Result<InitStatus, std::io::Error> {
     Ok(InitStatus::Updated)
 }
 
-pub(crate) fn render_init_claw_md(cwd: &Path) -> String {
+pub(crate) fn render_init_elai_md(cwd: &Path) -> String {
     let detection = detect_repo(cwd);
     let mut lines = vec![
         "# CLAW.md".to_string(),
@@ -333,7 +333,7 @@ fn framework_notes(detection: &RepoDetection) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_repo, render_init_claw_md};
+    use super::{initialize_repo, render_init_elai_md};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -432,7 +432,7 @@ mod tests {
         )
         .expect("write package json");
 
-        let rendered = render_init_claw_md(Path::new(&root));
+        let rendered = render_init_elai_md(Path::new(&root));
         assert!(rendered.contains("Languages: Python, TypeScript."));
         assert!(rendered.contains("Frameworks/tooling markers: Next.js, React."));
         assert!(rendered.contains("pyproject.toml"));

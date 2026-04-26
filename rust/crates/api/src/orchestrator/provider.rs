@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::types::ProviderCapability;
 use crate::error::ApiError;
-use crate::providers::{claw_provider, openai_compat};
+use crate::providers::{elai_provider, openai_compat};
 use crate::types::{
     ContentBlockDelta, MessageResponse, MessageRequest, OutputContentBlock, StreamEvent, Usage,
 };
@@ -18,16 +18,16 @@ pub trait UnifiedProvider: Send + Sync {
     async fn health_check(&self) -> Result<(), ApiError>;
 }
 
-/// Adapter wrapping `ClawApiClient` so it conforms to `UnifiedProvider`.
-pub struct ClawUnifiedAdapter {
-    client: claw_provider::ClawApiClient,
+/// Adapter wrapping `ElaiApiClient` so it conforms to `UnifiedProvider`.
+pub struct ElaiUnifiedAdapter {
+    client: elai_provider::ElaiApiClient,
     provider_id: String,
     capabilities: HashSet<ProviderCapability>,
 }
 
-impl ClawUnifiedAdapter {
+impl ElaiUnifiedAdapter {
     #[must_use]
-    pub fn new(client: claw_provider::ClawApiClient) -> Self {
+    pub fn new(client: elai_provider::ElaiApiClient) -> Self {
         let mut caps = HashSet::new();
         caps.insert(ProviderCapability::Thinking);
         caps.insert(ProviderCapability::ToolCalling);
@@ -41,7 +41,7 @@ impl ClawUnifiedAdapter {
 }
 
 #[async_trait]
-impl UnifiedProvider for ClawUnifiedAdapter {
+impl UnifiedProvider for ElaiUnifiedAdapter {
     fn id(&self) -> &str {
         &self.provider_id
     }
@@ -58,7 +58,7 @@ impl UnifiedProvider for ClawUnifiedAdapter {
         let mut stream_req = request.clone();
         stream_req.stream = true;
         let mut stream = self.client.stream_message(&stream_req).await?;
-        collect_claw_stream(&mut stream).await
+        collect_elai_stream(&mut stream).await
     }
 
     async fn health_check(&self) -> Result<(), ApiError> {
@@ -132,8 +132,8 @@ fn empty_response() -> MessageResponse {
     }
 }
 
-async fn collect_claw_stream(
-    stream: &mut claw_provider::MessageStream,
+async fn collect_elai_stream(
+    stream: &mut elai_provider::MessageStream,
 ) -> Result<MessageResponse, ApiError> {
     let mut events = Vec::new();
     while let Some(event) = stream.next_event().await? {
