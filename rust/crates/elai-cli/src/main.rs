@@ -2145,6 +2145,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 },
             }
         }
+        "exit" | "quit" => {
+            app.should_quit = true;
+        }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
                 "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
