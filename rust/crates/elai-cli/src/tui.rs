@@ -1270,17 +1270,15 @@ const ELAI_ASCII: &str = "\
   ████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
   ████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
   ██████████████████   ███████╗███████╗██║  ██║██║\n\
-        ████  ████     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
+      ████  ████       ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     // corpo do mascote e texto ELAI: laranja claro
     let body_style = Style::default().fg(Color::Rgb(242, 222, 206));
-    // olhos (▄ ▀ e █ depois de ░): laranja saturado
+    // olhos (▄ ▀ e █ depois de ▓): laranja saturado
     let eye_style = Style::default().fg(Color::Rgb(201, 123, 74));
-    // ░ células: fundo recuado ("cavidade" dos olhos)
-    let dot_style = Style::default()
-        .fg(Color::Indexed(241))
-        .bg(Color::Indexed(236));
+    // ▓ células: cavidade dos olhos — marrom escuro visível
+    let dot_style = Style::default().fg(Color::Rgb(110, 65, 28));
     let dim = Style::default().fg(Color::DarkGray);
 
     let username = whoami_user();
@@ -1327,10 +1325,14 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
         })
         .collect();
 
-    lines.push(Line::from(Span::styled(
-        format!("  Welcome back, {username}!"),
-        dim,
-    )));
+    lines.push(Line::from(vec![
+        Span::styled(format!("  Welcome back, {username}!"), dim),
+        Span::raw("  "),
+        Span::styled(
+            format!("v{}", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::Rgb(201, 123, 74)),
+        ),
+    ]));
     lines.push(Line::from(Span::styled(format!("  {cwd}"), dim)));
 
     let block = Block::default()
