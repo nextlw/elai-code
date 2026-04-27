@@ -176,6 +176,15 @@ const RECOGNIZED_EXTENSIONS: &[&str] = &[
     ".rs", ".ts", ".toml", ".md", ".json", ".yaml", ".yml", ".py", ".go", ".sh",
 ];
 
+/// Paths that are always local/machine-specific and must never be flagged as
+/// missing — even when the instruction file mentions them in prose.
+const LOCAL_ONLY_PATHS: &[&str] = &[
+    ".elai.json",
+    ".elai/settings.local.json",
+    ".elai/settings.local.toml",
+    ".claude/settings.local.json",
+];
+
 /// Extract file path references from the given instruction file contents.
 /// `instruction_files` is a slice of (path, content) pairs.
 pub fn parse_memory_entries(instruction_files: &[(PathBuf, String)]) -> Vec<MemoryEntry> {
@@ -187,6 +196,11 @@ pub fn parse_memory_entries(instruction_files: &[(PathBuf, String)]) -> Vec<Memo
             let line_number = line_idx + 1;
             let candidates = extract_path_candidates(line);
             for path_str in candidates {
+                // Skip machine-local paths — they are never committed and
+                // reporting them as "missing" is always a false positive.
+                if LOCAL_ONLY_PATHS.iter().any(|p| path_str == *p) {
+                    continue;
+                }
                 let pb = PathBuf::from(&path_str);
                 if seen.contains(&pb) {
                     continue;

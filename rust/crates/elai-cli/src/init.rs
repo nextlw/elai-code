@@ -209,7 +209,7 @@ pub(crate) fn render_init_elai_md(cwd: &Path) -> String {
 
     lines.push("## Working agreement".to_string());
     lines.push("- Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.".to_string());
-    lines.push("- Keep shared defaults in `.elai.json`; reserve `.elai/settings.local.json` for machine-local overrides.".to_string());
+    lines.push("- Keep shared defaults in .elai.json; reserve .elai/settings.local.json for machine-local overrides (both are gitignored and never committed).".to_string());
     lines.push("- Do not overwrite existing `ELAI.md` content automatically; update it intentionally when repo workflows change.".to_string());
     lines.push(String::new());
 
