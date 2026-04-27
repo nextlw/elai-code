@@ -14,6 +14,26 @@
   <img src="https://img.shields.io/badge/built_with-Rust-orange?style=for-the-badge&logo=rust" alt="Rust" />
 </p>
 
+## Install
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.sh | sh
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.ps1 | iex
+```
+
+Both commands download the latest binary, install it, and add it to your PATH. After installing, open a new terminal and run:
+
+```sh
+elai
+```
+
 ---
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
@@ -68,33 +88,39 @@ Declarative TOML-based tool definitions, MatcherPattern wildcards, a 5-stage sel
 
 ## Quickstart
 
-### Requirements
+### 1. Install
 
-- Rust 1.77+ with Cargo
-- An Anthropic API key (or OpenAI-compatible endpoint)
-
-### Build
+See the [Install](#install) section above for one-liners. Or build from source:
 
 ```bash
 git clone https://github.com/nextlw/elai-code.git
 cd elai-code/rust
 cargo build --release
+# binary: rust/target/release/elai
 ```
 
-The binary is at `rust/target/release/elai`.
-
-### Run
+### 2. Set your API key
 
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
-./elai
 ```
 
-Or point to an OpenAI-compatible endpoint:
+Or for OpenAI-compatible endpoints:
 
 ```bash
 export OPENAI_API_KEY=your_key_here
-./elai --model gpt-4o-mini --api-base https://your-proxy/v1
+```
+
+### 3. Run
+
+```bash
+elai
+```
+
+Switch provider at runtime:
+
+```bash
+elai --model gpt-4o-mini --api-base https://your-proxy/v1
 ```
 
 ---

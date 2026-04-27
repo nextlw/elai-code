@@ -143,6 +143,14 @@ pub enum OverlayKind {
         action_count: usize,
         reply_tx: std::sync::mpsc::SyncSender<bool>,
     },
+    SetupWizard {
+        step: u8,
+        provider_sel: usize,
+        key1: String,
+        key2: String,
+        input: String,
+        cursor: usize,
+    },
 }
 
 // ─── Application state ────────────────────────────────────────────────────────
@@ -478,6 +486,17 @@ impl UiApp {
             selected: 0,
         });
     }
+
+    pub fn open_setup_wizard(&mut self) {
+        self.overlay = Some(OverlayKind::SetupWizard {
+            step: 0,
+            provider_sel: 0,
+            key1: String::new(),
+            key2: String::new(),
+            input: String::new(),
+            cursor: 0,
+        });
+    }
 }
 
 fn slash_palette_items() -> Vec<(String, String)> {
@@ -497,6 +516,7 @@ fn slash_palette_items() -> Vec<(String, String)> {
         ("version".into(), "Mostrar versão".into()),
         ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
         ("budget".into(), "Budget limiter (tokens/custo)".into()),
+        ("keys".into(), "Configurar/trocar API keys".into()),
         ("exit".into(), "Sair".into()),
     ]
 }
@@ -528,6 +548,7 @@ pub enum TuiAction {
     SlashCommand(String),
     EnterReadMode,
     ExitReadMode,
+    SetupComplete,
     Quit,
     None,
 }
@@ -722,9 +743,15 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             TuiAction::None
         }
 
-        // Tab: open slash palette if input starts with /
+        // '/' on empty input: auto-open slash palette
+        (KeyModifiers::NONE, KeyCode::Char('/')) if app.input.is_empty() => {
+            app.open_slash_palette();
+            TuiAction::None
+        }
+
+        // Tab: open slash palette (also works mid-word for / commands)
         (KeyModifiers::NONE, KeyCode::Tab) => {
-            if app.input.starts_with('/') {
+            if app.input.is_empty() || app.input.starts_with('/') {
                 app.open_slash_palette();
             }
             TuiAction::None
@@ -888,9 +915,6 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             mut selected,
         }) => {
             match (key.modifiers, key.code) {
-                (KeyModifiers::NONE, KeyCode::Esc) => {
-                    app.overlay = None;
-                }
                 (KeyModifiers::NONE, KeyCode::Up) => {
                     selected = selected.saturating_sub(1);
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
@@ -905,9 +929,15 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                     if let Some((cmd, _)) = filtered.get(selected) {
                         let cmd = cmd.clone();
                         app.overlay = None;
+                        app.clear_input();
                         return TuiAction::SlashCommand(format!("/{cmd}"));
                     }
                     app.overlay = None;
+                    app.clear_input();
+                }
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                    app.clear_input();
                 }
                 (KeyModifiers::NONE, KeyCode::Backspace) => {
                     filter.pop();
@@ -979,6 +1009,168 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             }
             app.overlay = None;
             TuiAction::None
+        }
+
+        Some(OverlayKind::SetupWizard {
+            step,
+            provider_sel,
+            key1,
+            key2,
+            input,
+            cursor,
+        }) => {
+            match step {
+                0 => {
+                    // Provider selection step
+                    match (key.modifiers, key.code) {
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            app.overlay = None;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Up) => {
+                            let sel = provider_sel.saturating_sub(1);
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel: sel,
+                                key1,
+                                key2,
+                                input,
+                                cursor,
+                            });
+                        }
+                        (KeyModifiers::NONE, KeyCode::Down) => {
+                            let sel = (provider_sel + 1).min(2);
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel: sel,
+                                key1,
+                                key2,
+                                input,
+                                cursor,
+                            });
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            // Advance to key input step
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step: 1,
+                                provider_sel,
+                                key1,
+                                key2,
+                                input: String::new(),
+                                cursor: 0,
+                            });
+                        }
+                        _ => {
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel,
+                                key1,
+                                key2,
+                                input,
+                                cursor,
+                            });
+                        }
+                    }
+                    TuiAction::None
+                }
+                1 | 2 => {
+                    // Key input step
+                    match (key.modifiers, key.code) {
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            app.overlay = None;
+                            TuiAction::None
+                        }
+                        (KeyModifiers::NONE, KeyCode::Backspace)
+                        | (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                            let mut new_input = input.clone();
+                            let mut new_cursor = cursor;
+                            if new_cursor > 0 {
+                                new_cursor -= 1;
+                                let byte_idx = new_input
+                                    .char_indices()
+                                    .nth(new_cursor)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(new_input.len());
+                                new_input.remove(byte_idx);
+                            }
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel,
+                                key1,
+                                key2,
+                                input: new_input,
+                                cursor: new_cursor,
+                            });
+                            TuiAction::None
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            if step == 1 {
+                                // Finished typing key1
+                                let new_key1 = input.clone();
+                                if provider_sel == 2 {
+                                    // "Both" — advance to step 2 for key2
+                                    app.overlay = Some(OverlayKind::SetupWizard {
+                                        step: 2,
+                                        provider_sel,
+                                        key1: new_key1,
+                                        key2: String::new(),
+                                        input: String::new(),
+                                        cursor: 0,
+                                    });
+                                    TuiAction::None
+                                } else {
+                                    // Single provider — save and close
+                                    let _ = save_setup_keys(provider_sel, &new_key1, "");
+                                    app.overlay = None;
+                                    TuiAction::SetupComplete
+                                }
+                            } else {
+                                // step == 2: finished typing key2
+                                let new_key2 = input.clone();
+                                let _ = save_setup_keys(provider_sel, &key1, &new_key2);
+                                app.overlay = None;
+                                TuiAction::SetupComplete
+                            }
+                        }
+                        (_, KeyCode::Char(c))
+                            if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            let mut new_input = input.clone();
+                            let mut new_cursor = cursor;
+                            let byte_idx = new_input
+                                .char_indices()
+                                .nth(new_cursor)
+                                .map(|(i, _)| i)
+                                .unwrap_or(new_input.len());
+                            new_input.insert(byte_idx, c);
+                            new_cursor += 1;
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel,
+                                key1,
+                                key2,
+                                input: new_input,
+                                cursor: new_cursor,
+                            });
+                            TuiAction::None
+                        }
+                        _ => {
+                            app.overlay = Some(OverlayKind::SetupWizard {
+                                step,
+                                provider_sel,
+                                key1,
+                                key2,
+                                input,
+                                cursor,
+                            });
+                            TuiAction::None
+                        }
+                    }
+                }
+                _ => {
+                    app.overlay = None;
+                    TuiAction::None
+                }
+            }
         }
 
         None => TuiAction::None,
@@ -1695,7 +1887,7 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let hint = " /help · ↑/↓ histórico · Tab slash · F2 modelo · F3 perm · F4 sessão · Ctrl+R leitura · Ctrl+C sair";
+    let hint = " / comandos · ↑/↓ histórico · F2 modelo · F3 perm · F4 sessão · Ctrl+R leitura · Ctrl+C sair";
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -1815,6 +2007,14 @@ fn draw_overlay(
         }
         OverlayKind::SwdConfirmApply { action_count, .. } => {
             draw_swd_confirm(frame, area, *action_count);
+        }
+        OverlayKind::SetupWizard {
+            step,
+            provider_sel,
+            input,
+            ..
+        } => {
+            draw_setup_wizard(frame, area, *step, *provider_sel, input);
         }
     }
 }
@@ -2002,6 +2202,150 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
     ];
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_setup_wizard(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    step: u8,
+    provider_sel: usize,
+    input: &str,
+) {
+    let width = 52u16.min(area.width.saturating_sub(4));
+    let height = 12u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Configurar API Key ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Indexed(215)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines: Vec<Line> = if step == 0 {
+        let providers = [
+            ("Anthropic", "(Claude opus / sonnet / haiku)"),
+            ("OpenAI", "(gpt-4o, gpt-4o-mini, o3...)"),
+            ("Ambos", ""),
+        ];
+        let mut v: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Escolha seu provedor de IA:",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+        ];
+        for (i, (name, note)) in providers.iter().enumerate() {
+            let selected = i == provider_sel;
+            let prefix = if selected { "  \u{25b6} " } else { "    " };
+            let label = format!("[{}] {:<10} {}", i + 1, name, note);
+            v.push(Line::from(Span::styled(
+                format!("{prefix}{label}"),
+                if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Indexed(215))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            )));
+        }
+        v.push(Line::from(""));
+        v.push(Line::from(Span::styled(
+            "  \u{2191}/\u{2193} navegar \u{00b7} Enter confirmar",
+            Style::default().fg(Color::DarkGray),
+        )));
+        v
+    } else {
+        let provider_name = match provider_sel {
+            0 => "Anthropic",
+            1 => "OpenAI",
+            _ => if step == 1 { "Anthropic" } else { "OpenAI" },
+        };
+        let field_label = format!("  {} API key:", provider_name);
+        let masked: String = "\u{2022}".repeat(input.chars().count());
+        let display = format!("  > {masked}");
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(field_label, Style::default().fg(Color::White))),
+            Line::from(""),
+            Line::from(Span::styled(
+                display,
+                Style::default().fg(Color::Indexed(215)),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter confirmar \u{00b7} Esc cancelar",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    };
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+pub fn save_setup_keys(provider_sel: usize, key1: &str, key2: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+    let dir = home.join(".elai");
+    std::fs::create_dir_all(&dir)?;
+    let env_path = dir.join(".env");
+
+    // Read existing content to preserve other keys.
+    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| {
+            let k = l.trim_start_matches("export ").split('=').next().unwrap_or("");
+            k != "ANTHROPIC_API_KEY" && k != "OPENAI_API_KEY"
+        })
+        .map(String::from)
+        .collect();
+
+    match provider_sel {
+        0 => {
+            lines.push(format!("ANTHROPIC_API_KEY={key1}"));
+            std::env::set_var("ANTHROPIC_API_KEY", key1);
+        }
+        1 => {
+            lines.push(format!("OPENAI_API_KEY={key1}"));
+            std::env::set_var("OPENAI_API_KEY", key1);
+        }
+        _ => {
+            lines.push(format!("ANTHROPIC_API_KEY={key1}"));
+            lines.push(format!("OPENAI_API_KEY={key2}"));
+            std::env::set_var("ANTHROPIC_API_KEY", key1);
+            std::env::set_var("OPENAI_API_KEY", key2);
+        }
+    }
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&env_path)?;
+    writeln!(f, "# Elai Code \u{2014} API keys")?;
+    for line in &lines {
+        if !line.starts_with('#') {
+            writeln!(f, "{line}")?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

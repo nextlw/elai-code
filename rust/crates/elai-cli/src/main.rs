@@ -106,11 +106,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Loads the first `.env` found walking up from the current directory (same idea as many Node tools).
+/// Loads API keys in priority order:
+/// 1. `~/.elai/.env`  — global user config written by the installer
+/// 2. First `.env` found walking up from the current directory (project-level override)
 ///
-/// Large third-party `.env` files (e.g. Rails) can make `dotenvy` fail to parse the whole file; we then
-/// still pick up Elai-related keys with a small line-based pass.
+/// Keys already set in the process environment are never overwritten, so
+/// an explicit `export` in the shell always wins.
 fn load_workspace_dotenv() {
+    // 1. Global user config (~/.elai/.env)
+    if let Some(home) = dirs_home() {
+        let global = home.join(".elai").join(".env");
+        if global.is_file() {
+            let _ = dotenvy::from_path(&global);
+            elai_env_fill_missing_from_file(&global);
+        }
+    }
+
+    // 2. Project-level .env (walks up from cwd, up to 12 levels)
     if let Ok(cwd) = env::current_dir() {
         for dir in cwd.ancestors().take(12) {
             let path = dir.join(".env");
@@ -121,6 +133,18 @@ fn load_workspace_dotenv() {
             }
         }
     }
+}
+
+fn dirs_home() -> Option<std::path::PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+fn has_any_api_key() -> bool {
+    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY"]
+        .iter()
+        .any(|k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false))
 }
 
 /// Sets only known API keys from `path` when they are not already in the process environment.
@@ -1273,6 +1297,12 @@ fn run_tui_repl(
         Arc::clone(&swd_atomic),
     );
     app.budget_enabled = budget_tracker.lock().unwrap().is_enabled();
+
+    // First-run or missing key: open setup wizard immediately.
+    if !has_any_api_key() {
+        app.open_setup_wizard();
+    }
+
     // Tracks the last warning threshold already shown (90 or 80) to avoid repeating.
     let mut budget_warned_at: u8 = 0;
 
@@ -1466,6 +1496,14 @@ fn run_tui_repl(
                         EnableMouseCapture
                     );
                 }
+                tui::TuiAction::SetupComplete => {
+                    // Re-detect the best model now that keys are in the environment.
+                    let new_model = suggested_default_model();
+                    app.model = new_model.clone();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "\u{2705} API key salva em ~/.elai/.env\n  Modelo padrão: {new_model}"
+                    )));
+                }
                 tui::TuiAction::None => {}
             }
 
@@ -1558,6 +1596,7 @@ Comandos disponíveis:\n\
   /memory        Mostrar conteúdo do ELAI.md\n\
   /init          Inicializar ELAI.md no projeto\n\
   /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
+  /keys          Configurar/trocar API keys\n\
   /version       Mostrar versão\n\
   /exit          Sair\n\
 Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
@@ -1741,6 +1780,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 current.as_str(),
                 new_level.as_str()
             )));
+        }
+        "keys" | "setup" => {
+            app.open_setup_wizard();
         }
         "agents" | "skills" => {
             app.push_chat(tui::ChatEntry::SystemNote(

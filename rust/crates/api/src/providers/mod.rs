@@ -261,20 +261,21 @@ fn openai_max_completion_tokens(lower: &str) -> u32 {
 /// Default model id for the CLI when the user did not pass `--model`, based on which API keys exist.
 #[must_use]
 pub fn suggested_default_model() -> String {
-    const FALLBACK: &str = "gpt-4o-mini";
+    // Priority: Anthropic → OpenAI → xAI → fallback
+    if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
+        return "claude-sonnet-4-6".to_string();
+    }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
             .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| FALLBACK.to_string());
-    }
-    if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
-        return FALLBACK.to_string();
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "gpt-4o-mini".to_string());
     }
     if openai_compat::has_api_key("XAI_API_KEY") {
         return "grok-3".to_string();
     }
-    FALLBACK.to_string()
+    // No key detected yet — neutral fallback; wizard will correct this.
+    "claude-sonnet-4-6".to_string()
 }
 
 #[cfg(test)]

@@ -10,3 +10,4 @@ archive/
 .elai/sessions/
 .DS_Store
 **/.DS_Store
+.env
