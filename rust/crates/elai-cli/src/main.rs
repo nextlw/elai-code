@@ -38,13 +38,15 @@ use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    check_rate_limit, clear_oauth_credentials, generate_pkce_pair, generate_state,
-    load_budget_config, load_system_prompt, parse_oauth_callback_request_target, save_budget_config,
-    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
-    BudgetTracker, BudgetUsagePct, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
+    check_rate_limit, clear_oauth_credentials, generate_cache_key, generate_pkce_pair,
+    generate_state, load_budget_config, load_system_prompt, now_millis,
+    parse_oauth_callback_request_target, save_budget_config, save_oauth_credentials, ApiClient,
+    ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus, BudgetTracker, BudgetUsagePct,
+    CacheStats, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
     ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
     OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session, TelemetryEvent,
+    TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
 };
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
@@ -95,7 +97,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output_format,
             allowed_tools,
             permission_mode,
-        } => LiveCli::new(model, true, allowed_tools, permission_mode)?
+        } => LiveCli::new(model, true, allowed_tools, permission_mode, false)?
             .run_turn_with_output(&prompt, output_format)?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
@@ -105,9 +107,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             allowed_tools,
             permission_mode,
             no_tui,
+            no_cache,
             swd_level,
             budget_config,
-        } => run_repl(model, allowed_tools, permission_mode, no_tui, swd_level, budget_config)?,
+        } => run_repl(model, allowed_tools, permission_mode, no_tui, no_cache, swd_level, budget_config)?,
         CliAction::Help => print_help(),
         CliAction::Stats { days, by_model, by_project } => run_stats_command(days, by_model, by_project),
         CliAction::Verify => run_verify_command()?,
@@ -237,6 +240,7 @@ enum CliAction {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
         no_tui: bool,
+        no_cache: bool,
         swd_level: crate::swd::SwdLevel,
         budget_config: Option<BudgetConfig>,
     },
@@ -278,6 +282,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut allowed_tool_values = Vec::new();
     let mut rest = Vec::new();
     let mut no_tui = false;
+    let mut no_cache = false;
     let mut swd_level_arg = crate::swd::SwdLevel::default();
     let mut budget_max_tokens: Option<u64> = None;
     let mut budget_max_usd: Option<f64> = None;
@@ -330,6 +335,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--no-tui" => {
                 no_tui = true;
+                index += 1;
+            }
+            "--no-cache" => {
+                no_cache = true;
                 index += 1;
             }
             "--orchestrate" => {
@@ -470,6 +479,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             allowed_tools,
             permission_mode,
             no_tui,
+            no_cache,
             swd_level: swd_level_arg,
             budget_config,
         });
@@ -591,6 +601,75 @@ fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
             )
         })
         .map(permission_mode_from_label)
+}
+
+/// Remove o binário, ~/.elai/ e as linhas do shell RC inseridas pelo instalador.
+fn perform_uninstall() -> String {
+    let mut log = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
+
+    // 1. Binário
+    let install_dir = std::env::var("ELAI_INSTALL_DIR").unwrap_or_else(|_| "/usr/local/bin".into());
+    let bin = std::path::PathBuf::from(&install_dir).join("elai");
+    match std::fs::remove_file(&bin) {
+        Ok(_) => log.push(format!("✅ Removido: {}", bin.display())),
+        Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
+    }
+
+    // 2. Diretório ~/.elai/
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let elai_dir = std::path::PathBuf::from(home).join(".elai");
+        match std::fs::remove_dir_all(&elai_dir) {
+            Ok(_) => log.push(format!("✅ Removido: {}", elai_dir.display())),
+            Err(e) => errors.push(format!("⚠ {}: {e}", elai_dir.display())),
+        }
+    }
+
+    // 3. Linhas do shell RC (bloco marcado com "# elai-code api keys")
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let home_str = std::env::var("HOME").unwrap_or_default();
+    let rc_path = if shell.contains("zsh") {
+        format!("{home_str}/.zshrc")
+    } else if shell.contains("fish") {
+        format!("{home_str}/.config/fish/config.fish")
+    } else if shell.contains("bash") {
+        format!("{home_str}/.bashrc")
+    } else if std::path::Path::new(&format!("{home_str}/.zshrc")).exists() {
+        format!("{home_str}/.zshrc")
+    } else {
+        format!("{home_str}/.bashrc")
+    };
+
+    const MARKER: &str = "# elai-code api keys";
+    if let Ok(content) = std::fs::read_to_string(&rc_path) {
+        let mut out_lines: Vec<&str> = Vec::new();
+        let mut skip = false;
+        for line in content.lines() {
+            if line == MARKER {
+                skip = true;
+                continue;
+            }
+            if skip && (line.starts_with("export ANTHROPIC_API_KEY") || line.starts_with("export OPENAI_API_KEY")) {
+                continue;
+            }
+            skip = false;
+            out_lines.push(line);
+        }
+        let new_content = out_lines.join("\n") + "\n";
+        if new_content.trim() != content.trim() {
+            match std::fs::write(&rc_path, &new_content) {
+                Ok(_) => log.push(format!("✅ Linhas elai removidas de {rc_path}")),
+                Err(e) => errors.push(format!("⚠ Não foi possível atualizar {rc_path}: {e}")),
+            }
+        }
+    }
+
+    let mut result = log.join("\n");
+    if !errors.is_empty() {
+        result.push_str("\n\nAvisos:\n");
+        result.push_str(&errors.join("\n"));
+    }
+    result
 }
 
 fn estimate_tui_cost(app: &tui::UiApp) -> f64 {
@@ -741,6 +820,21 @@ fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
         }
     };
     print!("{}", render_stats_report(&entries, by_model, by_project, days));
+}
+
+fn run_verify_command() -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = std::env::current_dir()?;
+    let output = verify::run_verify(&cwd)?;
+    println!("{output}");
+    Ok(())
+}
+
+fn start_telemetry() -> (TelemetryHandle, Option<TelemetryShutdown>) {
+    if std::env::var("ELAI_TELEMETRY").as_deref() == Ok("off") {
+        return (TelemetryHandle::noop(), None);
+    }
+    let (handle, shutdown) = TelemetryWorker::start();
+    (handle, Some(shutdown))
 }
 
 fn dump_manifests() {
@@ -1265,6 +1359,8 @@ fn run_resume_command(
         | SlashCommand::Dream { .. }
         | SlashCommand::Stats { .. }
         | SlashCommand::Providers { .. }
+        | SlashCommand::Cache { .. }
+        | SlashCommand::Verify
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -1274,6 +1370,7 @@ fn run_repl(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     no_tui: bool,
+    no_cache: bool,
     swd_level: crate::swd::SwdLevel,
     budget_config: Option<BudgetConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1284,7 +1381,7 @@ fn run_repl(
     let _ = budget_config;
 
     // Fallback: plain text REPL (piped/non-TTY).
-    let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
+    let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode, no_cache)?;
     let mut editor = input::LineEditor::new("> ", slash_command_completion_candidates());
     println!("{}", cli.startup_banner());
 
@@ -1574,6 +1671,13 @@ fn run_tui_repl(
                         "\u{2705} API key salva em ~/.elai/.env\n  Modelo padrão: {new_model}"
                     )));
                 }
+                tui::TuiAction::Uninstall => {
+                    let report = perform_uninstall();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "Desinstalação concluída:\n{report}\n\nEla Code foi removido. Encerrando..."
+                    )));
+                    app.should_quit = true;
+                }
                 tui::TuiAction::None => {}
             }
 
@@ -1664,9 +1768,12 @@ Comandos disponíveis:\n\
   /compact       Compactar histórico (mantém últimas 20 msgs)\n\
   /export        Exportar conversa para arquivo .txt\n\
   /memory        Mostrar conteúdo do ELAI.md\n\
+  /dream         Comprimir entradas antigas da memória (AI summary)\n\
   /init          Inicializar ELAI.md no projeto\n\
+  /verify        Verificar codebase vs memória (ELAI.md)\n\
   /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
   /keys          Configurar/trocar API keys\n\
+  /uninstall     Desinstalar Elai Code\n\
   /version       Mostrar versão\n\
   /exit          Sair\n\
 Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
@@ -1827,6 +1934,15 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 ))),
             }
         }
+        "verify" => {
+            let cwd = env::current_dir().unwrap_or_default();
+            match verify::run_verify(&cwd) {
+                Ok(report) => app.push_chat(tui::ChatEntry::SystemNote(report)),
+                Err(e) => {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!("❌ Erro no /verify: {e}")));
+                }
+            }
+        }
         "swd" => {
             use std::sync::atomic::Ordering;
             use crate::swd::SwdLevel;
@@ -1853,6 +1969,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "keys" | "setup" => {
             app.open_setup_wizard();
+        }
+        "uninstall" => {
+            app.open_uninstall_confirm();
         }
         "agents" | "skills" => {
             app.push_chat(tui::ChatEntry::SystemNote(
@@ -1965,6 +2084,45 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             };
             app.push_chat(tui::ChatEntry::SystemNote(output));
         }
+        "dream" => {
+            let cwd = env::current_dir().unwrap_or_default();
+            match dream::find_memory_file(&cwd) {
+                None => {
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "Nenhum arquivo de memória encontrado (ELAI.md, CLAUDE.md, .elai/ELAI.md)."
+                            .into(),
+                    ));
+                }
+                Some(path) => match fs::read_to_string(&path) {
+                    Err(e) => {
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "Erro ao ler arquivo: {e}"
+                        )));
+                    }
+                    Ok(content) => {
+                        let parsed = dream::parse_memory_sections(&content);
+                        let force = arg.map_or(false, |a| a == "--force");
+                        if parsed.old_entries.is_empty() && !force {
+                            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                "Dream: nada a comprimir ({} entradas <= 20). Use /dream --force para forçar.",
+                                parsed.recent_entries.len()
+                            )));
+                        } else {
+                            let n = if parsed.old_entries.is_empty() {
+                                parsed.recent_entries.len().saturating_sub(20)
+                            } else {
+                                parsed.old_entries.len()
+                            };
+                            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                "Dream: {} entradas prontas para comprimir em {}. Use /dream no modo REPL para executar com IA.",
+                                n,
+                                path.display()
+                            )));
+                        }
+                    }
+                },
+            }
+        }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
                 "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
@@ -1997,6 +2155,7 @@ struct LiveCli {
     telemetry: TelemetryHandle,
     _telemetry_shutdown: Option<TelemetryShutdown>,
     session_start: Instant,
+    cache: ResponseCache,
 }
 
 impl LiveCli {
@@ -2005,6 +2164,7 @@ impl LiveCli {
         enable_tools: bool,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        no_cache: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
         let session = create_managed_session_handle()?;
@@ -2023,6 +2183,18 @@ impl LiveCli {
             None,
             telemetry.clone(),
         )?;
+
+        // Initialize response cache.
+        let cache = if no_cache {
+            ResponseCache::disabled()
+        } else {
+            let cache_path = dirs_home()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".elai")
+                .join("cache.json");
+            ResponseCache::new(cache_path, ResponseCache::DEFAULT_TTL_MS)
+        };
+
         let cli = Self {
             model,
             allowed_tools,
@@ -2033,6 +2205,7 @@ impl LiveCli {
             telemetry,
             _telemetry_shutdown: telemetry_shutdown,
             session_start: Instant::now(),
+            cache,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -2070,6 +2243,21 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Build cache key from current session messages + this user input.
+        let cache_key = {
+            let mut msgs = self.runtime.session().messages.clone();
+            msgs.push(ConversationMessage::user_text(input));
+            generate_cache_key(&msgs, &self.model, &self.system_prompt)
+        };
+
+        // Cache hit: serve from cache without calling the API.
+        if let Some(ref key) = cache_key {
+            if let Some(cached) = self.cache.get(key) {
+                println!("{}", cached.response_json);
+                return Ok(());
+            }
+        }
+
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
         spinner.tick(
@@ -2080,7 +2268,35 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = self.runtime.run_turn(input, Some(&mut permission_prompter));
         match result {
-            Ok(_) => {
+            Ok(summary) => {
+                // Store the assistant text in cache (only for tool-free turns).
+                if let Some(key) = cache_key {
+                    let response_text = summary
+                        .assistant_messages
+                        .iter()
+                        .filter_map(|m| {
+                            m.blocks.iter().find_map(|b| {
+                                if let runtime::ContentBlock::Text { text } = b {
+                                    Some(text.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if !response_text.is_empty() {
+                        self.cache.put(key, CachedResponse {
+                            response_json: response_text,
+                            model: self.model.clone(),
+                            created_at_ms: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0),
+                            hit_count: 0,
+                        });
+                    }
+                }
                 // Spinner finish clears the *current* terminal line. Streamed assistant text often
                 // leaves the cursor on the last line of output without a trailing newline, so we must
                 // move to a fresh line first or the clear wipes the visible reply.
@@ -2091,6 +2307,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     &mut stdout,
                 )?;
                 println!();
+                self.emit_turn_telemetry(&summary, None);
                 self.persist_session()?;
                 Ok(())
             }
@@ -2104,6 +2321,44 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 Err(Box::new(error))
             }
         }
+    }
+
+    fn emit_turn_telemetry(&self, summary: &runtime::TurnSummary, error_type: Option<&str>) {
+        use runtime::{default_telemetry_path, now_iso8601, pricing_for_model, TelemetryEntry, TelemetryWriter};
+        let usage = &summary.usage;
+        let cost_usd = pricing_for_model(&self.model)
+            .map(|p| {
+                f64::from(usage.input_tokens) * p.input_cost_per_million / 1_000_000.0
+                    + f64::from(usage.output_tokens) * p.output_cost_per_million / 1_000_000.0
+                    + f64::from(usage.cache_creation_input_tokens)
+                        * p.cache_creation_cost_per_million
+                        / 1_000_000.0
+                    + f64::from(usage.cache_read_input_tokens)
+                        * p.cache_read_cost_per_million
+                        / 1_000_000.0
+            })
+            .unwrap_or(0.0);
+        let project = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let entry = TelemetryEntry {
+            timestamp: now_iso8601(),
+            session_id: self.session.id.clone(),
+            project,
+            model: self.model.clone(),
+            input_tokens: u64::from(usage.input_tokens),
+            output_tokens: u64::from(usage.output_tokens),
+            cache_write_tokens: u64::from(usage.cache_creation_input_tokens),
+            cache_read_tokens: u64::from(usage.cache_read_input_tokens),
+            cost_usd,
+            latency_ms: self.session_start.elapsed().as_millis() as u64,
+            success: error_type.is_none(),
+            provider: None,
+            error_type: error_type.map(str::to_string),
+        };
+        let writer = TelemetryWriter::new(default_telemetry_path());
+        let _ = writer.append(&entry);
     }
 
     fn run_turn_with_output(
@@ -2279,10 +2534,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs()
-                        .saturating_sub(u64::from(*d) * 86400)
+                        .saturating_sub(u64::from(d) * 86400)
                 });
                 match load_entries(&path, since_secs) {
-                    Ok(entries) => print!("{}", render_stats_report(&entries, true, false, *days)),
+                    Ok(entries) => print!("{}", render_stats_report(&entries, true, false, days)),
                     Err(e) => eprintln!("error reading telemetry: {e}"),
                 }
                 false
@@ -2292,8 +2547,18 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 use runtime::{default_telemetry_path, load_entries};
                 let path = default_telemetry_path();
                 match load_entries(&path, None) {
-                    Ok(entries) => print!("{}", render_providers_dashboard(&entries, *verbose)),
+                    Ok(entries) => print!("{}", render_providers_dashboard(&entries, verbose)),
                     Err(e) => eprintln!("error reading telemetry: {e}"),
+                }
+                false
+            }
+            SlashCommand::Cache { .. } => {
+                Self::repl_feature_not_wired("cache command not yet wired to REPL")
+            }
+            SlashCommand::Verify => {
+                match verify::run_verify(&std::env::current_dir().unwrap_or_default()) {
+                    Ok(output) => { println!("{output}"); }
+                    Err(e) => eprintln!("error running verify: {e}"),
                 }
                 false
             }
@@ -2306,6 +2571,36 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime.session().save_to_path(&self.session.path)?;
         Ok(())
+    }
+
+    fn handle_cache_command(&mut self, subcommand: Option<&str>) {
+        match subcommand.map(str::trim).unwrap_or("stats") {
+            "clear" => {
+                self.cache.clear();
+                let _ = self.cache.flush();
+                println!("Cache cleared.");
+            }
+            _ => {
+                let s = self.cache.stats();
+                let oldest_age = s.oldest_entry_ms.map(|ms| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let age_secs = now.saturating_sub(ms) / 1000;
+                    format!("{age_secs}s ago")
+                });
+                println!(
+                    "Cache
+  Entries          {}
+  Total hits       {}
+  Oldest entry     {}",
+                    s.total_entries,
+                    s.total_hits,
+                    oldest_age.as_deref().unwrap_or("—"),
+                );
+            }
+        }
     }
 
     fn print_status(&self) {
@@ -2854,6 +3149,13 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         };
         println!("{}", dream::format_dream_output(&result));
         Ok(())
+    }
+}
+
+impl Drop for LiveCli {
+    fn drop(&mut self) {
+        // Silently flush cache on exit; errors are non-critical.
+        let _ = self.cache.flush();
     }
 }
 
@@ -5470,6 +5772,7 @@ mod tests {
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
                 budget_config: None,
+                no_cache: false,
             }
         );
     }
@@ -5566,6 +5869,7 @@ mod tests {
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
                 budget_config: None,
+                no_cache: false,
             }
         );
     }
@@ -5590,6 +5894,7 @@ mod tests {
                 no_tui: false,
                 swd_level: crate::swd::SwdLevel::default(),
                 budget_config: None,
+                no_cache: false,
             }
         );
     }
@@ -5802,7 +6107,8 @@ mod tests {
             names,
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-                "version", "export", "agents", "skills", "budget", "tools",
+                "version", "export", "agents", "skills", "budget", "tools", "stats", "providers",
+                "verify",
             ]
         );
     }

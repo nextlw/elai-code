@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+mod response_cache;
 pub mod tool_catalog;
 pub mod budget;
 mod compact;
@@ -18,6 +19,7 @@ mod remote;
 pub mod sandbox;
 mod session;
 pub mod skills;
+pub mod telemetry;
 mod usage;
 
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
@@ -92,6 +94,9 @@ pub use tool_catalog::{
     FilterPattern, PipelineResult, PipelineTool, RateLimit, RateLimiter, RejectedTool,
     RejectionReason, ToolBudgetConfig, ToolCatalog,
 };
+pub use response_cache::{
+    generate_cache_key, CacheKey, CacheStats, CachedResponse, ResponseCache,
+};
 pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
@@ -100,6 +105,11 @@ pub use remote::{
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+
+pub use telemetry::{
+    default_telemetry_path, load_entries, now_iso8601, now_millis, TelemetryEntry, TelemetryEvent,
+    TelemetryHandle, TelemetryShutdown, TelemetryWorker, TelemetryWriter,
 };
 
 #[cfg(test)]

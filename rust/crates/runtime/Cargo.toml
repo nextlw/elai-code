@@ -14,8 +14,12 @@ plugins = { path = "../plugins" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 walkdir = "2"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

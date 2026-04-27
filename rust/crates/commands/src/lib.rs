@@ -1,3 +1,6 @@
+pub mod providers;
+pub mod stats;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -261,6 +264,41 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[why]"),
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "cache",
+        aliases: &[],
+        summary: "Manage the response cache",
+        argument_hint: Some("[clear|stats]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "dream",
+        aliases: &[],
+        summary: "Compress old memory entries into a summary",
+        argument_hint: Some("[--force]"),
+        resume_supported: false,
+    },
+    SlashCommandSpec {
+        name: "stats",
+        aliases: &[],
+        summary: "Show token usage and cost statistics",
+        argument_hint: Some("[--days N] [--by-model] [--by-project]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "providers",
+        aliases: &[],
+        summary: "Show provider usage dashboard",
+        argument_hint: Some("[--verbose]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "verify",
+        aliases: &[],
+        summary: "Verify codebase files against memory entries",
+        argument_hint: None,
+        resume_supported: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,6 +378,19 @@ pub enum SlashCommand {
     Tools {
         subcommand: Option<String>,
     },
+    Cache {
+        subcommand: Option<String>,
+    },
+    Dream {
+        force: bool,
+    },
+    Stats {
+        days: Option<u32>,
+    },
+    Providers {
+        verbose: bool,
+    },
+    Verify,
     Unknown(String),
 }
 
@@ -432,6 +483,29 @@ impl SlashCommand {
             "tools" => Self::Tools {
                 subcommand: parts.next().map(ToOwned::to_owned),
             },
+            "cache" => Self::Cache {
+                subcommand: parts.next().map(ToOwned::to_owned),
+            },
+            "dream" => Self::Dream {
+                force: parts.next() == Some("--force"),
+            },
+            "stats" => {
+                let mut days: Option<u32> = None;
+                let remainder = parts.collect::<Vec<_>>().join(" ");
+                let mut iter = remainder.split_whitespace();
+                while let Some(tok) = iter.next() {
+                    if tok == "--days" {
+                        days = iter.next().and_then(|v| v.parse().ok());
+                    } else if let Some(s) = tok.strip_prefix("--days=") {
+                        days = s.parse().ok();
+                    }
+                }
+                Self::Stats { days }
+            }
+            "providers" => Self::Providers {
+                verbose: trimmed.contains("--verbose"),
+            },
+            "verify" => Self::Verify,
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1756,6 +1830,11 @@ pub fn handle_slash_command(
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
         | SlashCommand::Budget { .. }
+        | SlashCommand::Cache { .. }
+        | SlashCommand::Dream { .. }
+        | SlashCommand::Stats { .. }
+        | SlashCommand::Providers { .. }
+        | SlashCommand::Verify
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -2154,8 +2233,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 29);
-        assert_eq!(resume_supported_slash_commands().len(), 14);
+        assert_eq!(slash_command_specs().len(), 35);
+        assert_eq!(resume_supported_slash_commands().len(), 18);
     }
 
     #[test]

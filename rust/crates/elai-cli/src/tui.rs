@@ -143,6 +143,7 @@ pub enum OverlayKind {
         action_count: usize,
         reply_tx: std::sync::mpsc::SyncSender<bool>,
     },
+    UninstallConfirm,
     SetupWizard {
         step: u8,
         provider_sel: usize,
@@ -497,6 +498,10 @@ impl UiApp {
             cursor: 0,
         });
     }
+
+    pub fn open_uninstall_confirm(&mut self) {
+        self.overlay = Some(OverlayKind::UninstallConfirm);
+    }
 }
 
 fn slash_palette_items() -> Vec<(String, String)> {
@@ -513,10 +518,13 @@ fn slash_palette_items() -> Vec<(String, String)> {
         ("export".into(), "Exportar conversa".into()),
         ("init".into(), "Inicializar projeto".into()),
         ("memory".into(), "Mostrar ELAI.md".into()),
+        ("dream".into(), "Comprimir entradas antigas da memória (AI)".into()),
+        ("verify".into(), "Verificar codebase vs memória (ELAI.md)".into()),
         ("version".into(), "Mostrar versão".into()),
         ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
         ("budget".into(), "Budget limiter (tokens/custo)".into()),
         ("keys".into(), "Configurar/trocar API keys".into()),
+        ("uninstall".into(), "Desinstalar Elai Code".into()),
         ("exit".into(), "Sair".into()),
     ]
 }
@@ -549,6 +557,7 @@ pub enum TuiAction {
     EnterReadMode,
     ExitReadMode,
     SetupComplete,
+    Uninstall,
     Quit,
     None,
 }
@@ -983,6 +992,20 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 _ => {
                     app.overlay = Some(OverlayKind::SessionPicker { items, selected });
+                }
+            }
+            TuiAction::None
+        }
+
+        Some(OverlayKind::UninstallConfirm) => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    app.overlay = None;
+                    return TuiAction::Uninstall;
+                }
+                _ => {
+                    app.overlay = None;
+                    app.push_chat(ChatEntry::SystemNote("Desinstalação cancelada.".into()));
                 }
             }
             TuiAction::None
@@ -2010,6 +2033,9 @@ fn draw_overlay(
         OverlayKind::SwdConfirmApply { action_count, .. } => {
             draw_swd_confirm(frame, area, *action_count);
         }
+        OverlayKind::UninstallConfirm => {
+            draw_uninstall_confirm(frame, area);
+        }
         OverlayKind::SetupWizard {
             step,
             provider_sel,
@@ -2199,6 +2225,60 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
         Line::from(""),
         Line::from(Span::styled(
             "  A/Enter = Aceitar  ·  R/Esc = Rejeitar",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
+    let width = 56u16.min(area.width.saturating_sub(4));
+    let height = 13u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" ⚠  Desinstalar Elai Code ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let install_dir = std::env::var("ELAI_INSTALL_DIR").unwrap_or_else(|_| "/usr/local/bin".into());
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Serão removidos:",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  • {install_dir}/elai"),
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(Span::styled(
+            format!("  • {home}/.elai/"),
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(Span::styled(
+            "  • Linhas elai-code no arquivo shell RC",
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esta ação é irreversível.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter confirmar  ·  Esc cancelar",
             Style::default().fg(Color::DarkGray),
         )),
     ];

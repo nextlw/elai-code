@@ -8,6 +8,7 @@ use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookRunResult, HookRunner};
 use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
 use crate::session::{ContentBlock, ConversationMessage, Session};
+use crate::telemetry::{now_millis, TelemetryEvent, TelemetryHandle};
 use crate::usage::{TokenUsage, UsageTracker};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +98,8 @@ pub struct ConversationRuntime<C, T> {
     max_iterations: usize,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
+    telemetry: TelemetryHandle,
+    model_name: Option<String>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -141,12 +144,26 @@ where
             max_iterations: usize::MAX,
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(feature_config),
+            telemetry: TelemetryHandle::noop(),
+            model_name: None,
         }
     }
 
     #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    #[must_use]
+    pub fn with_telemetry(mut self, handle: TelemetryHandle) -> Self {
+        self.telemetry = handle;
+        self
+    }
+
+    #[must_use]
+    pub fn with_model_name(mut self, name: impl Into<String>) -> Self {
+        self.model_name = Some(name.into());
         self
     }
 
@@ -179,6 +196,19 @@ where
             let (assistant_message, usage) = build_assistant_message(events)?;
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
+                let model = self
+                    .model_name
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                self.telemetry.emit(TelemetryEvent::TokenUsage {
+                    timestamp_ms: now_millis(),
+                    model,
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_tokens: usage.cache_read_input_tokens,
+                    cache_write_tokens: usage.cache_creation_input_tokens,
+                    cost_usd: usage.estimate_cost_usd().total_cost_usd(),
+                });
             }
             let pending_tool_uses = assistant_message
                 .blocks

@@ -1,6 +1,7 @@
 target/
 .omx/
 .elaid-agents/
+.elai-agents/
 # Elai Code local artifacts
 .elai/settings.local.json
 .elai/sessions/
