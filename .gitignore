@@ -9,3 +9,4 @@ archive/
 .elai/settings.local.json
 .elai/sessions/
 .DS_Store
+**/.DS_Store
