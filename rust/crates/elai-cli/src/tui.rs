@@ -1270,7 +1270,7 @@ const ELAI_ASCII: &str = "\
   ████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
   ████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
   ██████████████████   ███████╗███████╗██║  ██║██║\n\
-          ████  ████   ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
+";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     // corpo do mascote e texto ELAI: laranja claro
@@ -1324,6 +1324,18 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
             Line::from(spans)
         })
         .collect();
+
+    // Braços do mascote: cada um em uma span separada (gap não colapsa).
+    // Braço direito recua 1 col da borda para não ficar colado na quina do corpo.
+    // Última linha do "ELAI" (╚══════╝...) compartilha esta linha à direita.
+    lines.push(Line::from(vec![
+        Span::raw("         "),
+        Span::styled("███", body_style),
+        Span::raw("  "),
+        Span::styled("███", body_style),
+        Span::raw("    "),
+        Span::styled("╚══════╝╚══════╝╚═╝  ╚═╝╚═╝", body_style),
+    ]));
 
     lines.push(Line::from(vec![
         Span::styled(format!("  Welcome back, {username}!"), dim),
