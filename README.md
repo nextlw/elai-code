@@ -38,6 +38,21 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
+## What's New — v0.4.0
+
+| Feature | Command | Description |
+| ------- | ------- | ----------- |
+| **Telemetry** | automatic | Persists per-request usage to `~/.elai/telemetry.jsonl` |
+| **Stats** | `elai stats` · `/stats` | Token usage and cost table by model and project |
+| **Providers** | `/providers` | Health dashboard — EMA latency, success rate, score |
+| **Response Cache** | `--no-cache` · `/cache` | Deterministic SHA-256 cache with 1h TTL, tool-call bypass |
+| **Budget Limiter** | `--budget-usd` · `/budget` | Hard limits on tokens/turns/USD with TUI progress bar |
+| **Dream** | `/dream` | AI-powered compression of old ELAI.md memory entries |
+| **Verify** | `elai verify` · `/verify` | Diff codebase files vs memory entries (verified/missing/drift) |
+| **Skills** | SKILL.md | Full metadata + priority injection into system prompt |
+
+---
+
 ## Features
 
 ### Strict Write Discipline (SWD)
