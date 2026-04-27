@@ -38,10 +38,14 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v0.4.0
+## What's New — v0.4.6
 
-| Feature | Command | Description |
-| ------- | ------- | ----------- |
+- fix(cli): implementar subcomando uninstall e corrigir extração do changelog
+- ci(release): auto-gerar changelog e atualizar README ao criar release
+
+---
+
+------- | ------- | ----------- |
 | **Telemetry** | automatic | Persists per-request usage to `~/.elai/telemetry.jsonl` |
 | **Stats** | `elai stats` · `/stats` | Token usage and cost table by model and project |
 | **Providers** | `/providers` | Health dashboard — EMA latency, success rate, score |
