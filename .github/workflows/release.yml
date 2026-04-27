@@ -170,6 +170,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: "Elai Code ${{ github.ref_name }}"
+          generate_release_notes: true
           body: |
             ## Install
 
@@ -194,6 +195,7 @@ jobs:
             | Windows x86_64 | `elai-windows-x86_64.exe` |
 
             See `checksums.txt` to verify downloads.
+
           files: |
             artifacts/elai-macos-arm64
             artifacts/elai-macos-x86_64

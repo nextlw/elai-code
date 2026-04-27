@@ -13,6 +13,13 @@ struct Release {
     download_url: String,
 }
 
+/// Returned by [`check_available`] when a newer release exists.
+pub struct UpdateAvailable {
+    pub current: &'static str,
+    pub latest: String,
+}
+
+
 fn asset_name() -> Option<&'static str> {
     match (env::consts::OS, env::consts::ARCH) {
         ("macos", "aarch64") => Some("elai-macos-arm64"),
@@ -120,6 +127,20 @@ fn apply(release: &Release) {
             std::process::exit(1);
         }
     }
+}
+
+/// Non-blocking check used by TUI mode. Returns `Some` when a newer release
+/// exists so the caller can surface the notification inside the UI.
+pub fn check_available() -> Option<UpdateAvailable> {
+    if env::var("CI").is_ok() || env::var("ELAI_SKIP_UPDATE").is_ok() {
+        return None;
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let release = fetch_latest()?;
+    if !is_newer(&release.version, current) {
+        return None;
+    }
+    Some(UpdateAvailable { current, latest: release.version })
 }
 
 /// Chamado no boot. Bloqueia e força update quando há versão mais nova.

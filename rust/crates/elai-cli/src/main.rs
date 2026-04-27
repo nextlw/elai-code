@@ -77,7 +77,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     load_workspace_dotenv();
     let args: Vec<String> = env::args().skip(1).collect();
     let action = parse_args(&args)?;
-    if !matches!(action, CliAction::Update | CliAction::Version | CliAction::Help) {
+    // Skip automatic update enforcement for Repl — TUI mode shows a non-blocking
+    // in-UI notification via a background thread instead (see run_tui_repl).
+    if !matches!(
+        action,
+        CliAction::Update | CliAction::Version | CliAction::Help | CliAction::Repl { .. }
+    ) {
         updater::check_and_enforce();
     }
     match action {
@@ -1464,6 +1469,20 @@ fn run_tui_repl(
         Arc::clone(&swd_atomic),
     );
     app.budget_enabled = budget_tracker.lock().unwrap().is_enabled();
+
+    // Background update check — result surfaces as a SystemNote inside the TUI,
+    // never blocks startup or forces a terminal-mode prompt.
+    {
+        let update_tx = msg_tx.clone();
+        std::thread::spawn(move || {
+            if let Some(upd) = updater::check_available() {
+                let _ = update_tx.send(tui::TuiMsg::SystemNote(format!(
+                    "⬆ Nova versão disponível: v{} → v{}. Digite /update para atualizar.",
+                    upd.current, upd.latest
+                )));
+            }
+        });
+    }
 
     // First-run or missing key: open setup wizard immediately.
     if !has_any_api_key() {
