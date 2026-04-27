@@ -176,22 +176,6 @@ level = "partial"
 mode = "workspace-write"
 ```
 
----
-
-## Python Workspace
-
-The `src/` tree is a Python reference surface used for porting audits and integration tests. It is **not** the production runtime — the Rust CLI is the canonical implementation.
-
-```bash
-# Render porting summary
-python3 -m src.main summary
-
-# List current Python modules
-python3 -m src.main subsystems --limit 16
-
-# Run verification
-python3 -m unittest discover -s tests -v
-```
 
 ---
 
