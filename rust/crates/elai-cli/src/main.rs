@@ -42,7 +42,7 @@ use runtime::{
     generate_state, load_budget_config, load_system_prompt, now_millis,
     parse_oauth_callback_request_target, save_budget_config, save_oauth_credentials, ApiClient,
     ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus, BudgetTracker, BudgetUsagePct,
-    CacheStats, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
+    CachedResponse, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
     ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
     OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
     PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session, TelemetryEvent,
@@ -510,6 +510,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
         "update" => Ok(CliAction::Update),
+        "verify" => Ok(CliAction::Verify),
         "stats" => {
             let mut days: Option<u32> = None;
             let mut by_model = false;
@@ -1955,8 +1956,10 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "verify" => {
             let cwd = env::current_dir().unwrap_or_default();
-            match verify::run_verify(&cwd) {
-                Ok(report) => app.push_chat(tui::ChatEntry::SystemNote(report)),
+            match verify::run_verify_inner(&cwd) {
+                Ok((report, _)) => app.push_chat(tui::ChatEntry::SystemNote(
+                    verify::render_verify_report_tui(&report),
+                )),
                 Err(e) => {
                     app.push_chat(tui::ChatEntry::SystemNote(format!("❌ Erro no /verify: {e}")));
                 }
@@ -2378,6 +2381,15 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         };
         let writer = TelemetryWriter::new(default_telemetry_path());
         let _ = writer.append(&entry);
+        self.telemetry.emit(TelemetryEvent::TokenUsage {
+            timestamp_ms: now_millis(),
+            model: self.model.clone(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_input_tokens,
+            cache_write_tokens: usage.cache_creation_input_tokens,
+            cost_usd,
+        });
     }
 
     fn run_turn_with_output(
@@ -2571,8 +2583,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 }
                 false
             }
-            SlashCommand::Cache { .. } => {
-                Self::repl_feature_not_wired("cache command not yet wired to REPL")
+            SlashCommand::Cache { subcommand } => {
+                self.handle_cache_command(subcommand.as_deref());
+                false
             }
             SlashCommand::Verify => {
                 match verify::run_verify(&std::env::current_dir().unwrap_or_default()) {

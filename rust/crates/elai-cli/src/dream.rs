@@ -181,8 +181,13 @@ pub fn rewrite_memory(path: &Path, summary: &str, recent: &[String]) -> io::Resu
 
 /// Format the output shown to the user after dream completes.
 pub fn format_dream_output(result: &DreamResult) -> String {
+    let summary_preview = if result.summary.len() > 200 {
+        format!("{}…", &result.summary[..200])
+    } else {
+        result.summary.clone()
+    };
     format!(
-        "Dream\n  Result           done\n  Compressed       {} entries\n  Before           {} chars\n  After            {} chars\n  Ratio            {:.0}%",
+        "Dream\n  Result           done\n  Compressed       {} entries\n  Before           {} chars\n  After            {} chars\n  Ratio            {:.0}%\n  Summary          {}",
         result.entries_compressed,
         result.before_size,
         result.after_size,
@@ -191,6 +196,7 @@ pub fn format_dream_output(result: &DreamResult) -> String {
         } else {
             100.0
         },
+        summary_preview,
     )
 }
 
