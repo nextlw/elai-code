@@ -624,9 +624,13 @@ fn perform_uninstall() -> String {
     let mut log = Vec::<String>::new();
     let mut errors = Vec::<String>::new();
 
-    // 1. Binário
-    let install_dir = std::env::var("ELAI_INSTALL_DIR").unwrap_or_else(|_| "/usr/local/bin".into());
-    let bin = std::path::PathBuf::from(&install_dir).join("elai");
+    // 1. Binário — usa current_exe() para encontrar onde está instalado de fato
+    let bin = std::env::current_exe()
+        .unwrap_or_else(|_| {
+            let install_dir = std::env::var("ELAI_INSTALL_DIR")
+                .unwrap_or_else(|_| "/usr/local/bin".into());
+            std::path::PathBuf::from(install_dir).join("elai")
+        });
     match std::fs::remove_file(&bin) {
         Ok(_) => log.push(format!("✅ Removido: {}", bin.display())),
         Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
