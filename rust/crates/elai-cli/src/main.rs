@@ -5886,7 +5886,7 @@ mod tests {
     fn resolves_known_model_aliases() {
         assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
+        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251001");
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
     }
 
