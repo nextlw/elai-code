@@ -399,10 +399,58 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
     out
 }
 
+/// Plain-text report for TUI embedding — no ANSI codes, no untracked file
+/// list (just a count). Fits neatly inside a `ChatEntry::SystemNote`.
+pub fn render_verify_report_tui(report: &VerifyReport) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!(
+        "Verify — Codebase × Memory Sync\n  {} files escaneados | {} entradas na memória\n",
+        report.files_scanned, report.memory_entries
+    ));
+
+    let has_refs = !report.verified.is_empty()
+        || !report.missing.is_empty()
+        || !report.drift.is_empty();
+
+    if has_refs || report.memory_entries > 0 {
+        out.push_str("\nReferências de Arquivo:\n");
+        for path in &report.verified {
+            out.push_str(&format!("  ✓  {}\n", path.display()));
+        }
+        for path in &report.drift {
+            out.push_str(&format!("  ~  {} — drift\n", path.display()));
+        }
+        for path in &report.missing {
+            out.push_str(&format!("  ✗  {} — não encontrado\n", path.display()));
+        }
+        if !has_refs {
+            out.push_str("  (nenhuma referência de arquivo nas instruções)\n");
+        }
+    }
+
+    out.push_str(&format!(
+        "\nResumo: {} verificados | {} drift | {} ausentes | {} não rastreados\n",
+        report.verified.len(),
+        report.drift.len(),
+        report.missing.len(),
+        report.untracked.len(),
+    ));
+
+    if !report.missing.is_empty() {
+        out.push_str("\nDica: os arquivos ausentes foram removidos ou renomeados.\n");
+        out.push_str("      Atualize ELAI.md para refletir o estado atual.\n");
+    }
+
+    out
+}
+
 // ─── run_verify ──────────────────────────────────────────────────────────────
 
-/// Orchestrates the full verify flow and returns the formatted report string.
-pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+/// Runs the verify flow and returns `(report, formatted_terminal_string)`.
+pub fn run_verify_inner(
+    cwd: &Path,
+) -> Result<(VerifyReport, String), Box<dyn std::error::Error>> {
     // Discover instruction files
     let candidate_names = [
         "ELAI.md",
@@ -447,7 +495,14 @@ pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    Ok(render_verify_report(&report, cwd))
+    let rendered = render_verify_report(&report, cwd);
+    Ok((report, rendered))
+}
+
+/// Orchestrates the full verify flow and returns the terminal-formatted report.
+pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let (_, rendered) = run_verify_inner(cwd)?;
+    Ok(rendered)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
