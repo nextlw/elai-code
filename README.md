@@ -45,9 +45,6 @@ Elai Code is a modular, memory-safe agent harness that lets AI models safely int
 
 ---
 
-
----
-
 ## Features
 
 ### Strict Write Discipline (SWD)

@@ -109,8 +109,8 @@ new_section = (
 )
 
 updated = re.sub(
-    r"## What's New — v[\d.]+.*?(?=\n---\n)",
-    new_section + "\n\n",
+    r"## What's New — v[\d.]+.*?\n---",
+    new_section,
     content,
     count=1,
     flags=re.DOTALL,
