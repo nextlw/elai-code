@@ -13,6 +13,26 @@ struct Release {
     download_url: String,
 }
 
+/// Extracts only the bullet-list changelog from the release body.
+/// Looks for a "## Changelog" heading and takes lines until the next "---" separator.
+/// Falls back to the full body if the heading is not found.
+fn extract_changelog(body: &str) -> &str {
+    let heading = "## Changelog";
+    if let Some(start) = body.find(heading) {
+        let after_heading = &body[start + heading.len()..];
+        let content = after_heading.trim_start_matches('\n');
+        if let Some(end) = content.find("\n---") {
+            return content[..end].trim();
+        }
+        return content.trim();
+    }
+    // No structured changelog found — return the body up to the first "---"
+    if let Some(end) = body.find("\n---") {
+        return body[..end].trim();
+    }
+    body.trim()
+}
+
 /// Returned by [`check_available`] when a newer release exists.
 pub struct UpdateAvailable {
     pub current: &'static str,
@@ -44,7 +64,8 @@ fn fetch_latest() -> Option<Release> {
 
     let tag = json["tag_name"].as_str()?;
     let version = tag.trim_start_matches('v').to_string();
-    let notes = json["body"].as_str().unwrap_or("").trim().to_string();
+    let raw_body = json["body"].as_str().unwrap_or("");
+    let notes = extract_changelog(raw_body).trim().to_string();
 
     let asset = asset_name()?;
     let download_url = json["assets"]

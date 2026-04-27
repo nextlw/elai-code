@@ -81,7 +81,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // in-UI notification via a background thread instead (see run_tui_repl).
     if !matches!(
         action,
-        CliAction::Update | CliAction::Version | CliAction::Help | CliAction::Repl { .. }
+        CliAction::Update
+            | CliAction::Uninstall
+            | CliAction::Version
+            | CliAction::Help
+            | CliAction::Repl { .. }
     ) {
         updater::check_and_enforce();
     }
@@ -120,6 +124,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Stats { days, by_model, by_project } => run_stats_command(days, by_model, by_project),
         CliAction::Verify => run_verify_command()?,
         CliAction::Update => updater::run_update(),
+        CliAction::Uninstall => {
+            let report = perform_uninstall();
+            println!("{report}");
+        }
     }
     Ok(())
 }
@@ -253,6 +261,7 @@ enum CliAction {
     Help,
     Verify,
     Update,
+    Uninstall,
     Stats {
         days: Option<u32>,
         by_model: bool,
@@ -510,6 +519,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
         "update" => Ok(CliAction::Update),
+        "uninstall" => Ok(CliAction::Uninstall),
         "verify" => Ok(CliAction::Verify),
         "stats" => {
             let mut days: Option<u32> = None;
