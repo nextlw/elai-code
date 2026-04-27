@@ -12,3 +12,4 @@ archive/
 .DS_Store
 **/.DS_Store
 .env
+.elai.json
