@@ -1050,21 +1050,16 @@ fn draw_header(
 }
 
 const ELAI_ASCII: &str = "\
-███████╗██╗      █████╗ ██╗\n\
-██╔════╝██║     ██╔══██╗██║\n\
-█████╗  ██║     ███████║██║\n\
-██╔══╝  ██║     ██╔══██║██║\n\
-███████╗███████╗██║  ██║██║\n\
-╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
+  ██████████████████   ███████╗██╗      █████╗ ██╗\n\
+  ████████░░▄▄░░▄▄░░   ██╔════╝██║     ██╔══██╗██║\n\
+  ████████░░██░░██░░   █████╗  ██║     ███████║██║\n\
+  ████████░░▀▀░░▀▀░░   ██╔══╝  ██║     ██╔══██║██║\n\
+  ██████████████████   ███████╗███████╗██║  ██║██║\n\
+        ████  ████      ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
-    let ascii_style = Style::default().fg(Color::Indexed(209)); // light reddish-orange
-    let label_style = Style::default()
-        .fg(Color::Indexed(209))
-        .add_modifier(Modifier::BOLD);
-    let label_i_style = Style::default()
-        .fg(Color::Indexed(202)) // stronger reddish-orange for the "I"
-        .add_modifier(Modifier::BOLD);
+    let block_style = Style::default().fg(Color::Indexed(147));
+    let dot_style = Style::default().fg(Color::Indexed(235));
     let dim = Style::default().fg(Color::DarkGray);
 
     let username = whoami_user();
@@ -1074,17 +1069,32 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     let mut lines: Vec<Line> = ELAI_ASCII
         .lines()
-        .map(|l| Line::from(Span::styled(l.to_string(), ascii_style)))
+        .map(|l| {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut current = String::new();
+            let mut in_dot = false;
+            for ch in l.chars() {
+                let ch_dot = ch == '░';
+                if ch_dot != in_dot && !current.is_empty() {
+                    spans.push(Span::styled(
+                        current.clone(),
+                        if in_dot { dot_style } else { block_style },
+                    ));
+                    current.clear();
+                }
+                in_dot = ch_dot;
+                current.push(ch);
+            }
+            if !current.is_empty() {
+                spans.push(Span::styled(
+                    current,
+                    if in_dot { dot_style } else { block_style },
+                ));
+            }
+            Line::from(spans)
+        })
         .collect();
 
-    // Label after ASCII.
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled("ELA", label_style),
-        Span::styled("I", label_i_style),
-        Span::styled(" Code", label_style),
-        Span::raw("  🚀"),
-    ]));
     lines.push(Line::from(Span::styled(
         format!("  Welcome back, {username}!"),
         dim,
@@ -1093,7 +1103,7 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(209)));
+        .border_style(Style::default().fg(Color::Indexed(147)));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);

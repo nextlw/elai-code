@@ -88,8 +88,9 @@ pub use skills::{
     SkillPromptResult, SkillValidation,
 };
 pub use tool_catalog::{
-    last_rejected, run_pipeline, set_turn_snapshot, FilterPattern, PipelineResult, PipelineTool,
-    RejectedTool, RejectionReason, ToolBudgetConfig, ToolCatalog,
+    check_rate_limit, init_rate_limiter, last_rejected, run_pipeline, set_turn_snapshot,
+    FilterPattern, PipelineResult, PipelineTool, RateLimit, RateLimiter, RejectedTool,
+    RejectionReason, ToolBudgetConfig, ToolCatalog,
 };
 pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,

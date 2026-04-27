@@ -35,8 +35,8 @@ use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials, generate_pkce_pair, generate_state, load_budget_config,
-    load_system_prompt, parse_oauth_callback_request_target, save_budget_config,
+    check_rate_limit, clear_oauth_credentials, generate_pkce_pair, generate_state,
+    load_budget_config, load_system_prompt, parse_oauth_callback_request_target, save_budget_config,
     save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
     BudgetTracker, BudgetUsagePct, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
     ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
@@ -3290,6 +3290,18 @@ fn build_runtime_plugin_state(
     let mcp_source = McpToolSource::new(Arc::clone(&mcp_manager_arc));
     tool_registry.add_source(Box::new(mcp_source));
 
+    // Initialise session-scoped rate limiter from catalog overrides.
+    {
+        use runtime::{init_rate_limiter, RateLimit, ToolCatalog};
+        let catalog = ToolCatalog::load(&cwd);
+        let rate_overrides: std::collections::HashMap<String, RateLimit> = catalog
+            .overrides
+            .iter()
+            .filter_map(|o| catalog.rate_limit_for(&o.id).map(|rl| (o.id.clone(), rl)))
+            .collect();
+        init_rate_limiter(rate_overrides);
+    }
+
     Ok((runtime_config.feature_config().clone(), tool_registry))
 }
 
@@ -4929,6 +4941,14 @@ impl ToolExecutor for CliToolExecutor {
         {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled by the current --allowedTools setting"
+            )));
+        }
+
+        // Rate limit check (rolling window, in-memory per session).
+        if let Err(retry_after) = check_rate_limit(tool_name) {
+            return Err(ToolError::new(format!(
+                "Rate limit exceeded for `{tool_name}`. Retry after {:.1}s",
+                retry_after.as_secs_f32()
             )));
         }
 

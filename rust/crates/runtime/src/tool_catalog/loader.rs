@@ -1,7 +1,38 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::tool_catalog::rate_limit::RateLimit;
+
+/// Per-tool rate limit config as serialised in TOML.
+///
+/// Example:
+/// ```toml
+/// [[tool]]
+/// id = "execute_bash"
+/// [tool.rate_limit]
+/// max = 30
+/// window = 60
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    /// Maximum calls allowed within `window` seconds.
+    pub max: u32,
+    /// Window length in seconds.
+    pub window: u64,
+}
+
+impl RateLimitConfig {
+    /// Converts TOML config into the runtime `RateLimit`.
+    pub fn into_rate_limit(self) -> RateLimit {
+        RateLimit {
+            max_calls: self.max,
+            window: Duration::from_secs(self.window),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ToolOverride {
@@ -10,6 +41,8 @@ pub struct ToolOverride {
     pub category: Option<String>,
     pub embedding_hints: Option<Vec<String>>,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitConfig>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -82,6 +115,15 @@ impl ToolCatalog {
             .find(|o| o.id == id)
             .and_then(|o| o.enabled)
             .unwrap_or(true)
+    }
+
+    /// Returns the `RateLimit` configured for `id` in the catalog, or `None` if not set.
+    pub fn rate_limit_for(&self, id: &str) -> Option<RateLimit> {
+        self.overrides
+            .iter()
+            .find(|o| o.id == id)
+            .and_then(|o| o.rate_limit.clone())
+            .map(RateLimitConfig::into_rate_limit)
     }
 
     /// Resolve an alias to its canonical name.

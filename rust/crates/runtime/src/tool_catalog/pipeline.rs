@@ -441,6 +441,7 @@ mod tests {
             priority: None,
             category: None,
             embedding_hints: None,
+            rate_limit: None,
         });
         let tools = vec![make_tool("bash"), make_tool("read_file")];
         let result = run_pipeline(tools, &catalog, None, None, &ToolBudgetConfig::default());

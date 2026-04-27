@@ -1,10 +1,12 @@
 pub mod loader;
 pub mod pipeline;
+pub mod rate_limit;
 pub use loader::ToolCatalog;
 pub use pipeline::{
     run_pipeline, FilterPattern, PipelineResult, PipelineTool, RejectedTool, RejectionReason,
     ToolBudgetConfig,
 };
+pub use rate_limit::{check_rate_limit, init_rate_limiter, RateLimit, RateLimiter};
 
 use std::sync::Mutex;
 
