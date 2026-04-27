@@ -1633,10 +1633,12 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 )));
             }
             ChatEntry::SystemNote(note) => {
-                result.push(Line::from(Span::styled(
-                    format!("  {note}"),
-                    Style::default().fg(Color::Yellow),
-                )));
+                for line in note.lines() {
+                    result.push(Line::from(Span::styled(
+                        format!("  {line}"),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
                 result.push(Line::from(""));
             }
             ChatEntry::SwdLogEntry { transactions, mode } => {

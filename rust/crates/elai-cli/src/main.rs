@@ -1946,8 +1946,8 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         "init" => {
             let cwd = env::current_dir().unwrap_or_default();
             match initialize_repo(&cwd) {
-                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
-                    "✅ ELAI.md inicializado com sucesso.".into(),
+                Ok(report) => app.push_chat(tui::ChatEntry::SystemNote(
+                    format!("✅ {}", report.render()),
                 )),
                 Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
                     "❌ Erro no /init: {e}"
