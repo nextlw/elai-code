@@ -58,7 +58,7 @@ printf "    [1] Anthropic  (Claude opus / sonnet / haiku)\n"
 printf "    [2] OpenAI     (gpt-4o, gpt-4o-mini, o3…)\n"
 printf "    [3] Both\n\n"
 printf "  Choice [1]: "
-read -r PROVIDER_CHOICE
+read -r PROVIDER_CHOICE </dev/tty
 PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
 
 ANTHROPIC_KEY=""
@@ -66,16 +66,11 @@ OPENAI_KEY=""
 
 read_secret() {
   prompt="$1"
-  if [ -t 0 ]; then
-    printf "  %s" "$prompt"
-    stty -echo 2>/dev/null || true
-    read -r SECRET
-    stty echo 2>/dev/null || true
-    printf "\n"
-  else
-    printf "  %s" "$prompt"
-    read -r SECRET
-  fi
+  printf "  %s" "$prompt"
+  stty -echo 2>/dev/null || true
+  read -r SECRET </dev/tty
+  stty echo 2>/dev/null || true
+  printf "\n"
   printf '%s' "$SECRET"
 }
 
