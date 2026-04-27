@@ -85,7 +85,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
         },
     ),
     (
-        "claude-haiku-4-5-20251213",
+        "claude-haiku-4-5-20251001",
         ProviderMetadata {
             provider: ProviderKind::ElaiApi,
             auth_env: "ANTHROPIC_API_KEY",
@@ -151,7 +151,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                 ProviderKind::ElaiApi => match *alias {
                     "opus" => "claude-opus-4-6",
                     "sonnet" => "claude-sonnet-4-6",
-                    "haiku" => "claude-haiku-4-5-20251213",
+                    "haiku" => "claude-haiku-4-5-20251001",
                     _ => trimmed,
                 },
                 ProviderKind::Xai => match *alias {
@@ -263,7 +263,7 @@ fn openai_max_completion_tokens(lower: &str) -> u32 {
 pub fn suggested_default_model() -> String {
     // Priority: Anthropic → OpenAI → xAI → fallback
     if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
-        return "claude-sonnet-4-6".to_string();
+        return "claude-haiku-4-5-20251001".to_string();
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
@@ -275,7 +275,7 @@ pub fn suggested_default_model() -> String {
         return "grok-3".to_string();
     }
     // No key detected yet — neutral fallback; wizard will correct this.
-    "claude-sonnet-4-6".to_string()
+    "claude-haiku-4-5-20251001".to_string()
 }
 
 #[cfg(test)]
