@@ -1,13 +1,8 @@
 # Elai Code
 
-<p align="center"><pre>
-  ██████████████████   ███████╗██╗      █████╗ ██╗
-  ████████░░▄▄░░▄▄░░   ██╔════╝██║     ██╔══██╗██║
-  ████████░░██░░██░░   █████╗  ██║     ███████║██║
-  ████████░░▀▀░░▀▀░░   ██╔══╝  ██║     ██╔══██║██║
-  ██████████████████   ███████╗███████╗██║  ██║██║
-        ████  ████     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝
-</pre></p>
+<p align="center">
+  <img src="assets/logo.svg" alt="Elai Code" width="720" />
+</p>
 
 <p align="center">
   <strong>A high-performance CLI agent harness built in Rust by <a href="https://nexcode.live">Nexcode</a></strong>
@@ -29,11 +24,11 @@ Elai Code is a modular, memory-safe agent harness that lets AI models safely int
 
 A transactional filesystem write engine with three operating levels:
 
-| Level | Behavior |
-|-------|----------|
-| `off` | Normal tool execution — no interception |
-| `partial` *(default)* | Wraps every write with SHA-256 snapshots, automatic rollback on failure, and a JSON-lines audit log |
-| `full` | Blocks all write tools; the model emits structured `[FILE_ACTION]` blocks executed transactionally with hash verification and full rollback |
+| Level                 | Behavior                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`                 | Normal tool execution — no interception                                                                                                     |
+| `partial` _(default)_ | Wraps every write with SHA-256 snapshots, automatic rollback on failure, and a JSON-lines audit log                                         |
+| `full`                | Blocks all write tools; the model emits structured `[FILE_ACTION]` blocks executed transactionally with hash verification and full rollback |
 
 ```
 --swd off|partial|full      CLI flag
@@ -42,10 +37,10 @@ A transactional filesystem write engine with three operating levels:
 
 ### Multi-Provider Support
 
-| Provider | Models |
-|----------|--------|
-| Anthropic | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` (and aliases `opus`, `sonnet`, `haiku`) |
-| OpenAI-compatible | `gpt-4o-mini`, any OpenAI-compatible proxy |
+| Provider          | Models                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Anthropic         | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` (and aliases `opus`, `sonnet`, `haiku`) |
+| OpenAI-compatible | `gpt-4o-mini`, any OpenAI-compatible proxy                                                         |
 
 ### MCP Integration
 
@@ -124,16 +119,16 @@ tests/                  # Python verification suite
 
 ### Key Slash Commands
 
-| Command | Description |
-|---------|-------------|
-| `/model [name]` | Switch model mid-session |
-| `/cost` | Show session token usage and USD cost |
-| `/swd [level]` | Toggle or set Strict Write Discipline level |
-| `/diff` | Show git diff of workspace changes |
-| `/compact` | Compress conversation context |
-| `/tools` | List available tools |
-| `/tools why` | Explain current tool rate-limit decisions |
-| `/status` | Show session status and config |
+| Command         | Description                                 |
+| --------------- | ------------------------------------------- |
+| `/model [name]` | Switch model mid-session                    |
+| `/cost`         | Show session token usage and USD cost       |
+| `/swd [level]`  | Toggle or set Strict Write Discipline level |
+| `/diff`         | Show git diff of workspace changes          |
+| `/compact`      | Compress conversation context               |
+| `/tools`        | List available tools                        |
+| `/tools why`    | Explain current tool rate-limit decisions   |
+| `/status`       | Show session status and config              |
 
 ---
 

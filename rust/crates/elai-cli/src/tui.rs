@@ -1058,8 +1058,14 @@ const ELAI_ASCII: &str = "\
         ████  ████     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
+    // accent: lavender for solid blocks and box-drawing text
     let block_style = Style::default().fg(Color::Indexed(147));
-    let dot_style = Style::default().fg(Color::Indexed(235));
+    // half-blocks (▄ ▀) inside the logo window — same accent, slightly dimmer
+    let half_style = Style::default().fg(Color::Indexed(141));
+    // ░ cells: visible as a recessed "window" background
+    let dot_style = Style::default()
+        .fg(Color::Indexed(241))
+        .bg(Color::Indexed(236));
     let dim = Style::default().fg(Color::DarkGray);
 
     let username = whoami_user();
@@ -1070,26 +1076,36 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     let mut lines: Vec<Line> = ELAI_ASCII
         .lines()
         .map(|l| {
+            #[derive(Clone, Copy, PartialEq)]
+            enum Seg { Block, Dot, Half }
+
             let mut spans: Vec<Span> = Vec::new();
             let mut current = String::new();
-            let mut in_dot = false;
+            let mut seg = Seg::Block;
+
             for ch in l.chars() {
-                let ch_dot = ch == '░';
-                if ch_dot != in_dot && !current.is_empty() {
-                    spans.push(Span::styled(
-                        current.clone(),
-                        if in_dot { dot_style } else { block_style },
-                    ));
+                let next = match ch {
+                    '░' => Seg::Dot,
+                    '▄' | '▀' => Seg::Half,
+                    _ => Seg::Block,
+                };
+                if next != seg && !current.is_empty() {
+                    spans.push(Span::styled(current.clone(), match seg {
+                        Seg::Block => block_style,
+                        Seg::Dot   => dot_style,
+                        Seg::Half  => half_style,
+                    }));
                     current.clear();
                 }
-                in_dot = ch_dot;
+                seg = next;
                 current.push(ch);
             }
             if !current.is_empty() {
-                spans.push(Span::styled(
-                    current,
-                    if in_dot { dot_style } else { block_style },
-                ));
+                spans.push(Span::styled(current, match seg {
+                    Seg::Block => block_style,
+                    Seg::Dot   => dot_style,
+                    Seg::Half  => half_style,
+                }));
             }
             Line::from(spans)
         })

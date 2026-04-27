@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 112" width="720">
+  <rect width="720" height="112" fill="#0d1117" rx="6"/>
+  <text
+    font-family="'Courier New', 'Lucida Console', monospace"
+    font-size="13.5"
+    fill="#e6edf3"
+    xml:space="preserve"
+  >
+    <tspan x="16" y="24">  ██████████████████   ███████╗██╗      █████╗ ██╗</tspan>
+    <tspan x="16" dy="17">  ████████░░▄▄░░▄▄░░   ██╔════╝██║     ██╔══██╗██║</tspan>
+    <tspan x="16" dy="17">  ████████░░██░░██░░   █████╗  ██║     ███████║██║</tspan>
+    <tspan x="16" dy="17">  ████████░░▀▀░░▀▀░░   ██╔══╝  ██║     ██╔══██║██║</tspan>
+    <tspan x="16" dy="17">  ██████████████████   ███████╗███████╗██║  ██║██║</tspan>
+    <tspan x="16" dy="17">        ████  ████     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝</tspan>
+  </text>
+</svg>
