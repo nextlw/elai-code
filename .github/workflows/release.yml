@@ -9,18 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  # ── Prep: changelog + README update ─────────────────────────────────────────
+  # ── Prep: gera changelog para o corpo do release ────────────────────────────
+  # README e versão já são atualizados localmente pelo scripts/release.sh
   prep:
-    name: Prepare changelog & README
+    name: Generate changelog
     runs-on: ubuntu-latest
     outputs:
       changelog: ${{ steps.gen.outputs.changelog }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate changelog
         id: gen
@@ -43,62 +42,11 @@ jobs:
           CHANGELOG=$(printf '%s\n' "$FILTERED" | sed 's/^/- /' || true)
           [ -z "$CHANGELOG" ] && CHANGELOG="- Maintenance release"
 
-          printf '%s\n' "$CHANGELOG" > CHANGELOG_BODY.txt
-
           {
             echo "changelog<<__EOF_CHANGELOG__"
             printf '%s\n' "$CHANGELOG"
             echo "__EOF_CHANGELOG__"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Update README What's New section
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          python3 - "$TAG" <<'PYEOF'
-          import re, sys
-
-          tag = sys.argv[1]
-
-          with open('CHANGELOG_BODY.txt') as f:
-              changelog = f.read().strip()
-
-          with open('README.md') as f:
-              content = f.read()
-
-          new_section = (
-              f"## What's New — {tag}\n\n"
-              f"{changelog}\n\n"
-              f"---"
-          )
-
-          content = re.sub(
-              r"## What's New — v[\d.]+.*?(?=---)",
-              new_section + "\n\n",
-              content,
-              count=1,
-              flags=re.DOTALL,
-          )
-
-          with open('README.md', 'w') as f:
-              f.write(content)
-
-          print("README updated.")
-          PYEOF
-
-      - name: Commit and push README
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          if git diff --staged --quiet; then
-            echo "README already up to date."
-          else
-            git commit -m "docs: atualiza README para ${TAG} [skip ci]"
-            git push origin main
-          fi
 
   # ── macOS: arm64 + x86_64 ───────────────────────────────────────────────────
   build-macos:
