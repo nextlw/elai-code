@@ -9,9 +9,101 @@ permissions:
   contents: write
 
 jobs:
-  # ── macOS: arm64 + x86_64 (universal) ──────────────────────────────────────
+  # ── Prep: changelog + README update ─────────────────────────────────────────
+  prep:
+    name: Prepare changelog & README
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.gen.outputs.changelog }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate changelog
+        id: gen
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PREV=$(git tag --sort=-version:refname | grep -v "^${TAG}$" | head -1 || true)
+
+          if [ -n "$PREV" ]; then
+            RAW=$(git log "${PREV}..${TAG}" --pretty=format:"%s" --no-merges 2>/dev/null || true)
+          else
+            RAW=$(git log "${TAG}" --pretty=format:"%s" --no-merges --max-count=20 2>/dev/null || true)
+          fi
+
+          FILTERED=$(printf '%s\n' "$RAW" \
+            | grep -vE "^(chore: bump version|Merge |docs: atualiza README)" \
+            | grep -v "^$" \
+            || true)
+
+          CHANGELOG=$(printf '%s\n' "$FILTERED" | sed 's/^/- /' || true)
+          [ -z "$CHANGELOG" ] && CHANGELOG="- Maintenance release"
+
+          printf '%s\n' "$CHANGELOG" > CHANGELOG_BODY.txt
+
+          {
+            echo "changelog<<__EOF_CHANGELOG__"
+            printf '%s\n' "$CHANGELOG"
+            echo "__EOF_CHANGELOG__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update README What's New section
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - "$TAG" <<'PYEOF'
+          import re, sys
+
+          tag = sys.argv[1]
+
+          with open('CHANGELOG_BODY.txt') as f:
+              changelog = f.read().strip()
+
+          with open('README.md') as f:
+              content = f.read()
+
+          new_section = (
+              f"## What's New — {tag}\n\n"
+              f"{changelog}\n\n"
+              f"---"
+          )
+
+          content = re.sub(
+              r"## What's New — v[\d.]+.*?(?=---)",
+              new_section + "\n\n",
+              content,
+              count=1,
+              flags=re.DOTALL,
+          )
+
+          with open('README.md', 'w') as f:
+              f.write(content)
+
+          print("README updated.")
+          PYEOF
+
+      - name: Commit and push README
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "README already up to date."
+          else
+            git commit -m "docs: atualiza README para ${TAG} [skip ci]"
+            git push origin main
+          fi
+
+  # ── macOS: arm64 + x86_64 ───────────────────────────────────────────────────
   build-macos:
     name: macOS (${{ matrix.target }})
+    needs: prep
     runs-on: macos-latest
     strategy:
       matrix:
@@ -55,9 +147,10 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
 
-  # ── Linux: x86_64 + arm64 (musl static, sem Docker) ────────────────────────
+  # ── Linux: x86_64 + arm64 (musl static) ────────────────────────────────────
   build-linux:
     name: Linux (${{ matrix.target }})
+    needs: prep
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -109,6 +202,7 @@ jobs:
   # ── Windows x86_64 ──────────────────────────────────────────────────────────
   build-windows:
     name: Windows (x86_64)
+    needs: prep
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +241,7 @@ jobs:
   # ── GitHub Release ──────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build-macos, build-linux, build-windows]
+    needs: [prep, build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -170,8 +264,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: "Elai Code ${{ github.ref_name }}"
-          generate_release_notes: true
           body: |
+            ## Changelog
+
+            ${{ needs.prep.outputs.changelog }}
+
+            ---
+
             ## Install
 
             **macOS / Linux**
@@ -195,7 +294,6 @@ jobs:
             | Windows x86_64 | `elai-windows-x86_64.exe` |
 
             See `checksums.txt` to verify downloads.
-
           files: |
             artifacts/elai-macos-arm64
             artifacts/elai-macos-x86_64
