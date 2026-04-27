@@ -4,6 +4,7 @@ use std::pin::Pin;
 use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
+pub mod claude_code_spoof;
 pub mod elai_provider;
 pub mod openai_compat;
 

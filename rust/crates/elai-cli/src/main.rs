@@ -1,3 +1,5 @@
+mod args;
+mod auth;
 mod diff;
 mod dream;
 mod init;
@@ -12,8 +14,7 @@ use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
-use std::net::TcpListener;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -22,7 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    max_tokens_for_model, resolve_model_alias, suggested_default_model, AuthSource, ElaiApiClient,
+    max_tokens_for_model, resolve_model_alias, suggested_default_model,
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
     OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
     ToolResultContentBlock,
@@ -38,23 +39,19 @@ use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    check_rate_limit, clear_oauth_credentials, generate_cache_key, generate_pkce_pair,
-    generate_state, load_budget_config, load_system_prompt, now_millis,
-    parse_oauth_callback_request_target, save_budget_config, save_oauth_credentials, ApiClient,
-    ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus, BudgetTracker, BudgetUsagePct,
-    CachedResponse, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
-    ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
-    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session, TelemetryEvent,
-    TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+    check_rate_limit, generate_cache_key, load_budget_config, load_system_prompt, now_millis,
+    save_budget_config, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
+    BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
+    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
+    PermissionMode, PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session,
+    TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
 };
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use serde_json::json;
 
 const DEFAULT_DATE: &str = "2026-03-31";
-const DEFAULT_OAUTH_CALLBACK_PORT: u16 = 4545;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_TARGET: Option<&str> = option_env!("TARGET");
 const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
@@ -108,8 +105,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
         } => LiveCli::new(model, true, allowed_tools, permission_mode, false)?
             .run_turn_with_output(&prompt, output_format)?,
-        CliAction::Login => run_login()?,
-        CliAction::Logout => run_logout()?,
+        CliAction::Login(args) => auth::dispatch_login(&args).map_err(|e| e.to_string())?,
+        CliAction::Logout => auth::dispatch_logout().map_err(|e| e.to_string())?,
+        CliAction::Auth { cmd } => match cmd {
+            crate::args::AuthCmd::Status { json } => {
+                auth::dispatch_auth_status(json).map_err(|e| e.to_string())?
+            }
+            crate::args::AuthCmd::List => {
+                auth::dispatch_auth_list().map_err(|e| e.to_string())?
+            }
+        },
         CliAction::Init => run_init()?,
         CliAction::Repl {
             model,
@@ -167,10 +172,17 @@ fn dirs_home() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-fn has_any_api_key() -> bool {
-    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY"]
+fn has_any_auth() -> bool {
+    let env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY"];
+    if env_keys
         .iter()
         .any(|k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false))
+    {
+        return true;
+    }
+    runtime::load_auth_method()
+        .map(|opt| opt.is_some())
+        .unwrap_or(false)
 }
 
 /// Sets only known API keys from `path` when they are not already in the process environment.
@@ -245,8 +257,11 @@ enum CliAction {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
     },
-    Login,
+    Login(crate::args::LoginArgs),
     Logout,
+    Auth {
+        cmd: crate::args::AuthCmd,
+    },
     Init,
     Repl {
         model: String,
@@ -515,8 +530,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             args: join_optional_args(&rest[1..]),
         }),
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
-        "login" => Ok(CliAction::Login),
+        "login" => parse_login_args(&rest[1..]),
         "logout" => Ok(CliAction::Logout),
+        "auth" => parse_auth_args(&rest[1..]),
         "init" => Ok(CliAction::Init),
         "update" => Ok(CliAction::Update),
         "uninstall" => Ok(CliAction::Uninstall),
@@ -591,6 +607,58 @@ fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
             }
         )),
         None => Err(format!("unknown subcommand: {}", rest[0])),
+    }
+}
+
+fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
+    let mut login_args = crate::args::LoginArgs::default();
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--console" => { login_args.console = true; idx += 1; }
+            "--claudeai" => { login_args.claudeai = true; idx += 1; }
+            "--sso" => { login_args.sso = true; idx += 1; }
+            "--api-key" => { login_args.api_key = true; idx += 1; }
+            "--token" => { login_args.token = true; idx += 1; }
+            "--use-bedrock" => { login_args.use_bedrock = true; idx += 1; }
+            "--use-vertex" => { login_args.use_vertex = true; idx += 1; }
+            "--use-foundry" => { login_args.use_foundry = true; idx += 1; }
+            "--no-browser" => { login_args.no_browser = true; idx += 1; }
+            "--stdin" => { login_args.stdin = true; idx += 1; }
+            "--legacy-elai" => { login_args.legacy_elai = true; idx += 1; }
+            "--email" => {
+                let value = args
+                    .get(idx + 1)
+                    .ok_or_else(|| "missing value for --email".to_string())?;
+                login_args.email = Some(value.clone());
+                idx += 2;
+            }
+            flag if flag.starts_with("--email=") => {
+                login_args.email = Some(flag[8..].to_string());
+                idx += 1;
+            }
+            other => {
+                return Err(format!("unknown login flag: {other}"));
+            }
+        }
+    }
+    Ok(CliAction::Login(login_args))
+}
+
+fn parse_auth_args(args: &[String]) -> Result<CliAction, String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+    match subcommand {
+        "status" => {
+            let json = args.iter().any(|a| a == "--json");
+            Ok(CliAction::Auth {
+                cmd: crate::args::AuthCmd::Status { json },
+            })
+        }
+        "list" => Ok(CliAction::Auth {
+            cmd: crate::args::AuthCmd::List,
+        }),
+        "" => Err("auth requires a subcommand: status, list".to_string()),
+        other => Err(format!("unknown auth subcommand: {other}")),
     }
 }
 
@@ -879,132 +947,6 @@ fn print_bootstrap_plan() {
     }
 }
 
-fn default_oauth_config() -> OAuthConfig {
-    OAuthConfig {
-        client_id: String::from("9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
-        authorize_url: String::from("https://platform.elai.dev/oauth/authorize"),
-        token_url: String::from("https://platform.elai.dev/v1/oauth/token"),
-        callback_port: None,
-        manual_redirect_url: None,
-        scopes: vec![
-            String::from("user:profile"),
-            String::from("user:inference"),
-            String::from("user:sessions:elai_code"),
-        ],
-    }
-}
-
-fn run_login() -> Result<(), Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
-    let config = ConfigLoader::default_for(&cwd).load()?;
-    let default_oauth = default_oauth_config();
-    let oauth = config.oauth().unwrap_or(&default_oauth);
-    let callback_port = oauth.callback_port.unwrap_or(DEFAULT_OAUTH_CALLBACK_PORT);
-    let redirect_uri = runtime::loopback_redirect_uri(callback_port);
-    let pkce = generate_pkce_pair()?;
-    let state = generate_state()?;
-    let authorize_url =
-        OAuthAuthorizationRequest::from_config(oauth, redirect_uri.clone(), state.clone(), &pkce)
-            .build_url();
-
-    println!("Starting Elai OAuth login...");
-    println!("Listening for callback on {redirect_uri}");
-    if let Err(error) = open_browser(&authorize_url) {
-        eprintln!("warning: failed to open browser automatically: {error}");
-        println!("Open this URL manually:\n{authorize_url}");
-    }
-
-    let callback = wait_for_oauth_callback(callback_port)?;
-    if let Some(error) = callback.error {
-        let description = callback
-            .error_description
-            .unwrap_or_else(|| "authorization failed".to_string());
-        return Err(io::Error::other(format!("{error}: {description}")).into());
-    }
-    let code = callback.code.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include code")
-    })?;
-    let returned_state = callback.state.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include state")
-    })?;
-    if returned_state != state {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "oauth state mismatch").into());
-    }
-
-    let client = ElaiApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
-    let exchange_request =
-        OAuthTokenExchangeRequest::from_config(oauth, code, state, pkce.verifier, redirect_uri);
-    let runtime = tokio::runtime::Runtime::new()?;
-    let token_set = runtime.block_on(client.exchange_oauth_code(oauth, &exchange_request))?;
-    save_oauth_credentials(&runtime::OAuthTokenSet {
-        access_token: token_set.access_token,
-        refresh_token: token_set.refresh_token,
-        expires_at: token_set.expires_at,
-        scopes: token_set.scopes,
-    })?;
-    println!("Elai OAuth login complete.");
-    Ok(())
-}
-
-fn run_logout() -> Result<(), Box<dyn std::error::Error>> {
-    clear_oauth_credentials()?;
-    println!("Elai OAuth credentials cleared.");
-    Ok(())
-}
-
-fn open_browser(url: &str) -> io::Result<()> {
-    let commands = if cfg!(target_os = "macos") {
-        vec![("open", vec![url])]
-    } else if cfg!(target_os = "windows") {
-        vec![("cmd", vec!["/C", "start", "", url])]
-    } else {
-        vec![("xdg-open", vec![url])]
-    };
-    for (program, args) in commands {
-        match Command::new(program).args(args).spawn() {
-            Ok(_) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "no supported browser opener command found",
-    ))
-}
-
-fn wait_for_oauth_callback(
-    port: u16,
-) -> Result<runtime::OAuthCallbackParams, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let (mut stream, _) = listener.accept()?;
-    let mut buffer = [0_u8; 4096];
-    let bytes_read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let request_line = request.lines().next().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "missing callback request line")
-    })?;
-    let target = request_line.split_whitespace().nth(1).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "missing callback request target",
-        )
-    })?;
-    let callback = parse_oauth_callback_request_target(target)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let body = if callback.error.is_some() {
-        "Elai OAuth login failed. You can close this window."
-    } else {
-        "Elai OAuth login succeeded. You can close this window."
-    };
-    let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(response.as_bytes())?;
-    Ok(callback)
-}
 
 fn print_system_prompt(cwd: PathBuf, date: String) {
     match load_system_prompt(cwd, date, env::consts::OS, "unknown") {
@@ -1499,9 +1441,9 @@ fn run_tui_repl(
         });
     }
 
-    // First-run or missing key: open setup wizard immediately.
-    if !has_any_api_key() {
-        app.open_setup_wizard();
+    // First-run or missing key: open auth picker immediately.
+    if !has_any_auth() {
+        app.open_auth_picker();
     }
 
     // Tracks the last warning threshold already shown (90 or 80) to avoid repeating.
@@ -1537,6 +1479,7 @@ fn run_tui_repl(
         loop {
             tui::render(&mut terminal, &mut app)?;
             app.tick();
+            tui::drain_auth_events(&mut app);
 
             let action = tui::poll_and_handle(&mut app, &msg_rx, &perm_rx);
 
@@ -1703,6 +1646,13 @@ fn run_tui_repl(
                     app.model = new_model.clone();
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} API key salva em ~/.elai/.env\n  Modelo padrão: {new_model}"
+                    )));
+                }
+                tui::TuiAction::AuthComplete { label } => {
+                    let new_model = suggested_default_model();
+                    app.model = new_model.clone();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "\u{2705} {label}\n  Modelo padrão: {new_model}"
                     )));
                 }
                 tui::TuiAction::Uninstall => {
@@ -2004,7 +1954,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             )));
         }
         "keys" | "setup" => {
-            app.open_setup_wizard();
+            app.open_auth_picker();
         }
         "uninstall" => {
             app.open_uninstall_confirm();
@@ -5977,7 +5927,7 @@ mod tests {
     fn parses_login_and_logout_subcommands() {
         assert_eq!(
             parse_args(&["login".to_string()]).expect("login should parse"),
-            CliAction::Login
+            CliAction::Login(crate::args::LoginArgs::default())
         );
         assert_eq!(
             parse_args(&["logout".to_string()]).expect("logout should parse"),

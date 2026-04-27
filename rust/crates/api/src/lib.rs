@@ -5,6 +5,8 @@ mod providers;
 mod sse;
 mod types;
 
+pub use providers::claude_code_spoof;
+
 pub use client::{
     oauth_token_is_expired, read_base_url, read_xai_base_url, resolve_saved_oauth_token,
     resolve_startup_auth_source, CollectedMessageStream, MessageStream, OAuthTokenSet,
@@ -15,7 +17,10 @@ pub use orchestrator::{
     ElaiUnifiedAdapter, HealthReport, OpenAiUnifiedAdapter, ProviderCapability, ProviderConfig,
     ProviderOrchestrator, ProviderStatus, RequestOptions, TaskType,
 };
-pub use providers::elai_provider::{AuthSource, ElaiApiClient, ElaiApiClient as ApiClient};
+pub use providers::elai_provider::{
+    base_url_is_anthropic_official, AuthSource, ElaiApiClient, ElaiApiClient as ApiClient,
+    SpoofMode,
+};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, resolve_model_alias, suggested_default_model,

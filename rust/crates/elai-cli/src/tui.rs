@@ -23,10 +23,10 @@
 
 use std::env;
 use std::io;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -113,7 +113,7 @@ pub enum ChatEntry {
 
 // ─── Overlay states ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum OverlayKind {
     ModelPicker {
         items: Vec<String>,
@@ -144,6 +144,8 @@ pub enum OverlayKind {
         reply_tx: std::sync::mpsc::SyncSender<bool>,
     },
     UninstallConfirm,
+    /// Legacy OpenAI key setup wizard (kept for compatibility, accessible via `/keys` if needed).
+    #[allow(dead_code)]
     SetupWizard {
         step: u8,
         provider_sel: usize,
@@ -152,6 +154,78 @@ pub enum OverlayKind {
         input: String,
         cursor: usize,
     },
+    AuthPicker {
+        step: AuthStep,
+    },
+}
+
+/// Which authentication method the user selected in the AuthPicker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethodChoice {
+    ClaudeAiOAuth,
+    ConsoleOAuth,
+    SsoOAuth,
+    PasteApiKey,
+    PasteAuthToken,
+    UseBedrock,
+    UseVertex,
+    UseFoundry,
+    ImportClaudeCode,
+    LegacyElai,
+}
+
+/// Step state machine for the AuthPicker overlay.
+#[derive(Debug)]
+pub enum AuthStep {
+    /// List of methods; `selected` is index in the visible (filtered) list.
+    MethodList {
+        selected: usize,
+        claude_code_detected: bool,
+    },
+    /// Collect e-mail (SSO only).
+    EmailInput {
+        method: AuthMethodChoice,
+        input: String,
+        cursor: usize,
+    },
+    /// Paste an API key or auth token.
+    PasteSecret {
+        method: AuthMethodChoice,
+        input: String,
+        cursor: usize,
+        masked: bool,
+    },
+    /// OAuth browser flow in progress.
+    BrowserFlow {
+        method: AuthMethodChoice,
+        url: String,
+        port: u16,
+        started_at: std::time::Instant,
+        rx: std::sync::mpsc::Receiver<AuthEvent>,
+        cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    /// Confirmation for 3P toggle.
+    Confirm3p {
+        method: AuthMethodChoice,
+        env_var: &'static str,
+    },
+    /// Success: show summary.
+    Done {
+        label: String,
+    },
+    /// Error: show message and ask Esc/Enter.
+    Failed {
+        error: String,
+    },
+}
+
+/// Events sent from the OAuth background thread to the TUI.
+#[derive(Debug)]
+pub enum AuthEvent {
+    #[allow(dead_code)]
+    Progress(String),
+    Success(String),
+    Error(String),
 }
 
 // ─── Application state ────────────────────────────────────────────────────────
@@ -488,6 +562,7 @@ impl UiApp {
         });
     }
 
+    #[allow(dead_code)]
     pub fn open_setup_wizard(&mut self) {
         self.overlay = Some(OverlayKind::SetupWizard {
             step: 0,
@@ -496,6 +571,16 @@ impl UiApp {
             key2: String::new(),
             input: String::new(),
             cursor: 0,
+        });
+    }
+
+    pub fn open_auth_picker(&mut self) {
+        let detected = runtime::detect_claude_code_credentials().is_some();
+        self.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::MethodList {
+                selected: 0,
+                claude_code_detected: detected,
+            },
         });
     }
 
@@ -557,6 +642,7 @@ pub enum TuiAction {
     EnterReadMode,
     ExitReadMode,
     SetupComplete,
+    AuthComplete { label: String },
     Uninstall,
     Quit,
     None,
@@ -1196,8 +1282,602 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             }
         }
 
+        Some(OverlayKind::AuthPicker { step }) => {
+            handle_auth_picker_key(app, key, step)
+        }
+
         None => TuiAction::None,
     }
+}
+
+fn auth_methods_visible(claude_code_detected: bool) -> Vec<(AuthMethodChoice, &'static str)> {
+    let mut methods: Vec<(AuthMethodChoice, &'static str)> = vec![
+        (AuthMethodChoice::ClaudeAiOAuth, "Claude.ai OAuth  (Pro/Max)"),
+        (AuthMethodChoice::ConsoleOAuth,  "Console OAuth    (cria API key)"),
+        (AuthMethodChoice::SsoOAuth,      "SSO OAuth        (claude.ai + SSO)"),
+        (AuthMethodChoice::PasteApiKey,   "Colar API key    (sk-ant-...)"),
+        (AuthMethodChoice::PasteAuthToken,"Colar Auth Token (Bearer)"),
+        (AuthMethodChoice::UseBedrock,    "AWS Bedrock"),
+        (AuthMethodChoice::UseVertex,     "Google Vertex AI"),
+        (AuthMethodChoice::UseFoundry,    "Azure Foundry"),
+        (AuthMethodChoice::LegacyElai,    "Elai OAuth legacy (elai.dev)"),
+    ];
+    if claude_code_detected {
+        methods.insert(0, (AuthMethodChoice::ImportClaudeCode, "Importar Claude Code credentials  [detectado]"));
+    }
+    methods
+}
+
+fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> TuiAction {
+    match step {
+        AuthStep::MethodList { selected, claude_code_detected } => {
+            let methods = auth_methods_visible(claude_code_detected);
+            let count = methods.len();
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList {
+                            selected: selected.saturating_sub(1),
+                            claude_code_detected,
+                        },
+                    });
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList {
+                            selected: (selected + 1).min(count.saturating_sub(1)),
+                            claude_code_detected,
+                        },
+                    });
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let Some((method, _)) = methods.get(selected).cloned() else {
+                        app.overlay = None;
+                        return TuiAction::None;
+                    };
+                    match method {
+                        AuthMethodChoice::ClaudeAiOAuth
+                        | AuthMethodChoice::ConsoleOAuth
+                        | AuthMethodChoice::SsoOAuth => {
+                            if method == AuthMethodChoice::SsoOAuth {
+                                app.overlay = Some(OverlayKind::AuthPicker {
+                                    step: AuthStep::EmailInput {
+                                        method,
+                                        input: String::new(),
+                                        cursor: 0,
+                                    },
+                                });
+                            } else {
+                                let (url, port, rx, cancel_flag) = start_oauth_flow(method, None);
+                                app.overlay = Some(OverlayKind::AuthPicker {
+                                    step: AuthStep::BrowserFlow {
+                                        method,
+                                        url,
+                                        port,
+                                        started_at: Instant::now(),
+                                        rx,
+                                        cancel_flag,
+                                    },
+                                });
+                            }
+                        }
+                        AuthMethodChoice::PasteApiKey | AuthMethodChoice::PasteAuthToken => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::PasteSecret {
+                                    method,
+                                    input: String::new(),
+                                    cursor: 0,
+                                    masked: true,
+                                },
+                            });
+                        }
+                        AuthMethodChoice::UseBedrock => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Confirm3p {
+                                    method,
+                                    env_var: "CLAUDE_CODE_USE_BEDROCK",
+                                },
+                            });
+                        }
+                        AuthMethodChoice::UseVertex => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Confirm3p {
+                                    method,
+                                    env_var: "CLAUDE_CODE_USE_VERTEX",
+                                },
+                            });
+                        }
+                        AuthMethodChoice::UseFoundry => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Confirm3p {
+                                    method,
+                                    env_var: "CLAUDE_CODE_USE_FOUNDRY",
+                                },
+                            });
+                        }
+                        AuthMethodChoice::ImportClaudeCode => {
+                            match runtime::import_claude_code_credentials() {
+                                Ok(Some(_)) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Done {
+                                            label: "Imported Claude Code credentials".to_string(),
+                                        },
+                                    });
+                                }
+                                Ok(None) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Failed {
+                                            error: "No Claude Code credentials found to import".to_string(),
+                                        },
+                                    });
+                                }
+                                Err(e) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Failed {
+                                            error: format!("import error: {e}"),
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        AuthMethodChoice::LegacyElai => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Done {
+                                    label: "Use `elai login --legacy-elai` no terminal".to_string(),
+                                },
+                            });
+                        }
+                    }
+                    TuiAction::None
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected, claude_code_detected },
+                    });
+                    TuiAction::None
+                }
+            }
+        }
+
+        AuthStep::EmailInput { method, mut input, mut cursor } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace)
+                | (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                        let idx = input.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(input.len());
+                        input.remove(idx);
+                    }
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::EmailInput { method, input, cursor },
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let email = if input.trim().is_empty() { None } else { Some(input.clone()) };
+                    let (url, port, rx, cancel_flag) = start_oauth_flow(method, email);
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::BrowserFlow {
+                            method,
+                            url,
+                            port,
+                            started_at: Instant::now(),
+                            rx,
+                            cancel_flag,
+                        },
+                    });
+                }
+                (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let idx = input.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(input.len());
+                    input.insert(idx, c);
+                    cursor += 1;
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::EmailInput { method, input, cursor },
+                    });
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::EmailInput { method, input, cursor },
+                    });
+                }
+            }
+            TuiAction::None
+        }
+
+        AuthStep::PasteSecret { method, mut input, mut cursor, masked } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace)
+                | (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                        let idx = input.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(input.len());
+                        input.remove(idx);
+                    }
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::PasteSecret { method, input, cursor, masked },
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let result = match method {
+                        AuthMethodChoice::PasteApiKey => crate::auth::save_pasted_api_key(&input),
+                        AuthMethodChoice::PasteAuthToken => crate::auth::save_pasted_auth_token(&input),
+                        _ => Err(crate::auth::AuthError::InvalidInput("unexpected method".into())),
+                    };
+                    match result {
+                        Ok(()) => {
+                            let label = match method {
+                                AuthMethodChoice::PasteApiKey => "API key salva".to_string(),
+                                _ => "Auth token salvo".to_string(),
+                            };
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Done { label },
+                            });
+                        }
+                        Err(e) => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Failed { error: e.to_string() },
+                            });
+                        }
+                    }
+                }
+                (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let idx = input.char_indices().nth(cursor).map(|(i, _)| i).unwrap_or(input.len());
+                    input.insert(idx, c);
+                    cursor += 1;
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::PasteSecret { method, input, cursor, masked },
+                    });
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::PasteSecret { method, input, cursor, masked },
+                    });
+                }
+            }
+            TuiAction::None
+        }
+
+        AuthStep::BrowserFlow { method, url, port, started_at, rx, cancel_flag } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                    });
+                }
+                _ => {
+                    // Drain events from channel while keeping step alive.
+                    let mut next_step = AuthStep::BrowserFlow { method, url, port, started_at, rx, cancel_flag };
+                    if let AuthStep::BrowserFlow { ref rx, .. } = next_step {
+                        if let Ok(event) = rx.try_recv() {
+                            next_step = match event {
+                                AuthEvent::Success(label) => AuthStep::Done { label },
+                                AuthEvent::Error(msg) => AuthStep::Failed { error: msg },
+                                AuthEvent::Progress(_) => next_step,
+                            };
+                        }
+                    }
+                    // Reconstruct if still BrowserFlow (workaround for partial move).
+                    app.overlay = Some(OverlayKind::AuthPicker { step: next_step });
+                }
+            }
+            TuiAction::None
+        }
+
+        AuthStep::Confirm3p { method, env_var } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Char('y'))
+                | (KeyModifiers::NONE, KeyCode::Char('Y'))
+                | (KeyModifiers::NONE, KeyCode::Enter) => {
+                    match crate::auth::save_3p_named(env_var) {
+                        Ok(()) => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Done {
+                                    label: format!("{method:?} salvo. Adicione `export {env_var}=1` ao seu shell RC."),
+                                },
+                            });
+                        }
+                        Err(e) => {
+                            app.overlay = Some(OverlayKind::AuthPicker {
+                                step: AuthStep::Failed { error: e.to_string() },
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                    });
+                }
+            }
+            TuiAction::None
+        }
+
+        AuthStep::Done { label } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Enter) => {
+                    app.overlay = None;
+                    return TuiAction::AuthComplete { label };
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::AuthPicker { step: AuthStep::Done { label } });
+                }
+            }
+            TuiAction::None
+        }
+
+        AuthStep::Failed { error } => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                    });
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::AuthPicker { step: AuthStep::Failed { error } });
+                }
+            }
+            TuiAction::None
+        }
+    }
+}
+
+/// Drain AuthEvents from a BrowserFlow channel and advance the overlay step if needed.
+/// Call this from the main tick loop so the UI updates without requiring a keypress.
+pub fn drain_auth_events(app: &mut UiApp) {
+    // We need to take the overlay, drain, and put it back to avoid borrow conflicts.
+    let overlay = app.overlay.take();
+    if let Some(OverlayKind::AuthPicker { step }) = overlay {
+        let next_step = match step {
+            AuthStep::BrowserFlow { method, url, port, started_at, rx, cancel_flag } => {
+                match rx.try_recv() {
+                    Ok(AuthEvent::Success(label)) => AuthStep::Done { label },
+                    Ok(AuthEvent::Error(msg)) => AuthStep::Failed { error: msg },
+                    Ok(AuthEvent::Progress(_)) | Err(_) => {
+                        AuthStep::BrowserFlow { method, url, port, started_at, rx, cancel_flag }
+                    }
+                }
+            }
+            other => other,
+        };
+        app.overlay = Some(OverlayKind::AuthPicker { step: next_step });
+    } else {
+        app.overlay = overlay;
+    }
+}
+
+fn start_oauth_flow(
+    method: AuthMethodChoice,
+    email: Option<String>,
+) -> (
+    String,
+    u16,
+    std::sync::mpsc::Receiver<AuthEvent>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let (tx, rx) = std::sync::mpsc::channel::<AuthEvent>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel.clone();
+    let port = crate::auth::DEFAULT_OAUTH_CALLBACK_PORT;
+
+    let endpoints = runtime::AnthropicOAuthEndpoints::production();
+    let mode = match method {
+        AuthMethodChoice::ConsoleOAuth => runtime::OAuthMode::Console,
+        _ => runtime::OAuthMode::ClaudeAi,
+    };
+    let cfg = endpoints.to_oauth_config(mode);
+    let pkce = match runtime::generate_pkce_pair() {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx.send(AuthEvent::Error(format!("pkce: {e}")));
+            return ("".to_string(), port, rx, cancel);
+        }
+    };
+    let state = match runtime::generate_state() {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(AuthEvent::Error(format!("state: {e}")));
+            return ("".to_string(), port, rx, cancel);
+        }
+    };
+    let redirect = runtime::loopback_redirect_uri(port);
+    let mut req = runtime::OAuthAuthorizationRequest::from_config(
+        &cfg,
+        redirect.clone(),
+        state.clone(),
+        &pkce,
+    );
+    if let Some(ref em) = email {
+        req = req.with_extra_param("login_hint", em.as_str());
+    }
+    if matches!(method, AuthMethodChoice::SsoOAuth) {
+        req = req.with_extra_param("login_method", "sso");
+    }
+    let url = req.build_url();
+    let url_for_thread = url.clone();
+
+    std::thread::spawn(move || {
+        let _ = tx.send(AuthEvent::Progress("Opening browser...".into()));
+        let _ = crate::auth::open_browser(&url_for_thread);
+        let _ = tx.send(AuthEvent::Progress(format!("Waiting for callback on port {port}...")));
+
+        let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = tx.send(AuthEvent::Error(format!("bind: {e}")));
+                return;
+            }
+        };
+        listener.set_nonblocking(true).ok();
+
+        let stream = loop {
+            if cancel_clone.load(Ordering::Relaxed) {
+                let _ = tx.send(AuthEvent::Error("cancelled".into()));
+                return;
+            }
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => {
+                    let _ = tx.send(AuthEvent::Error(format!("accept: {e}")));
+                    return;
+                }
+            }
+        };
+
+        use std::io::{Read, Write};
+        let mut s = stream;
+        let mut buf = [0u8; 4096];
+        let n = match s.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = tx.send(AuthEvent::Error(format!("read: {e}")));
+                return;
+            }
+        };
+        let req_text = String::from_utf8_lossy(&buf[..n]).to_string();
+        let target = req_text
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or("/");
+        let cb = match runtime::parse_oauth_callback_request_target(target) {
+            Ok(cb) => cb,
+            Err(e) => {
+                let _ = tx.send(AuthEvent::Error(format!("callback parse: {e}")));
+                return;
+            }
+        };
+        let body = if cb.error.is_some() {
+            "Anthropic OAuth login failed. You can close this window."
+        } else {
+            "Anthropic OAuth login succeeded. You can close this window."
+        };
+        let _ = s.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
+        );
+
+        if let Some(err) = cb.error.as_ref() {
+            let _ = tx.send(AuthEvent::Error(format!("OAuth error: {err}")));
+            return;
+        }
+        let code = match cb.code {
+            Some(c) => c,
+            None => {
+                let _ = tx.send(AuthEvent::Error("no auth code in callback".into()));
+                return;
+            }
+        };
+        let returned_state = cb.state.unwrap_or_default();
+        if returned_state != state {
+            let _ = tx.send(AuthEvent::Error("state mismatch (possible CSRF)".into()));
+            return;
+        }
+
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(AuthEvent::Error(format!("tokio runtime: {e}")));
+                return;
+            }
+        };
+        let client = api::ElaiApiClient::from_auth(api::AuthSource::None)
+            .with_base_url(api::read_base_url());
+        let exchange = runtime::OAuthTokenExchangeRequest::from_config(
+            &cfg,
+            code,
+            state,
+            pkce.verifier,
+            redirect,
+        );
+        let beta = endpoints.beta_header.clone();
+        let tokens = match rt.block_on(async {
+            client
+                .exchange_oauth_code_with_headers(&cfg, &exchange, &[("anthropic-beta", &beta)])
+                .await
+        }) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = tx.send(AuthEvent::Error(format!("token exchange: {e}")));
+                return;
+            }
+        };
+
+        match method {
+            AuthMethodChoice::ConsoleOAuth => {
+                let api_key = match rt.block_on(async {
+                    client
+                        .create_console_api_key(&endpoints, &tokens.access_token)
+                        .await
+                }) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        let _ = tx.send(AuthEvent::Error(format!("create_api_key: {e}")));
+                        return;
+                    }
+                };
+                let auth_method = runtime::AuthMethod::ConsoleApiKey {
+                    api_key,
+                    origin: runtime::ApiKeyOrigin::ConsoleOAuth,
+                };
+                if let Err(e) = runtime::save_auth_method(&auth_method) {
+                    let _ = tx.send(AuthEvent::Error(format!("save: {e}")));
+                    return;
+                }
+                let _ = tx.send(AuthEvent::Success("Console OAuth concluido — API key salva".to_string()));
+            }
+            _ => {
+                let auth_method = runtime::AuthMethod::ClaudeAiOAuth {
+                    token_set: runtime::OAuthTokenSet {
+                        access_token: tokens.access_token,
+                        refresh_token: tokens.refresh_token,
+                        expires_at: tokens.expires_at,
+                        scopes: tokens.scopes,
+                    },
+                    subscription: None,
+                };
+                if let Err(e) = runtime::save_auth_method(&auth_method) {
+                    let _ = tx.send(AuthEvent::Error(format!("save: {e}")));
+                    return;
+                }
+                let label = if matches!(method, AuthMethodChoice::SsoOAuth) {
+                    "SSO OAuth concluido".to_string()
+                } else {
+                    "Claude.ai OAuth concluido".to_string()
+                };
+                let _ = tx.send(AuthEvent::Success(label));
+            }
+        }
+    });
+
+    (url, port, rx, cancel)
 }
 
 fn filter_slash_items<'a>(
@@ -2060,6 +2740,9 @@ fn draw_overlay(
         } => {
             draw_setup_wizard(frame, area, *step, *provider_sel, input);
         }
+        OverlayKind::AuthPicker { step } => {
+            draw_auth_picker(frame, area, step);
+        }
     }
 }
 
@@ -2389,6 +3072,180 @@ fn draw_setup_wizard(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
+    let width = (area.width * 2 / 3).max(60).min(area.width.saturating_sub(4));
+    let height = 18u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Authentication ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Indexed(215)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    match step {
+        AuthStep::MethodList { selected, claude_code_detected } => {
+            let methods = auth_methods_visible(*claude_code_detected);
+            let mut lines: Vec<Line> = Vec::new();
+
+            if *claude_code_detected {
+                lines.push(Line::from(Span::styled(
+                    "  Detected Claude Code credentials — press Enter on 'Import' to use them",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+            }
+
+            for (i, (_method, label)) in methods.iter().enumerate() {
+                let sel = i == *selected;
+                if sel {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {:>2}. {}", i + 1, label),
+                        Style::default().fg(Color::Black).bg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        format!("     {}. {}", i + 1, label),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Up/Down navegar · Enter selecionar · Esc cancelar",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::EmailInput { input, cursor, .. } => {
+            let before: String = input.chars().take(*cursor).collect();
+            let cur: String = input.chars().nth(*cursor).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+            let after: String = input.chars().skip(*cursor + 1).collect();
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled("  E-mail para SSO (ou Enter para pular):", Style::default().fg(Color::White))),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  > ", Style::default().fg(Color::Indexed(215))),
+                    Span::raw(before),
+                    Span::styled(cur, Style::default().fg(Color::Black).bg(Color::Indexed(215))),
+                    Span::raw(after),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::PasteSecret { method, input, masked, .. } => {
+            let display = if *masked {
+                "\u{2022}".repeat(input.chars().count())
+            } else {
+                input.clone()
+            };
+            let label = match method {
+                AuthMethodChoice::PasteApiKey => "API key (sk-ant-...):",
+                _ => "Auth Token (Bearer):",
+            };
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(format!("  {label}"), Style::default().fg(Color::White))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  > {display}"),
+                    Style::default().fg(Color::Indexed(215)),
+                )),
+                Line::from(""),
+                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::BrowserFlow { url, port, started_at, .. } => {
+            let elapsed = started_at.elapsed().as_secs();
+            let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spin = spinner_chars[(elapsed as usize) % spinner_chars.len()];
+            let short_url: String = url.chars().take(70).collect();
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {spin} Aguardando callback OAuth na porta {port}..."),
+                    Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled("  URL (abra manualmente se o browser nao abrir):", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(short_url, Style::default().fg(Color::Cyan))),
+                Line::from(""),
+                Line::from(Span::styled("  Esc cancelar", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::Confirm3p { env_var, .. } => {
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  Salvar metodo 3P e definir {env_var}=1?"),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  Apos confirmar, adicione ao shell RC:"),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    format!("    export {env_var}=1"),
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Y/Enter confirmar · N/Esc voltar",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::Done { label } => {
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  \u{2713} {label}"),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled("  Esc/Enter para fechar", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+
+        AuthStep::Failed { error } => {
+            let short: String = error.chars().take(120).collect();
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  \u{2717} Erro na autenticacao",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(short, Style::default().fg(Color::Yellow))),
+                Line::from(""),
+                Line::from(Span::styled("  Esc/Enter para voltar", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+    }
+}
+
 pub fn save_setup_keys(provider_sel: usize, key1: &str, key2: &str) -> std::io::Result<()> {
     use std::io::Write;
     let home = std::env::var_os("HOME")
@@ -2642,5 +3499,181 @@ mod tests {
         handle_overlay_key(&mut app, key);
         let decision = rx.try_recv().expect("should have received decision");
         assert!(matches!(decision, PermDecision::Deny));
+    }
+
+    // ─── AuthPicker tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn open_auth_picker_seeds_method_list() {
+        let mut app = make_app();
+        // Simulating open_auth_picker without calling runtime (no credentials expected here).
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::MethodList {
+                selected: 0,
+                claude_code_detected: false,
+            },
+        });
+        assert!(matches!(
+            app.overlay,
+            Some(OverlayKind::AuthPicker {
+                step: AuthStep::MethodList { selected: 0, claude_code_detected: false }
+            })
+        ));
+    }
+
+    #[test]
+    fn auth_picker_method_list_navigation_clamps() {
+        let mut app = make_app();
+        let methods = auth_methods_visible(false);
+        let count = methods.len();
+
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::MethodList { selected: 0, claude_code_detected: false },
+        });
+
+        // Navigate up at 0 — should stay at 0.
+        let key_up = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        handle_overlay_key(&mut app, key_up);
+        if let Some(OverlayKind::AuthPicker { step: AuthStep::MethodList { selected, .. } }) = &app.overlay {
+            assert_eq!(*selected, 0, "should not go below 0");
+        } else {
+            panic!("overlay should still be MethodList");
+        }
+
+        // Navigate down past the end — should clamp at count-1.
+        for _ in 0..count + 5 {
+            let key_down = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            );
+            handle_overlay_key(&mut app, key_down);
+        }
+        if let Some(OverlayKind::AuthPicker { step: AuthStep::MethodList { selected, .. } }) = &app.overlay {
+            assert_eq!(*selected, count - 1, "should clamp at last item");
+        } else {
+            panic!("overlay should still be MethodList");
+        }
+    }
+
+    #[test]
+    fn auth_picker_esc_closes_overlay() {
+        let mut app = make_app();
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::MethodList { selected: 0, claude_code_detected: false },
+        });
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        handle_overlay_key(&mut app, key);
+        assert!(app.overlay.is_none(), "Esc should close the overlay");
+    }
+
+    #[test]
+    fn auth_picker_paste_secret_masks_input() {
+        let mut app = make_app();
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::PasteSecret {
+                method: AuthMethodChoice::PasteApiKey,
+                input: String::new(),
+                cursor: 0,
+                masked: true,
+            },
+        });
+
+        // Type "sk-ant-abc".
+        for c in "sk-ant-abc".chars() {
+            let key = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            );
+            handle_overlay_key(&mut app, key);
+        }
+
+        if let Some(OverlayKind::AuthPicker {
+            step: AuthStep::PasteSecret { input, masked, .. },
+        }) = &app.overlay
+        {
+            assert_eq!(input, "sk-ant-abc", "input should store real value");
+            assert!(*masked, "masked flag should remain true");
+        } else {
+            panic!("overlay should still be PasteSecret");
+        }
+    }
+
+    #[test]
+    fn auth_picker_done_step_returns_auth_complete_on_enter() {
+        let mut app = make_app();
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::Done { label: "test-label".to_string() },
+        });
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let action = handle_overlay_key(&mut app, key);
+        assert!(
+            matches!(action, TuiAction::AuthComplete { label } if label == "test-label"),
+            "Done+Enter should return AuthComplete"
+        );
+        assert!(app.overlay.is_none(), "overlay should be closed after Done");
+    }
+
+    #[test]
+    fn auth_picker_failed_step_goes_back_to_method_list_on_enter() {
+        let mut app = make_app();
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::Failed { error: "some error".to_string() },
+        });
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        handle_overlay_key(&mut app, key);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::AuthPicker { step: AuthStep::MethodList { .. } })
+            ),
+            "Failed+Enter should go back to MethodList"
+        );
+    }
+
+    #[test]
+    fn auth_methods_visible_includes_import_when_detected() {
+        let without = auth_methods_visible(false);
+        let with_cc = auth_methods_visible(true);
+        assert_eq!(with_cc.len(), without.len() + 1);
+        assert_eq!(with_cc[0].0, AuthMethodChoice::ImportClaudeCode);
+    }
+
+    #[test]
+    fn auth_picker_email_input_edits_correctly() {
+        let mut app = make_app();
+        app.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::EmailInput {
+                method: AuthMethodChoice::SsoOAuth,
+                input: String::new(),
+                cursor: 0,
+            },
+        });
+
+        for c in "test@example.com".chars() {
+            let key = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            );
+            handle_overlay_key(&mut app, key);
+        }
+
+        if let Some(OverlayKind::AuthPicker { step: AuthStep::EmailInput { input, cursor, .. } }) = &app.overlay {
+            assert_eq!(input, "test@example.com");
+            assert_eq!(*cursor, "test@example.com".len());
+        } else {
+            panic!("expected EmailInput step");
+        }
     }
 }

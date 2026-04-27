@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 api = { path = "../api" }
+clap = { version = "4", features = ["derive"] }
 commands = { path = "../commands" }
 dotenvy = "0.15"
 compat-harness = { path = "../compat-harness" }

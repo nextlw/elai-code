@@ -67,14 +67,9 @@ esac
 
 # ── Detect existing installation ──────────────────────────────────────────────
 CURRENT_VERSION=""
-EXISTING_KEYS=false
 
 if command -v elai >/dev/null 2>&1; then
   CURRENT_VERSION="$(elai --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-fi
-
-if [ -f "$ENV_FILE" ] && grep -qE "^(ANTHROPIC|OPENAI)_API_KEY=.+" "$ENV_FILE" 2>/dev/null; then
-  EXISTING_KEYS=true
 fi
 
 IS_UPDATE=false
@@ -83,17 +78,10 @@ if [ -n "$CURRENT_VERSION" ]; then
   printf "  ${BOLD}Instalação existente detectada: v${CURRENT_VERSION}${RESET}\n\n"
 fi
 
-# ── Step 1: Provider / API keys ───────────────────────────────────────────────
-printf "  ${BOLD}Step 1 — API keys${RESET}\n\n"
-
-ANTHROPIC_KEY=""
-OPENAI_KEY=""
-SKIP_KEYS=false
-
+# ── Helper: read a secret without echo ────────────────────────────────────────
 read_secret() {
   prompt="$1"
-  # Write prompt and newline to /dev/tty so they are NOT captured when the
-  # caller uses $(...) command substitution — only the secret goes to stdout.
+  # Write prompt to /dev/tty so it is NOT captured by $(...) substitution.
   printf "  %s" "$prompt" >/dev/tty
   stty -echo </dev/tty 2>/dev/null || true
   read -r SECRET </dev/tty
@@ -102,44 +90,27 @@ read_secret() {
   printf '%s' "$SECRET"
 }
 
-if "$EXISTING_KEYS"; then
-  printf "  Chaves já configuradas em %s\n" "$ENV_FILE"
-  printf "  Atualizar chaves? [y/N]: "
-  read -r UPDATE_KEYS </dev/tty
-  UPDATE_KEYS="${UPDATE_KEYS:-n}"
-  case "$UPDATE_KEYS" in
-    [Yy]*) SKIP_KEYS=false ;;
-    *)     SKIP_KEYS=true; ok "Mantendo chaves existentes." ;;
-  esac
-fi
-
-if ! "$SKIP_KEYS"; then
-  printf "\n    [1] Anthropic  (Claude opus / sonnet / haiku)\n"
-  printf "    [2] OpenAI     (gpt-4o, gpt-4o-mini, o3…)\n"
-  printf "    [3] Ambos\n\n"
-  printf "  Escolha [1]: "
-  read -r PROVIDER_CHOICE </dev/tty
-  PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
-
-  case "$PROVIDER_CHOICE" in
-    1)
-      ANTHROPIC_KEY="$(read_secret 'Anthropic API key: ')"
-      [ -z "$ANTHROPIC_KEY" ] && error "API key cannot be empty." ;;
-    2)
-      OPENAI_KEY="$(read_secret 'OpenAI API key: ')"
-      [ -z "$OPENAI_KEY" ] && error "API key cannot be empty." ;;
-    3)
-      ANTHROPIC_KEY="$(read_secret 'Anthropic API key: ')"
-      [ -z "$ANTHROPIC_KEY" ] && error "Anthropic API key cannot be empty."
-      OPENAI_KEY="$(read_secret 'OpenAI API key: ')"
-      [ -z "$OPENAI_KEY" ] && error "OpenAI API key cannot be empty." ;;
+# ── Detect shell RC file ───────────────────────────────────────────────────────
+detect_shell_rc() {
+  case "${SHELL:-}" in
+    */zsh)  printf '%s/.zshrc' "$HOME" ;;
+    */bash) printf '%s/.bashrc' "$HOME" ;;
+    */fish) printf '%s/.config/fish/config.fish' "$HOME" ;;
     *)
-      error "Escolha inválida: $PROVIDER_CHOICE" ;;
+      if [ -f "${HOME}/.zshrc" ]; then
+        printf '%s/.zshrc' "$HOME"
+      elif [ -f "${HOME}/.bashrc" ]; then
+        printf '%s/.bashrc' "$HOME"
+      else
+        printf '%s/.profile' "$HOME"
+      fi ;;
   esac
-fi
+}
 
-# ── Step 2: Download binary ───────────────────────────────────────────────────
-printf "\n  ${BOLD}Step 2 — Instalando binário${RESET}\n\n"
+SHELL_RC="$(detect_shell_rc)"
+
+# ── Step 1: Download binary ───────────────────────────────────────────────────
+printf "  ${BOLD}Step 1 — Instalando binário${RESET}\n\n"
 
 # Fetch latest version tag from GitHub API to skip download if already current.
 LATEST_VERSION=""
@@ -181,59 +152,189 @@ else
   ok "Binário instalado → ${INSTALL_DIR}/${BIN_NAME}"
 fi
 
-# ── Step 3: Save API keys ─────────────────────────────────────────────────────
-if ! "$SKIP_KEYS"; then
-  printf "\n  ${BOLD}Step 3 — Salvando API keys${RESET}\n\n"
+ELAI_BIN="${INSTALL_DIR}/${BIN_NAME}"
 
-  mkdir -p "$ELAI_DIR"
+# ── Step 2: Authentication ────────────────────────────────────────────────────
+printf "\n  ${BOLD}Step 2 — Authentication${RESET}\n\n"
 
-  {
-    printf "# Elai Code — API keys\n"
-    [ -n "$ANTHROPIC_KEY" ] && printf "ANTHROPIC_API_KEY=%s\n" "$ANTHROPIC_KEY"
-    [ -n "$OPENAI_KEY" ]    && printf "OPENAI_API_KEY=%s\n"    "$OPENAI_KEY"
-  } > "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
-  ok "Chaves salvas em ${ENV_FILE}"
-
-  # Detect shell RC file.
-  SHELL_RC=""
-  case "${SHELL:-}" in
-    */zsh)  SHELL_RC="${HOME}/.zshrc" ;;
-    */bash) SHELL_RC="${HOME}/.bashrc" ;;
-    */fish) SHELL_RC="${HOME}/.config/fish/config.fish" ;;
+# If this is an update, ask whether to reconfigure auth.
+if "$IS_UPDATE"; then
+  printf "  Atualizar autenticação? [y/N]: "
+  read -r UPDATE_AUTH </dev/tty
+  UPDATE_AUTH="${UPDATE_AUTH:-n}"
+  case "$UPDATE_AUTH" in
+    [Yy]*) : ;;  # fall through to menu
     *)
-      [ -f "${HOME}/.zshrc" ]  && SHELL_RC="${HOME}/.zshrc"  || \
-      [ -f "${HOME}/.bashrc" ] && SHELL_RC="${HOME}/.bashrc" || \
-      SHELL_RC="${HOME}/.profile" ;;
+      ok "Mantendo autenticação existente."
+      printf "\n  ${GREEN}${BOLD}Atualização concluída!${RESET}\n\n"
+      printf "  Inicie o Elai com:\n\n"
+      printf "    ${BOLD}elai${RESET}\n\n"
+      printf "  Para trocar o método de auth depois:\n\n"
+      printf "    ${BOLD}elai login --claudeai|--console|--sso|--api-key|--token|--use-bedrock|...${RESET}\n"
+      printf "    ${BOLD}elai auth status${RESET}     # ver método ativo\n"
+      printf "    ${BOLD}elai auth list${RESET}       # ver todos os métodos\n\n"
+      exit 0
+      ;;
   esac
+fi
 
-  MARKER="# elai-code api keys"
-  if [ -f "$SHELL_RC" ] && grep -q "$MARKER" "$SHELL_RC" 2>/dev/null; then
-    # Block already present — update the values in-place using a temp file.
-    TMP_RC="$(mktemp)"
-    awk -v anth="$ANTHROPIC_KEY" -v oai="$OPENAI_KEY" -v marker="$MARKER" '
-      $0 == marker { in_block=1; print; next }
-      in_block && /^export ANTHROPIC_API_KEY=/ {
-        if (anth != "") print "export ANTHROPIC_API_KEY=\"" anth "\""
-        next
-      }
-      in_block && /^export OPENAI_API_KEY=/ {
-        if (oai != "") print "export OPENAI_API_KEY=\"" oai "\""
-        next
-      }
-      in_block && /^$/ { in_block=0 }
-      { print }
-    ' "$SHELL_RC" > "$TMP_RC" && mv "$TMP_RC" "$SHELL_RC"
-    ok "Chaves atualizadas em ${SHELL_RC}"
-  else
-    {
-      printf "\n%s\n" "$MARKER"
-      [ -n "$ANTHROPIC_KEY" ] && printf 'export ANTHROPIC_API_KEY="%s"\n' "$ANTHROPIC_KEY"
-      [ -n "$OPENAI_KEY" ]    && printf 'export OPENAI_API_KEY="%s"\n'    "$OPENAI_KEY"
-    } >> "$SHELL_RC"
-    ok "Chaves exportadas em ${SHELL_RC}"
+# Detect existing Claude Code credentials and show hint.
+_has_claude_creds=false
+if [ -f "${HOME}/.claude/.credentials.json" ]; then
+  _has_claude_creds=true
+elif [ "$OS" = "Darwin" ]; then
+  if security find-generic-password -s "Claude Code-credentials" -w >/dev/null 2>&1; then
+    _has_claude_creds=true
   fi
 fi
+
+if "$_has_claude_creds"; then
+  printf "  ${YELLOW}!${RESET} Credenciais Claude Code detectadas. Para importá-las, após a instalação:\n"
+  printf "       ${BOLD}elai login --import-claude-code${RESET}   (em breve)\n"
+  printf "     Ou escolha [1] para fazer um novo login.\n\n"
+fi
+
+# Display auth menu.
+printf "  How would you like to authenticate?\n\n"
+printf "    [1] Claude Pro/Max — log in to claude.ai (recommended)\n"
+printf "    [2] Anthropic Console — generate an API key via OAuth\n"
+printf "    [3] SSO (asks for e-mail)\n"
+printf "    [4] Paste an Anthropic API key (sk-ant-...)\n"
+printf "    [5] Paste an ANTHROPIC_AUTH_TOKEN\n"
+printf "    [6] AWS Bedrock / Google Vertex / Azure Foundry\n"
+printf "    [7] OpenAI only (no Anthropic) — keys go to ~/.elai/.env\n"
+printf "    [8] Skip — configure later with \`elai login\`\n\n"
+printf "  Choose [1]: "
+read -r AUTH_CHOICE </dev/tty
+AUTH_CHOICE="${AUTH_CHOICE:-1}"
+
+case "$AUTH_CHOICE" in
+  1)
+    # Claude Pro/Max — OAuth claude.ai
+    say "Opening claude.ai login..."
+    "$ELAI_BIN" login --claudeai
+    ok "Authentication via claude.ai complete."
+    ;;
+
+  2)
+    # Anthropic Console — OAuth
+    say "Opening Anthropic Console login..."
+    "$ELAI_BIN" login --console
+    ok "Authentication via Anthropic Console complete."
+    ;;
+
+  3)
+    # SSO
+    printf "  E-mail SSO: " >/dev/tty
+    read -r SSO_EMAIL </dev/tty
+    [ -z "$SSO_EMAIL" ] && error "E-mail cannot be empty."
+    say "Starting SSO login for ${SSO_EMAIL}..."
+    "$ELAI_BIN" login --sso --email "$SSO_EMAIL"
+    ok "SSO authentication complete."
+    ;;
+
+  4)
+    # Paste Anthropic API key
+    ANTHROPIC_KEY="$(read_secret 'Anthropic API key (sk-ant-...): ')"
+    [ -z "$ANTHROPIC_KEY" ] && error "API key cannot be empty."
+    printf '%s\n' "$ANTHROPIC_KEY" | "$ELAI_BIN" login --api-key --stdin
+    ok "API key saved."
+    ;;
+
+  5)
+    # Paste ANTHROPIC_AUTH_TOKEN
+    AUTH_TOKEN="$(read_secret 'ANTHROPIC_AUTH_TOKEN: ')"
+    [ -z "$AUTH_TOKEN" ] && error "Auth token cannot be empty."
+    printf '%s\n' "$AUTH_TOKEN" | "$ELAI_BIN" login --token --stdin
+    ok "Auth token saved."
+    ;;
+
+  6)
+    # Third-party: Bedrock / Vertex / Foundry
+    printf "\n    [a] AWS Bedrock\n"
+    printf "    [b] Google Vertex\n"
+    printf "    [c] Azure Foundry\n\n"
+    printf "  Choose [a]: "
+    read -r THREE_P_CHOICE </dev/tty
+    THREE_P_CHOICE="${THREE_P_CHOICE:-a}"
+
+    case "$THREE_P_CHOICE" in
+      a|A)
+        THREE_P_FLAG="--use-bedrock"
+        THREE_P_VAR="CLAUDE_CODE_USE_BEDROCK"
+        ;;
+      b|B)
+        THREE_P_FLAG="--use-vertex"
+        THREE_P_VAR="CLAUDE_CODE_USE_VERTEX"
+        ;;
+      c|C)
+        THREE_P_FLAG="--use-foundry"
+        THREE_P_VAR="CLAUDE_CODE_USE_FOUNDRY"
+        ;;
+      *)
+        error "Escolha inválida: $THREE_P_CHOICE"
+        ;;
+    esac
+
+    "$ELAI_BIN" login "$THREE_P_FLAG"
+
+    printf "  Adicionar 'export %s=1' em %s? [y/N]: " "$THREE_P_VAR" "$SHELL_RC" >/dev/tty
+    read -r ADD_ENV </dev/tty
+    ADD_ENV="${ADD_ENV:-n}"
+    case "$ADD_ENV" in
+      [Yy]*)
+        printf '\nexport %s=1\n' "$THREE_P_VAR" >> "$SHELL_RC"
+        ok "Adicionado 'export ${THREE_P_VAR}=1' em ${SHELL_RC}"
+        ;;
+      *)
+        warn "Variável não adicionada ao shell RC. Adicione manualmente se necessário."
+        ;;
+    esac
+    ;;
+
+  7)
+    # OpenAI only
+    OPENAI_KEY="$(read_secret 'OpenAI API key: ')"
+    [ -z "$OPENAI_KEY" ] && error "API key cannot be empty."
+
+    mkdir -p "$ELAI_DIR"
+    {
+      printf "# Elai Code — API keys\n"
+      printf "OPENAI_API_KEY=%s\n" "$OPENAI_KEY"
+    } > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    ok "OpenAI API key salva em ${ENV_FILE}"
+
+    MARKER="# elai-code api keys"
+    if [ -f "$SHELL_RC" ] && grep -q "$MARKER" "$SHELL_RC" 2>/dev/null; then
+      TMP_RC="$(mktemp)"
+      awk -v oai="$OPENAI_KEY" -v marker="$MARKER" '
+        $0 == marker { in_block=1; print; next }
+        in_block && /^export OPENAI_API_KEY=/ {
+          print "export OPENAI_API_KEY=\"" oai "\""
+          next
+        }
+        in_block && /^$/ { in_block=0 }
+        { print }
+      ' "$SHELL_RC" > "$TMP_RC" && mv "$TMP_RC" "$SHELL_RC"
+      ok "Chave atualizada em ${SHELL_RC}"
+    else
+      {
+        printf "\n%s\n" "$MARKER"
+        printf 'export OPENAI_API_KEY="%s"\n' "$OPENAI_KEY"
+      } >> "$SHELL_RC"
+      ok "Chave exportada em ${SHELL_RC}"
+    fi
+    ;;
+
+  8)
+    warn "Pulando autenticação. Use 'elai login' para configurar depois."
+    ;;
+
+  *)
+    error "Escolha inválida: $AUTH_CHOICE"
+    ;;
+esac
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n  ${GREEN}${BOLD}"
@@ -244,11 +345,14 @@ else
 fi
 printf "${RESET}\n\n"
 
-if ! "$SKIP_KEYS"; then
-  SHELL_RC="${SHELL_RC:-${HOME}/.zshrc}"
+printf "  Inicie o Elai com:\n\n"
+printf "    ${BOLD}elai${RESET}\n\n"
+printf "  Para trocar o método de auth depois:\n\n"
+printf "    ${BOLD}elai login --claudeai|--console|--sso|--api-key|--token|--use-bedrock|...${RESET}\n"
+printf "    ${BOLD}elai auth status${RESET}     # ver método ativo\n"
+printf "    ${BOLD}elai auth list${RESET}       # ver todos os métodos\n\n"
+
+if [ "$AUTH_CHOICE" = "7" ]; then
   printf "  Recarregue o shell ou execute:\n\n"
   printf "    ${BOLD}source %s${RESET}\n\n" "$SHELL_RC"
 fi
-
-printf "  Inicie o Elai com:\n\n"
-printf "    ${BOLD}elai${RESET}\n\n"

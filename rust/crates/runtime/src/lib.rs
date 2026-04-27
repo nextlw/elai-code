@@ -17,6 +17,7 @@ mod permissions;
 mod prompt;
 mod remote;
 pub mod sandbox;
+pub mod secure_storage;
 mod session;
 pub mod skills;
 pub mod telemetry;
@@ -33,11 +34,12 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
-    McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
-    McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
-    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
-    RuntimePluginConfig, ScopedMcpServerConfig, ELAI_SETTINGS_SCHEMA_NAME,
+    AnthropicOAuthEndpoints, ConfigEntry, ConfigError, ConfigLoader, ConfigSource,
+    McpConfigCollection, McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig,
+    McpSdkServerConfig, McpServerConfig, McpStdioServerConfig, McpTransport,
+    McpWebSocketServerConfig, OAuthConfig, OAuthMode, ResolvedPermissionMode, RuntimeConfig,
+    RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig,
+    ELAI_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
@@ -70,11 +72,19 @@ pub use mcp_stdio::{
     McpToolCallContent, McpToolCallParams, McpToolCallResult, UnsupportedMcpServer,
 };
 pub use oauth::{
-    clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-    generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-    parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
+    clear_auth_method, clear_oauth_credentials, code_challenge_s256, credentials_path,
+    generate_pkce_pair, generate_state, load_auth_method, load_oauth_credentials,
+    loopback_redirect_uri, parse_oauth_callback_query, parse_oauth_callback_request_target,
+    save_auth_method, save_oauth_credentials, ApiKeyOrigin, AuthMethod, OAuthAuthorizationRequest,
     OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     PkceChallengeMethod, PkceCodePair,
+};
+pub use secure_storage::{auto_store, FileStore, KeychainStore, SecretStore};
+
+pub mod claude_code_compat;
+pub use claude_code_compat::{
+    detect_claude_code_credentials, import_claude_code_credentials,
+    ClaudeCodeCredSource, ClaudeCodeCredentialsSnapshot,
 };
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,

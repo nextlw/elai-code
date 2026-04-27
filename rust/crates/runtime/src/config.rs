@@ -143,6 +143,70 @@ pub struct OAuthConfig {
     pub scopes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthMode {
+    ClaudeAi,
+    Console,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnthropicOAuthEndpoints {
+    pub console_authorize_url: String,
+    pub claude_ai_authorize_url: String,
+    pub token_url: String,
+    pub api_key_url: String,
+    pub roles_url: String,
+    pub manual_redirect_url: String,
+    pub client_id: String,
+    pub beta_header: String,
+    pub claude_ai_scopes: Vec<String>,
+    pub console_scopes: Vec<String>,
+}
+
+impl AnthropicOAuthEndpoints {
+    #[must_use]
+    pub fn production() -> Self {
+        Self {
+            console_authorize_url: "https://platform.claude.com/oauth/authorize".into(),
+            claude_ai_authorize_url: "https://claude.com/cai/oauth/authorize".into(),
+            token_url: "https://platform.claude.com/v1/oauth/token".into(),
+            api_key_url: "https://api.anthropic.com/api/oauth/claude_cli/create_api_key".into(),
+            roles_url: "https://api.anthropic.com/api/oauth/claude_cli/roles".into(),
+            manual_redirect_url: "https://platform.claude.com/oauth/code/callback".into(),
+            client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".into(),
+            beta_header: "oauth-2025-04-20".into(),
+            claude_ai_scopes: vec![
+                "user:profile".into(),
+                "user:inference".into(),
+                "user:sessions:claude_code".into(),
+                "user:mcp_servers".into(),
+                "user:file_upload".into(),
+            ],
+            console_scopes: vec!["org:create_api_key".into(), "user:profile".into()],
+        }
+    }
+
+    #[must_use]
+    pub fn to_oauth_config(&self, mode: OAuthMode) -> OAuthConfig {
+        let (authorize_url, scopes) = match mode {
+            OAuthMode::ClaudeAi => {
+                (self.claude_ai_authorize_url.clone(), self.claude_ai_scopes.clone())
+            }
+            OAuthMode::Console => {
+                (self.console_authorize_url.clone(), self.console_scopes.clone())
+            }
+        };
+        OAuthConfig {
+            client_id: self.client_id.clone(),
+            authorize_url,
+            token_url: self.token_url.clone(),
+            callback_port: None,
+            manual_redirect_url: Some(self.manual_redirect_url.clone()),
+            scopes,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     Io(std::io::Error),
@@ -1290,5 +1354,37 @@ mod tests {
             .contains("mcpServers.broken: missing string field url"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn anthropic_endpoints_production_has_expected_values() {
+        use super::{AnthropicOAuthEndpoints};
+        let ep = AnthropicOAuthEndpoints::production();
+        assert_eq!(ep.client_id, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
+        assert_eq!(ep.beta_header, "oauth-2025-04-20");
+        assert!(ep.claude_ai_scopes.contains(&"user:profile".to_string()));
+        assert!(ep.claude_ai_scopes.contains(&"user:inference".to_string()));
+        assert!(ep.console_scopes.contains(&"org:create_api_key".to_string()));
+        assert!(ep.console_scopes.contains(&"user:profile".to_string()));
+    }
+
+    #[test]
+    fn to_oauth_config_claude_ai_uses_claude_ai_scopes() {
+        use super::{AnthropicOAuthEndpoints, OAuthMode};
+        let ep = AnthropicOAuthEndpoints::production();
+        let cfg = ep.to_oauth_config(OAuthMode::ClaudeAi);
+        assert_eq!(cfg.authorize_url, ep.claude_ai_authorize_url);
+        assert_eq!(cfg.scopes, ep.claude_ai_scopes);
+        assert_eq!(cfg.client_id, ep.client_id);
+    }
+
+    #[test]
+    fn to_oauth_config_console_uses_console_scopes() {
+        use super::{AnthropicOAuthEndpoints, OAuthMode};
+        let ep = AnthropicOAuthEndpoints::production();
+        let cfg = ep.to_oauth_config(OAuthMode::Console);
+        assert_eq!(cfg.authorize_url, ep.console_authorize_url);
+        assert_eq!(cfg.scopes, ep.console_scopes);
+        assert_eq!(cfg.client_id, ep.client_id);
     }
 }

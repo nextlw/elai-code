@@ -17,6 +17,78 @@ pub struct OAuthTokenSet {
     pub scopes: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ApiKeyOrigin {
+    ConsoleOAuth,
+    Pasted,
+    Helper { command: String },
+    Fd { fd: i32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum AuthMethod {
+    ClaudeAiOAuth {
+        token_set: OAuthTokenSet,
+        #[serde(default)]
+        subscription: Option<String>,
+    },
+    ConsoleApiKey {
+        api_key: String,
+        origin: ApiKeyOrigin,
+    },
+    AnthropicAuthToken {
+        token: String,
+    },
+    Bedrock,
+    Vertex,
+    Foundry,
+}
+
+pub fn save_auth_method(method: &AuthMethod) -> io::Result<()> {
+    let path = credentials_path()?;
+    let mut root = read_credentials_root(&path)?;
+    root.insert(
+        "auth".to_string(),
+        serde_json::to_value(method)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+    );
+    write_credentials_root(&path, &root)
+}
+
+pub fn load_auth_method() -> io::Result<Option<AuthMethod>> {
+    let path = credentials_path()?;
+    let root = read_credentials_root(&path)?;
+    if let Some(auth) = root.get("auth") {
+        if !auth.is_null() {
+            let method = serde_json::from_value::<AuthMethod>(auth.clone())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            return Ok(Some(method));
+        }
+    }
+    // Legacy fallback: if "auth" absent but "oauth" present, wrap as ClaudeAiOAuth
+    if let Some(oauth) = root.get("oauth") {
+        if !oauth.is_null() {
+            let stored = serde_json::from_value::<StoredOAuthCredentials>(oauth.clone())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            return Ok(Some(AuthMethod::ClaudeAiOAuth {
+                token_set: stored.into(),
+                subscription: None,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+pub fn clear_auth_method() -> io::Result<()> {
+    let path = credentials_path()?;
+    let mut root = read_credentials_root(&path)?;
+    root.remove("auth");
+    root.remove("oauth");
+    write_credentials_root(&path, &root)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkceCodePair {
     pub verifier: String,
@@ -323,7 +395,7 @@ fn generate_random_token(bytes: usize) -> io::Result<String> {
     Ok(base64url_encode(&buffer))
 }
 
-fn credentials_home_dir() -> io::Result<PathBuf> {
+pub(crate) fn credentials_home_dir() -> io::Result<PathBuf> {
     if let Some(path) = std::env::var_os("ELAI_CONFIG_HOME") {
         return Ok(PathBuf::from(path));
     }
@@ -451,9 +523,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-        generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
+        clear_auth_method, clear_oauth_credentials, code_challenge_s256, credentials_path,
+        generate_pkce_pair, generate_state, load_auth_method, load_oauth_credentials,
+        loopback_redirect_uri, parse_oauth_callback_query, parse_oauth_callback_request_target,
+        save_auth_method, save_oauth_credentials, ApiKeyOrigin, AuthMethod, OAuthAuthorizationRequest,
         OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     };
 
@@ -585,5 +658,114 @@ mod tests {
         assert_eq!(params.code.as_deref(), Some("abc"));
         assert_eq!(params.state.as_deref(), Some("xyz"));
         assert!(parse_oauth_callback_request_target("/wrong?code=abc").is_err());
+    }
+
+    fn sample_token_set() -> OAuthTokenSet {
+        OAuthTokenSet {
+            access_token: "acc-token".to_string(),
+            refresh_token: Some("ref-token".to_string()),
+            expires_at: Some(9999),
+            scopes: vec!["user:profile".to_string()],
+        }
+    }
+
+    #[test]
+    fn auth_method_round_trip_for_each_variant() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::env::set_var("ELAI_CONFIG_HOME", &config_home);
+
+        let variants: Vec<AuthMethod> = vec![
+            AuthMethod::ClaudeAiOAuth {
+                token_set: sample_token_set(),
+                subscription: Some("pro".to_string()),
+            },
+            AuthMethod::ConsoleApiKey {
+                api_key: "sk-ant-api03-test".to_string(),
+                origin: ApiKeyOrigin::ConsoleOAuth,
+            },
+            AuthMethod::ConsoleApiKey {
+                api_key: "sk-ant-pasted".to_string(),
+                origin: ApiKeyOrigin::Pasted,
+            },
+            AuthMethod::ConsoleApiKey {
+                api_key: "sk-ant-helper".to_string(),
+                origin: ApiKeyOrigin::Helper { command: "my-helper".to_string() },
+            },
+            AuthMethod::ConsoleApiKey {
+                api_key: "sk-ant-fd".to_string(),
+                origin: ApiKeyOrigin::Fd { fd: 3 },
+            },
+            AuthMethod::AnthropicAuthToken { token: "auth-tok".to_string() },
+            AuthMethod::Bedrock,
+            AuthMethod::Vertex,
+            AuthMethod::Foundry,
+        ];
+
+        for method in &variants {
+            save_auth_method(method).expect("save_auth_method");
+            let loaded = load_auth_method().expect("load_auth_method");
+            assert_eq!(loaded.as_ref(), Some(method));
+            // cleanup between variants
+            clear_auth_method().expect("clear_auth_method");
+        }
+
+        std::env::remove_var("ELAI_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&config_home);
+    }
+
+    #[test]
+    fn legacy_oauth_key_loads_as_claude_ai_oauth() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::fs::create_dir_all(&config_home).expect("create temp dir");
+        std::env::set_var("ELAI_CONFIG_HOME", &config_home);
+
+        let path = credentials_path().expect("credentials path");
+        let legacy = serde_json::json!({
+            "oauth": {
+                "accessToken": "leg-acc",
+                "refreshToken": "leg-ref",
+                "expiresAt": 42,
+                "scopes": ["user:profile"]
+            }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+
+        let loaded = load_auth_method().expect("load_auth_method");
+        match loaded {
+            Some(AuthMethod::ClaudeAiOAuth { token_set, subscription }) => {
+                assert_eq!(token_set.access_token, "leg-acc");
+                assert_eq!(subscription, None);
+            }
+            other => panic!("expected ClaudeAiOAuth, got {other:?}"),
+        }
+
+        std::env::remove_var("ELAI_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&config_home);
+    }
+
+    #[test]
+    fn clear_auth_method_removes_both_keys() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::fs::create_dir_all(&config_home).expect("create temp dir");
+        std::env::set_var("ELAI_CONFIG_HOME", &config_home);
+
+        let path = credentials_path().expect("credentials path");
+        let initial = serde_json::json!({
+            "auth": { "method": "bedrock" },
+            "oauth": { "accessToken": "old", "scopes": [] }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+
+        clear_auth_method().expect("clear_auth_method");
+
+        let contents = std::fs::read_to_string(&path).expect("read file");
+        assert!(!contents.contains("\"auth\""));
+        assert!(!contents.contains("\"oauth\""));
+
+        std::env::remove_var("ELAI_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&config_home);
     }
 }
