@@ -79,13 +79,13 @@ OPENAI_KEY=""
 
 read_secret() {
   prompt="$1"
-  printf "  %s" "$prompt"
-  # Redirect stty to /dev/tty explicitly so it disables echo on the correct
-  # terminal device even when stdin is a pipe (curl | sh usage).
+  # Write prompt and newline to /dev/tty so they are NOT captured when the
+  # caller uses $(...) command substitution — only the secret goes to stdout.
+  printf "  %s" "$prompt" >/dev/tty
   stty -echo </dev/tty 2>/dev/null || true
   read -r SECRET </dev/tty
   stty echo </dev/tty 2>/dev/null || true
-  printf "\n"
+  printf "\n" >/dev/tty
   printf '%s' "$SECRET"
 }
 
