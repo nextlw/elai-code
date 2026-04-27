@@ -109,7 +109,7 @@ new_section = (
 )
 
 updated = re.sub(
-    r"## What's New — v[\d.]+.*?(?=---)",
+    r"## What's New — v[\d.]+.*?(?=\n---\n)",
     new_section + "\n\n",
     content,
     count=1,
