@@ -1,9 +1,12 @@
 mod diff;
+mod dream;
 mod init;
 mod input;
 mod render;
 mod swd;
 mod tui;
+mod updater;
+mod verify;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -71,7 +74,11 @@ Run `elai --help` for usage."
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     load_workspace_dotenv();
     let args: Vec<String> = env::args().skip(1).collect();
-    match parse_args(&args)? {
+    let action = parse_args(&args)?;
+    if !matches!(action, CliAction::Update | CliAction::Version | CliAction::Help) {
+        updater::check_and_enforce();
+    }
+    match action {
         CliAction::DumpManifests => dump_manifests(),
         CliAction::BootstrapPlan => print_bootstrap_plan(),
         CliAction::Agents { args } => LiveCli::print_agents(args.as_deref())?,
@@ -102,6 +109,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             budget_config,
         } => run_repl(model, allowed_tools, permission_mode, no_tui, swd_level, budget_config)?,
         CliAction::Help => print_help(),
+        CliAction::Stats { days, by_model, by_project } => run_stats_command(days, by_model, by_project),
+        CliAction::Verify => run_verify_command()?,
+        CliAction::Update => updater::run_update(),
     }
     Ok(())
 }
@@ -232,6 +242,13 @@ enum CliAction {
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
+    Verify,
+    Update,
+    Stats {
+        days: Option<u32>,
+        by_model: bool,
+        by_project: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,6 +494,33 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
+        "update" => Ok(CliAction::Update),
+        "stats" => {
+            let mut days: Option<u32> = None;
+            let mut by_model = false;
+            let mut by_project = false;
+            let mut idx = 1usize;
+            while idx < rest.len() {
+                match rest[idx].as_str() {
+                    "--days" => {
+                        if let Some(v) = rest.get(idx + 1) {
+                            days = v.parse().ok();
+                            idx += 2;
+                        } else {
+                            idx += 1;
+                        }
+                    }
+                    s if s.starts_with("--days=") => {
+                        days = s[7..].parse().ok();
+                        idx += 1;
+                    }
+                    "--by-model" => { by_model = true; idx += 1; }
+                    "--by-project" => { by_project = true; idx += 1; }
+                    _ => { idx += 1; }
+                }
+            }
+            Ok(CliAction::Stats { days, by_model, by_project })
+        }
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -674,6 +718,29 @@ fn parse_resume_args(args: &[String]) -> Result<CliAction, String> {
         session_path,
         commands,
     })
+}
+
+fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
+    use commands::stats::render_stats_report;
+    use runtime::{default_telemetry_path, load_entries};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let path = default_telemetry_path();
+    let since_secs: Option<u64> = days.map(|d| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        now.saturating_sub(u64::from(d) * 86400)
+    });
+    let entries = match load_entries(&path, since_secs) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error reading telemetry: {e}");
+            return;
+        }
+    };
+    print!("{}", render_stats_report(&entries, by_model, by_project, days));
 }
 
 fn dump_manifests() {
@@ -1195,6 +1262,9 @@ fn run_resume_command(
         | SlashCommand::Plugins { .. }
         | SlashCommand::Budget { .. }
         | SlashCommand::Tools { .. }
+        | SlashCommand::Dream { .. }
+        | SlashCommand::Stats { .. }
+        | SlashCommand::Providers { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -1851,6 +1921,50 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 }
             }
         }
+        "stats" => {
+            use commands::stats::render_stats_report;
+            use runtime::{default_telemetry_path, load_entries};
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            let days: Option<u32> = arg.and_then(|a| {
+                let mut toks = a.split_whitespace();
+                while let Some(tok) = toks.next() {
+                    if tok == "--days" {
+                        return toks.next()?.parse().ok();
+                    } else if let Some(s) = tok.strip_prefix("--days=") {
+                        return s.parse().ok();
+                    }
+                }
+                None
+            });
+            let by_model = arg.map_or(true, |a| a.contains("--by-model") || !a.contains("--by-project"));
+            let by_project = arg.map_or(false, |a| a.contains("--by-project"));
+            let path = default_telemetry_path();
+            let since_secs: Option<u64> = days.map(|d| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_sub(u64::from(d) * 86400)
+            });
+            let output = match load_entries(&path, since_secs) {
+                Ok(entries) => render_stats_report(&entries, by_model, by_project, days),
+                Err(e) => format!("Error reading telemetry: {e}"),
+            };
+            app.push_chat(tui::ChatEntry::SystemNote(output));
+        }
+        "providers" => {
+            use commands::providers::render_providers_dashboard;
+            use runtime::{default_telemetry_path, load_entries};
+
+            let verbose = arg.map_or(false, |a| a.contains("--verbose"));
+            let path = default_telemetry_path();
+            let output = match load_entries(&path, None) {
+                Ok(entries) => render_providers_dashboard(&entries, verbose),
+                Err(e) => format!("Error reading telemetry: {e}"),
+            };
+            app.push_chat(tui::ChatEntry::SystemNote(output));
+        }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
                 "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
@@ -1880,6 +1994,9 @@ struct LiveCli {
     system_prompt: Vec<String>,
     runtime: ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>,
     session: SessionHandle,
+    telemetry: TelemetryHandle,
+    _telemetry_shutdown: Option<TelemetryShutdown>,
+    session_start: Instant,
 }
 
 impl LiveCli {
@@ -1891,6 +2008,10 @@ impl LiveCli {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
         let session = create_managed_session_handle()?;
+
+        // Start telemetry unless disabled.
+        let (telemetry, telemetry_shutdown) = start_telemetry();
+
         let runtime = build_runtime(
             Session::new(),
             model.clone(),
@@ -1900,6 +2021,7 @@ impl LiveCli {
             allowed_tools.clone(),
             permission_mode,
             None,
+            telemetry.clone(),
         )?;
         let cli = Self {
             model,
@@ -1908,6 +2030,9 @@ impl LiveCli {
             system_prompt,
             runtime,
             session,
+            telemetry,
+            _telemetry_shutdown: telemetry_shutdown,
+            session_start: Instant::now(),
         };
         cli.persist_session()?;
         Ok(cli)
@@ -2003,6 +2128,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let summary = runtime.run_turn(input, Some(&mut permission_prompter))?;
@@ -2139,6 +2265,38 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 println!("{}", handle_tools_slash_command(subcommand.as_deref()));
                 false
             }
+            SlashCommand::Dream { force } => {
+                self.run_dream(force)?;
+                false
+            }
+            SlashCommand::Stats { days } => {
+                use commands::stats::render_stats_report;
+                use runtime::{default_telemetry_path, load_entries};
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let path = default_telemetry_path();
+                let since_secs: Option<u64> = days.map(|d| {
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        .saturating_sub(u64::from(*d) * 86400)
+                });
+                match load_entries(&path, since_secs) {
+                    Ok(entries) => print!("{}", render_stats_report(&entries, true, false, *days)),
+                    Err(e) => eprintln!("error reading telemetry: {e}"),
+                }
+                false
+            }
+            SlashCommand::Providers { verbose } => {
+                use commands::providers::render_providers_dashboard;
+                use runtime::{default_telemetry_path, load_entries};
+                let path = default_telemetry_path();
+                match load_entries(&path, None) {
+                    Ok(entries) => print!("{}", render_providers_dashboard(&entries, *verbose)),
+                    Err(e) => eprintln!("error reading telemetry: {e}"),
+                }
+                false
+            }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))
             }
@@ -2209,6 +2367,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         self.model.clone_from(&model);
         println!(
@@ -2253,6 +2412,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         println!(
             "{}",
@@ -2279,6 +2439,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         println!(
             "Session cleared\n  Mode             fresh session\n  Preserved model  {}\n  Permission mode  {}\n  Session          {}",
@@ -2315,6 +2476,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         self.session = handle;
         println!(
@@ -2400,6 +2562,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     self.allowed_tools.clone(),
                     self.permission_mode,
                     None,
+                    self.telemetry.clone(),
                 )?;
                 self.session = handle;
                 println!(
@@ -2444,6 +2607,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         self.persist_session()
     }
@@ -2462,6 +2626,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
+            self.telemetry.clone(),
         )?;
         self.persist_session()?;
         println!("{}", format_compact_report(removed, kept, skipped));
@@ -2484,6 +2649,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             self.allowed_tools.clone(),
             self.permission_mode,
             progress,
+            self.telemetry.clone(),
         )?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let summary = runtime.run_turn(prompt, Some(&mut permission_prompter))?;
@@ -2641,6 +2807,52 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         }
 
         println!("Issue draft\n  Title            {title}\n\n{body}");
+        Ok(())
+    }
+
+    fn run_dream(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+        let Some(path) = dream::find_memory_file(&cwd) else {
+            println!("Dream\n  Result           skipped\n  Reason           no memory file found (ELAI.md, CLAUDE.md, .elai/ELAI.md, .elai/instructions.md)");
+            return Ok(());
+        };
+        let content = fs::read_to_string(&path)?;
+        let before_size = content.len();
+        let parsed = dream::parse_memory_sections(&content);
+        let entries_to_compress: Vec<String>;
+        if parsed.old_entries.is_empty() {
+            if !force {
+                println!(
+                    "Dream\n  Result           skipped\n  Reason           <= 20 entries ({}). Use /dream --force to override.",
+                    parsed.recent_entries.len()
+                );
+                return Ok(());
+            }
+            entries_to_compress = if parsed.recent_entries.len() > 20 {
+                parsed.recent_entries[..parsed.recent_entries.len() - 20].to_vec()
+            } else {
+                parsed.recent_entries.clone()
+            };
+        } else {
+            entries_to_compress = parsed.old_entries.clone();
+        }
+        println!(
+            "Dream  Compressing {} entries from {} ...",
+            entries_to_compress.len(),
+            path.display()
+        );
+        let prompt =
+            dream::build_compression_prompt(&entries_to_compress, parsed.existing_summary.as_deref());
+        let summary = self.run_internal_prompt_text(&prompt, false)?;
+        dream::rewrite_memory(&path, &summary, &parsed.recent_entries)?;
+        let after_content = fs::read_to_string(&path)?;
+        let result = dream::DreamResult {
+            entries_compressed: entries_to_compress.len(),
+            before_size,
+            after_size: after_content.len(),
+            summary,
+        };
+        println!("{}", dream::format_dream_output(&result));
         Ok(())
     }
 }
@@ -3722,12 +3934,14 @@ fn build_runtime(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     progress_reporter: Option<InternalPromptProgressReporter>,
+    telemetry: TelemetryHandle,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
     let swd_level = Arc::new(std::sync::atomic::AtomicU8::new(
         crate::swd::SwdLevel::default() as u8,
     ));
+    let model_name = model.clone();
     Ok(ConversationRuntime::new_with_features(
         session,
         DefaultRuntimeClient::new(
@@ -3748,7 +3962,9 @@ fn build_runtime(
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
         &feature_config,
-    ))
+    )
+    .with_telemetry(telemetry)
+    .with_model_name(model_name))
 }
 
 #[allow(clippy::too_many_arguments)]
