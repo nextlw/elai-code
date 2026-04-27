@@ -3,7 +3,20 @@ set -eu
 
 REPO="nextlw/elai-code"
 BIN_NAME="elai"
-INSTALL_DIR="${ELAI_INSTALL_DIR:-/usr/local/bin}"
+
+# Prefer the Homebrew bin prefix on macOS arm64 so the binary lands ahead of
+# any stale files in /usr/local/bin when Homebrew is on the PATH.
+_default_install_dir() {
+  case "$(uname -s):$(uname -m)" in
+    Darwin:arm64)
+      if [ -d "/opt/homebrew/bin" ]; then printf '/opt/homebrew/bin'; return; fi ;;
+    Darwin:*)
+      if command -v brew >/dev/null 2>&1; then printf '%s/bin' "$(brew --prefix)"; return; fi ;;
+  esac
+  printf '/usr/local/bin'
+}
+
+INSTALL_DIR="${ELAI_INSTALL_DIR:-$(_default_install_dir)}"
 ELAI_DIR="${HOME}/.elai"
 ENV_FILE="${ELAI_DIR}/.env"
 
@@ -67,9 +80,11 @@ OPENAI_KEY=""
 read_secret() {
   prompt="$1"
   printf "  %s" "$prompt"
-  stty -echo 2>/dev/null || true
+  # Redirect stty to /dev/tty explicitly so it disables echo on the correct
+  # terminal device even when stdin is a pipe (curl | sh usage).
+  stty -echo </dev/tty 2>/dev/null || true
   read -r SECRET </dev/tty
-  stty echo 2>/dev/null || true
+  stty echo </dev/tty 2>/dev/null || true
   printf "\n"
   printf '%s' "$SECRET"
 }
