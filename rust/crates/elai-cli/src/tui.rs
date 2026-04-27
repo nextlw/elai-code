@@ -42,8 +42,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Terminal;
 
@@ -1250,11 +1250,11 @@ const ELAI_ASCII: &str = "\
         ████  ████     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
-    // accent: lavender for solid blocks and box-drawing text
-    let block_style = Style::default().fg(Color::Indexed(147));
-    // half-blocks (▄ ▀) inside the logo window — same accent, slightly dimmer
-    let half_style = Style::default().fg(Color::Indexed(141));
-    // ░ cells: visible as a recessed "window" background
+    // corpo do mascote e texto ELAI: laranja claro
+    let body_style = Style::default().fg(Color::Rgb(242, 222, 206));
+    // olhos (▄ ▀ e █ depois de ░): laranja saturado
+    let eye_style = Style::default().fg(Color::Rgb(201, 123, 74));
+    // ░ células: fundo recuado ("cavidade" dos olhos)
     let dot_style = Style::default()
         .fg(Color::Indexed(241))
         .bg(Color::Indexed(236));
@@ -1269,23 +1269,24 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
         .lines()
         .map(|l| {
             #[derive(Clone, Copy, PartialEq)]
-            enum Seg { Block, Dot, Half }
+            enum Seg { Body, Dot, Eye }
 
             let mut spans: Vec<Span> = Vec::new();
             let mut current = String::new();
-            let mut seg = Seg::Block;
+            let mut seg = Seg::Body;
 
             for ch in l.chars() {
                 let next = match ch {
                     '░' => Seg::Dot,
-                    '▄' | '▀' => Seg::Half,
-                    _ => Seg::Block,
+                    '▄' | '▀' => Seg::Eye,
+                    '█' if matches!(seg, Seg::Dot | Seg::Eye) => Seg::Eye,
+                    _ => Seg::Body,
                 };
                 if next != seg && !current.is_empty() {
                     spans.push(Span::styled(current.clone(), match seg {
-                        Seg::Block => block_style,
-                        Seg::Dot   => dot_style,
-                        Seg::Half  => half_style,
+                        Seg::Body => body_style,
+                        Seg::Dot  => dot_style,
+                        Seg::Eye  => eye_style,
                     }));
                     current.clear();
                 }
@@ -1294,9 +1295,9 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
             }
             if !current.is_empty() {
                 spans.push(Span::styled(current, match seg {
-                    Seg::Block => block_style,
-                    Seg::Dot   => dot_style,
-                    Seg::Half  => half_style,
+                    Seg::Body => body_style,
+                    Seg::Dot  => dot_style,
+                    Seg::Eye  => eye_style,
                 }));
             }
             Line::from(spans)
@@ -1311,7 +1312,8 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(147)));
+        .border_style(Style::default().fg(Color::Rgb(201, 123, 74)))
+        .padding(Padding::new(2, 0, 0, 0));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
