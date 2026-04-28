@@ -11,8 +11,22 @@ pub use output::{task_output_path, TaskOutputWriter};
 pub use registry::{TaskRegistry, TaskRegistryError};
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Process-wide singleton da `TaskRegistry`. Inicializada lazy na primeira
+/// chamada de `task_registry()`. Permite que ferramentas (bash, agent,
+/// dream, etc.) registrem tasks sem ter que passar a registry como argumento
+/// por toda a árvore de chamadas.
+static GLOBAL_REGISTRY: OnceLock<Arc<TaskRegistry>> = OnceLock::new();
+
+/// Retorna a `TaskRegistry` global, criando-a no primeiro acesso.
+#[must_use]
+pub fn task_registry() -> Arc<TaskRegistry> {
+    GLOBAL_REGISTRY
+        .get_or_init(|| Arc::new(TaskRegistry::new()))
+        .clone()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -229,5 +243,24 @@ mod tests {
             let id = generate_task_id(TaskType::LocalBash);
             assert!(seen.insert(id.clone()), "duplicate id: {id}");
         }
+    }
+
+    #[test]
+    fn task_registry_singleton_is_shared() {
+        // Duas chamadas retornam Arc apontando para a mesma instância.
+        let r1 = task_registry();
+        let r2 = task_registry();
+        assert!(Arc::ptr_eq(&r1, &r2), "singleton must return same Arc instance");
+
+        // Estado é compartilhado: registrar via uma alça é visível na outra.
+        let state = TaskState::new(
+            generate_task_id(TaskType::LocalBash),
+            TaskType::LocalBash,
+            "singleton test".to_string(),
+            None,
+        );
+        let id = state.id.clone();
+        let _ = r1.register(state);
+        assert!(r2.get(&id).is_some(), "registered task should be visible via second handle");
     }
 }

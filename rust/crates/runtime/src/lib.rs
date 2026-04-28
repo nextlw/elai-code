@@ -132,7 +132,7 @@ pub use global_config::{
     save as save_global_config, FeatureFlags, GlobalConfig,
 };
 pub use tasks::{
-    generate_task_id, task_output_path, TaskHandle, TaskOutputWriter, TaskRegistry,
+    generate_task_id, task_output_path, task_registry, TaskHandle, TaskOutputWriter, TaskRegistry,
     TaskRegistryError, TaskState, TaskStatus, TaskType,
 };
 
