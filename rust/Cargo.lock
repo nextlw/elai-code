@@ -1100,12 +1100,14 @@ dependencies = [
  "reqwest",
  "runtime",
  "rustyline",
+ "serde",
  "serde_json",
  "sha2",
  "similar",
  "syntect",
  "tempfile",
  "tokio",
+ "toml",
  "tools",
 ]
 

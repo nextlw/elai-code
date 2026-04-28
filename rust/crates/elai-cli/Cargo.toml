@@ -34,8 +34,10 @@ pulldown-cmark = "0.13"
 rustyline = "15"
 runtime = { path = "../runtime" }
 plugins = { path = "../plugins" }
+serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 syntect = "5"
+toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 tools = { path = "../tools" }
 ratatui = "0.30.0"

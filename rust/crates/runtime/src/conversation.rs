@@ -193,7 +193,18 @@ where
                 messages: self.session.messages.clone(),
             };
             let events = self.api_client.stream(request)?;
-            let (assistant_message, usage) = build_assistant_message(events)?;
+            let (assistant_message, usage) = match build_assistant_message(events) {
+                Ok(pair) => pair,
+                // After a tool_use in the previous iteration, some models (notably
+                // Haiku 4.5 with the `SendUserMessage` tool) consider the turn
+                // "answered" and emit an empty assistant message. Treat that as a
+                // graceful end-of-turn instead of bubbling up an error that would
+                // discard the entire turn — including the user's input.
+                Err(err) if iterations > 1 && err.message == "assistant stream produced no content" => {
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
                 let model = self

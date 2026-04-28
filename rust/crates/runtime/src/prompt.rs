@@ -1,3 +1,15 @@
+//! **Elai** — AI Coding Agent by TLW Nexcode
+//!
+//! This module constructs the system prompt that defines Elai's identity and behavior.
+//! Elai is an interactive AI coding assistant that helps users with software engineering tasks.
+//!
+//! The system prompt is dynamically built from:
+//! - Core agent identity and instructions
+//! - Project context (git status, diffs)
+//! - Configuration files (ELAI.md, .elai/ instructions)
+//! - Runtime settings
+//! - Dynamically loaded skills
+
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -652,7 +664,7 @@ fn render_config_section(config: &RuntimeConfig) -> String {
 
 fn get_simple_intro_section(has_output_style: bool) -> String {
     format!(
-        "You are an interactive agent that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.",
+        "You are Elai, an interactive AI coding agent by TLW Nexcode that helps users {} Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.",
         if has_output_style {
             "according to your \"Output Style\" below, which describes how you should respond to user queries."
         } else {

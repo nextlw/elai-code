@@ -325,11 +325,11 @@ input_schema_json = '''
 [[tool]]
 id = "SendUserMessage"
 title = "Send User Message"
-description = "Send a message to the user."
+description = "Emit a side-channel notification or status update to the user (e.g. progress note, proactive heads-up). DO NOT use this to deliver your final answer — emit the answer as plain assistant text instead. Calling this tool does NOT end your turn; after it returns you must still produce a regular text response."
 category = "meta"
 priority = 40
 required_permission = "ReadOnly"
-embedding_hints = ["message", "send", "notify", "user", "communicate"]
+embedding_hints = ["notification", "status", "progress", "heads-up", "side-channel"]
 input_schema_json = '''
 {
   "type": "object",

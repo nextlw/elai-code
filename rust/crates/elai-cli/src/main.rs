@@ -6,6 +6,7 @@ mod init;
 mod input;
 mod render;
 mod swd;
+mod tips;
 mod tui;
 mod tui_sink;
 mod updater;
@@ -1957,16 +1958,20 @@ fn run_tui_repl(
                                     perm_clone,
                                     perm_tx_clone,
                                 );
-                                if let Err(e) = runtime.run_turn(&text, Some(&mut prompter)) {
+                                let turn_result = runtime.run_turn(&text, Some(&mut prompter));
+                                // Persist whatever the runtime produced — even on error — so the
+                                // user's input and any partial assistant work are not lost. Without
+                                // this, a mid-turn failure rewinds the session to the pre-turn
+                                // snapshot and the next turn looks like it "forgot" the context.
+                                let _ = session_for_thread
+                                    .lock()
+                                    .map(|mut guard| *guard = runtime.session().clone());
+                                if let Err(e) = turn_result {
                                     let msg = e.to_string();
                                     let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
                                     return Err(msg);
                                 }
                                 let _ = msg_tx_clone.send(tui::TuiMsg::Done);
-                                // Save updated session back.
-                                let _ = session_for_thread
-                                    .lock()
-                                    .map(|mut guard| *guard = runtime.session().clone());
                                 Ok(())
                             })();
                             let _ = done_tx.send(result);
@@ -2111,7 +2116,10 @@ fn handle_tui_slash_command(
             app.chat.clear();
             app.chat_scroll = 0;
             *session.lock().unwrap() = Session::new();
-            app.push_chat(tui::ChatEntry::SystemNote("✅ Histórico limpo.".into()));
+            // Reativa o overlay de dicas — o reaparecimento é o feedback visual
+            // de "histórico limpo" sem precisar empurrar uma SystemNote que
+            // contaminaria o `app.chat.is_empty()` checado pelo render_tips.
+            app.reset_tips();
         }
         "help" => {
             let help = "\

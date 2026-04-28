@@ -48,7 +48,7 @@ pub struct ColorTheme {
     pub text_primary: Color,
 
     /// Texto secundário/meta (hints, paths, blockquote, estados "em breve").
-    /// **Default**: `AnsiValue(248)`. **Sites**: labels auxiliares, hints de
+    /// **Default**: `AnsiValue(244)`. **Sites**: labels auxiliares, hints de
     /// teclado, blockquote markdown, headings nível 4+, estados desabilitados.
     pub text_secondary: Color,
 
@@ -1300,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_gray_intensity_falls_back_to_default_248() {
+    fn invalid_gray_intensity_falls_back_to_default_244() {
         let td = TempDir::new().unwrap();
         with_home(&td, || {
             let mut cfg = runtime::GlobalConfig::default();
@@ -1314,7 +1314,7 @@ mod tests {
             std::env::set_var("ELAI_TEXT_SECONDARY_INTENSITY", "200");
 
             let resolved = ColorTheme::resolved();
-            assert_eq!(resolved.text_secondary, Color::AnsiValue(248));
+            assert_eq!(resolved.text_secondary, Color::AnsiValue(244));
         });
     }
 }

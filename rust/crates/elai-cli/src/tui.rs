@@ -373,6 +373,12 @@ pub struct UiApp {
     pub budget_pct: f32,
     pub budget_cost_usd: f64,
     pub budget_enabled: bool,
+    /// Onboarding: dicas exibidas quando o chat ainda está vazio.
+    pub tips: Vec<crate::tips::Tip>,
+    pub tips_order: Vec<usize>,
+    pub tips_cursor: usize,
+    /// `false` após o usuário enviar a primeira mensagem; `true` novamente após `/clear`.
+    pub show_tips: bool,
 }
 
 impl UiApp {
@@ -408,7 +414,56 @@ impl UiApp {
             budget_pct: 0.0,
             budget_cost_usd: 0.0,
             budget_enabled: false,
+            tips: {
+                let loaded = crate::tips::load_tips();
+                loaded
+            },
+            tips_order: Vec::new(),
+            tips_cursor: 0,
+            show_tips: true,
         }
+        .with_shuffled_tips()
+    }
+
+    fn with_shuffled_tips(mut self) -> Self {
+        self.tips_order = crate::tips::shuffle_indices(self.tips.len());
+        self.tips_cursor = 0;
+        self
+    }
+
+    /// Re-embaralha as dicas e reativa o overlay (chamado no `/clear` e Ctrl+L).
+    pub fn reset_tips(&mut self) {
+        self.tips_order = crate::tips::shuffle_indices(self.tips.len());
+        self.tips_cursor = 0;
+        self.show_tips = true;
+    }
+
+    /// Avança para a próxima dica (wrap-around).
+    pub fn next_tip(&mut self) {
+        if self.tips_order.is_empty() {
+            return;
+        }
+        self.tips_cursor = (self.tips_cursor + 1) % self.tips_order.len();
+    }
+
+    /// Volta para a dica anterior (wrap-around).
+    pub fn prev_tip(&mut self) {
+        if self.tips_order.is_empty() {
+            return;
+        }
+        self.tips_cursor = if self.tips_cursor == 0 {
+            self.tips_order.len() - 1
+        } else {
+            self.tips_cursor - 1
+        };
+    }
+
+    /// Dica atual + posição (`current_index_1based`, `total`). Retorna `None`
+    /// se não houver dicas carregadas.
+    pub fn current_tip(&self) -> Option<(&crate::tips::Tip, usize, usize)> {
+        let idx = *self.tips_order.get(self.tips_cursor)?;
+        let tip = self.tips.get(idx)?;
+        Some((tip, self.tips_cursor + 1, self.tips_order.len()))
     }
 
     pub fn tick(&mut self) {
@@ -418,6 +473,9 @@ impl UiApp {
     }
 
     pub fn push_chat(&mut self, entry: ChatEntry) {
+        if matches!(entry, ChatEntry::UserMessage(_)) {
+            self.show_tips = false;
+        }
         self.chat.push(entry);
         self.scroll_to_bottom();
     }
@@ -1100,6 +1158,15 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
             app.chat.clear();
             app.chat_scroll = 0;
+            app.reset_tips();
+            return TuiAction::None;
+        }
+        (KeyModifiers::CONTROL, KeyCode::Right) if app.show_tips && app.chat.is_empty() => {
+            app.next_tip();
+            return TuiAction::None;
+        }
+        (KeyModifiers::CONTROL, KeyCode::Left) if app.show_tips && app.chat.is_empty() => {
+            app.prev_tip();
             return TuiAction::None;
         }
         (KeyModifiers::CONTROL, KeyCode::Char('k')) => {
@@ -3136,9 +3203,66 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// Onboarding: renderiza a dica atual centralizada quando `app.chat` está vazio.
+fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some((tip, idx, total)) = app.current_tip() else {
+        return lines;
+    };
+
+    // Largura útil do conteúdo da dica (corpo wrapped). Limita a 80 cols mesmo
+    // em telas largas para preservar legibilidade.
+    let content_width = width.saturating_sub(8).min(80).max(20);
+    // Padding lateral para centralizar o bloco na área disponível.
+    let pad_left = width.saturating_sub(content_width) / 2;
+    let pad = " ".repeat(pad_left);
+
+    let title_style = Style::default()
+        .fg(theme().primary_accent)
+        .add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(theme().text_primary);
+    let dim = Style::default().fg(theme().text_secondary);
+
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled(format!("✦ Dica {idx}/{total}"), dim),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled(tip.title.clone(), title_style),
+    ]));
+    lines.push(Line::from(Span::raw("")));
+
+    for body_line in wrap_text(&tip.body, content_width) {
+        if body_line.is_empty() {
+            lines.push(Line::from(Span::raw("")));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled(body_line, body_style),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled("Ctrl+→ próxima  ·  Ctrl+← anterior", dim),
+    ]));
+
+    lines
+}
+
 fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
     let mut result = Vec::new();
     let wrap_width = width.saturating_sub(4).max(20);
+
+    if app.show_tips && app.chat.is_empty() {
+        return render_tips(app, width);
+    }
 
     for entry in &app.chat {
         match entry {

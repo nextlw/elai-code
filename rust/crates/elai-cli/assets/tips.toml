@@ -1,0 +1,127 @@
+# Dicas exibidas na tela inicial do TUI quando o chat está vazio.
+#
+# Curado pelos desenvolvedores do Elai Code. Não é editado pelo usuário final —
+# o conteúdo é embutido no binário em compile-time via `include_str!`.
+#
+# Para adicionar uma nova dica, basta apender outro bloco `[[tip]]` abaixo
+# (rebuild necessário). `title` é curto (1 linha); `body` é texto livre, pode
+# ter múltiplas linhas e parágrafos via aspas triplas.
+
+[[tip]]
+title = "Tool selection sem LLM"
+body = """
+Pipeline determinístico de 5 estágios escolhe ferramentas em microssegundos,
+sem chamar o modelo: context gating → skill overrides → user filter →
+priority ranking → budget cap. O modelo só recebe a lista já enxuta.
+"""
+
+[[tip]]
+title = "Mythos orchestrator"
+body = """
+Algoritmos de raciocínio do mythos-router replicados aqui em Rust: EMA metrics,
+circuit breaker e fallback automático entre provedores. Roteia entre Anthropic,
+xAI e OpenAI conforme saúde, latência e capacidade — sem perder o turno.
+"""
+
+[[tip]]
+title = "SWD: Safe Write Diff"
+body = """
+Toda escrita em arquivo passa por um diff aprovável. No modo Partial as
+alterações triviais e seguras vão direto; no modo Full toda mudança exige
+confirmação explícita. Você nunca sobrescreve trabalho sem ver o que mudou.
+"""
+
+[[tip]]
+title = "Embeddings 100% locais"
+body = """
+O index de código usa fastembed + sqlite-vec rodando dentro do próprio binário.
+Seu código nunca sai da máquina para gerar embeddings — ideal para projetos
+proprietários ou ambientes sem internet estável.
+"""
+
+[[tip]]
+title = "Tree-sitter semântico"
+body = """
+O code_index parseia Rust, TypeScript, JavaScript, Python e Go com tree-sitter
+de verdade — não é grep glorificado. Buscas e referências enxergam funções,
+structs e tipos, não apenas linhas de texto.
+"""
+
+[[tip]]
+title = "Skills via SKILL.md"
+body = """
+Cada projeto pode declarar skills próprias num arquivo SKILL.md com frontmatter
+YAML. Skills definem instruções de domínio, ferramentas requeridas e
+incompatibilidades — o pipeline aplica automaticamente.
+"""
+
+[[tip]]
+title = "Budget limiter"
+body = """
+O Elai monitora tokens e custo em USD em tempo real. Você pode definir um teto
+por sessão; o agente interrompe a execução antes de estourar, em vez de
+apresentar uma surpresa no final do mês.
+"""
+
+[[tip]]
+title = "Cache determinístico"
+body = """
+Respostas idênticas para o mesmo prompt + contexto são reutilizadas localmente.
+Combinado com prompt caching da API, reduz drasticamente o custo em loops de
+desenvolvimento e em múltiplas execuções da mesma tarefa.
+"""
+
+[[tip]]
+title = "Comando /dream"
+body = """
+Quando a sessão fica longa, /dream comprime a memória conversacional preservando
+decisões e contexto crítico, liberando tokens sem perder o fio. É o equivalente
+a um "garbage collector" para o contexto do agente.
+"""
+
+[[tip]]
+title = "Comando /stats"
+body = """
+Dashboard de uso: tokens consumidos, custo acumulado em USD, latência por
+provider, taxa de fallback. Tudo agregado por sessão e por modelo, ajuda a
+escolher o melhor provider para cada tipo de tarefa.
+"""
+
+[[tip]]
+title = "Comando /verify"
+body = """
+Sincroniza o que o agente "lembra" com o que está realmente no código. Detecta
+referências a símbolos que não existem mais, paths quebrados e suposições
+desatualizadas — útil depois de rebases ou refactors grandes.
+"""
+
+[[tip]]
+title = "Slash palette (Ctrl+K)"
+body = """
+Ctrl+K abre uma paleta com todos os slash commands disponíveis e fuzzy search.
+Mais rápido que decorar nomes — digite parte do comando e selecione com setas.
+"""
+
+[[tip]]
+title = "Referência de arquivos com @"
+body = """
+Digite @ no prompt e o autocomplete sugere arquivos do index. Selecione um
+arquivo (ex: @src/main.rs) e o conteúdo é injetado no contexto da mensagem,
+sem precisar abrir e copiar.
+"""
+
+[[tip]]
+title = "Shell inline com !"
+body = """
+Comece a linha com ! e o resto é executado como shell sem sair do chat. Útil
+para git status, ls, ou qualquer comando rápido enquanto conversa com o agente
+— o output volta direto na timeline.
+"""
+
+[[tip]]
+title = "Permissões granulares (F3)"
+body = """
+F3 abre o painel de permissões: ReadOnly, WorkspaceWrite ou DangerFullAccess.
+Você controla exatamente quais ferramentas o agente pode invocar — desde
+"só leitura" até "acesso total" — por sessão.
+"""
