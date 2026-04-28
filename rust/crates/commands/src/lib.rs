@@ -810,6 +810,14 @@ pub fn render_slash_command_help() -> String {
 /// Renderiza o help agrupado por categoria, respeitando `hidden` e `is_enabled`.
 #[must_use]
 pub fn render_help_grouped() -> String {
+    render_help_grouped_with(None)
+}
+
+/// Renderiza o help agrupado, opcionalmente incluindo custom commands do registry.
+#[must_use]
+pub fn render_help_grouped_with(
+    user_commands: Option<&user_commands::UserCommandRegistry>,
+) -> String {
     let mut by_cat: std::collections::BTreeMap<u8, Vec<&SlashCommandSpec>> =
         std::collections::BTreeMap::new();
     for spec in SLASH_COMMAND_SPECS {
@@ -829,6 +837,28 @@ pub fn render_help_grouped() -> String {
             let display = spec.user_facing_name.unwrap_or(spec.name);
             let resume = if spec.resume_supported { " [resume]" } else { "" };
             out.push_str(&format!("  /{display:<18} {}{resume}\n", spec.summary));
+        }
+    }
+    if let Some(reg) = user_commands {
+        if reg.count() > 0 {
+            out.push_str(&format!("\n{}\n", SlashCategory::Custom.label()));
+            let mut customs: Vec<&user_commands::UserCommand> = reg.all().collect();
+            customs.sort_by(|a, b| a.name.cmp(&b.name));
+            for cmd in customs {
+                let scope_marker = match cmd.scope {
+                    user_commands::UserCommandScope::Project => "P",
+                    user_commands::UserCommandScope::Global => "G",
+                };
+                let display = if let Some(hint) = &cmd.argument_hint {
+                    format!("/{} {}", cmd.name, hint)
+                } else {
+                    format!("/{}", cmd.name)
+                };
+                out.push_str(&format!(
+                    "  [{scope_marker}] {display:<18} {}\n",
+                    cmd.description
+                ));
+            }
         }
     }
     out
@@ -3117,6 +3147,53 @@ mod tests {
                 expanded_prompt: "Hello world!".to_string(),
                 argument_hint: None,
             }
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn render_help_grouped_with_no_registry_matches_default() {
+        use super::{render_help_grouped, render_help_grouped_with};
+        assert_eq!(render_help_grouped_with(None), render_help_grouped());
+    }
+
+    #[test]
+    fn render_help_grouped_with_registry_includes_custom_section() {
+        use super::render_help_grouped_with;
+        use crate::user_commands::UserCommandRegistry;
+
+        // Build registry via discover on a tmpdir with two command files.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("lib-help-custom-{nanos}"));
+        let cmd_dir = root.join(".elai").join("commands");
+        fs::create_dir_all(&cmd_dir).expect("create cmd dir");
+        fs::write(
+            cmd_dir.join("alpha.md"),
+            "---\ndescription: Alpha command\n---\ndo alpha $ARGUMENTS",
+        )
+        .expect("write alpha.md");
+        fs::write(
+            cmd_dir.join("beta.md"),
+            "---\ndescription: Beta command\nargument-hint: [name]\n---\ndo beta $ARGUMENTS",
+        )
+        .expect("write beta.md");
+
+        let registry = UserCommandRegistry::discover(&root).expect("discover");
+        let output = render_help_grouped_with(Some(&registry));
+
+        assert!(
+            output.contains("Custom"),
+            "output should contain 'Custom' section label"
+        );
+        assert!(output.contains("alpha"), "output should contain 'alpha'");
+        assert!(output.contains("beta"), "output should contain 'beta'");
+        assert!(
+            output.contains("Alpha command"),
+            "output should contain 'Alpha command' description"
         );
 
         let _ = fs::remove_dir_all(&root);

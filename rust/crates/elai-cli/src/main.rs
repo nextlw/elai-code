@@ -32,7 +32,7 @@ use api::{
 use commands::{
     handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
     handle_tools_slash_command, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, SlashCommand,
+    slash_command_specs, try_user_command, SlashCommand, UserCommandRegistry,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
@@ -1666,6 +1666,23 @@ fn run_repl(
                     break;
                 }
                 if let Some(command) = SlashCommand::parse(&trimmed) {
+                    // Before dispatching Unknown to handle_repl_command, try user commands.
+                    if matches!(command, SlashCommand::Unknown(_)) {
+                        let cwd = std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        if let Some(expanded) =
+                            try_user_command(&trimmed, &cli.user_commands, &cwd)
+                        {
+                            eprintln!(
+                                "[custom] /{} expanded ({} chars)",
+                                expanded.command_name,
+                                expanded.expanded_prompt.len()
+                            );
+                            editor.push_history(input);
+                            cli.run_turn(&expanded.expanded_prompt)?;
+                            continue;
+                        }
+                    }
                     if cli.handle_repl_command(command)? {
                         cli.persist_session()?;
                     }
@@ -2473,6 +2490,7 @@ struct LiveCli {
     _telemetry_shutdown: Option<TelemetryShutdown>,
     session_start: Instant,
     cache: ResponseCache,
+    user_commands: UserCommandRegistry,
 }
 
 impl LiveCli {
@@ -2512,6 +2530,12 @@ impl LiveCli {
             ResponseCache::new(cache_path, ResponseCache::DEFAULT_TTL_MS)
         };
 
+        let user_commands = {
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            UserCommandRegistry::discover(&cwd).unwrap_or_default()
+        };
+
         let cli = Self {
             model,
             allowed_tools,
@@ -2523,6 +2547,7 @@ impl LiveCli {
             _telemetry_shutdown: telemetry_shutdown,
             session_start: Instant::now(),
             cache,
+            user_commands,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -2631,6 +2656,33 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 println!();
                 self.emit_turn_telemetry(&summary, None);
                 self.persist_session()?;
+
+                // Auto-dream evaluation (post-turn). Avalia gates e, se Fire, libera lock
+                // imediatamente (execução completa do agent forked é deferida para versão futura).
+                let cwd = std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let cfg = runtime::AutoDreamConfig::from_env();
+                match runtime::evaluate_auto_dream(&cwd, &cfg) {
+                    runtime::AutoDreamDecision::Fire {
+                        session_ids,
+                        hours_since_last,
+                        prior_mtime_ms,
+                    } => {
+                        eprintln!(
+                            "[auto-dream] gates open: {} sessions, {:.1}h since last consolidation. \
+                             Running consolidation deferred to v0.8.0; releasing lock.",
+                            session_ids.len(),
+                            hours_since_last,
+                        );
+                        let _ = runtime::auto_dream::rollback_lock(&cwd, prior_mtime_ms);
+                    }
+                    runtime::AutoDreamDecision::Skip { reason } => {
+                        if std::env::var_os("ELAI_AUTO_DREAM_DEBUG").is_some() {
+                            eprintln!("[auto-dream] skipped: {reason:?}");
+                        }
+                    }
+                }
+
                 Ok(())
             }
             Err(error) => {
