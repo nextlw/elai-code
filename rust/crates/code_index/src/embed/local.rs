@@ -26,7 +26,12 @@ impl LocalFastEmbedder {
 
     pub fn with_model(model: EmbeddingModel) -> Result<Self, EmbedError> {
         let model_name = format!("{model:?}");
-        let init = TextInitOptions::new(model).with_show_download_progress(true);
+        // Progress bar do fastembed (indicatif) escreveria direto no stderr e
+        // corromperia qualquer TUI ativo. Mantemos silencioso por padrão; o
+        // caller (init.rs) imprime sua própria mensagem antes da chamada.
+        // Override com `ELAI_FASTEMBED_PROGRESS=1` para debug fora do TUI.
+        let show_progress = std::env::var_os("ELAI_FASTEMBED_PROGRESS").is_some();
+        let init = TextInitOptions::new(model).with_show_download_progress(show_progress);
         let inner =
             TextEmbedding::try_new(init).map_err(|e| EmbedError::Backend(e.to_string()))?;
         // Heurística de dimensão por variante.
