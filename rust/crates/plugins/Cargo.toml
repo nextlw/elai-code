@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+code_index = { path = "../code_index", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 reqwest = { version = "0.12", features = ["blocking"] }

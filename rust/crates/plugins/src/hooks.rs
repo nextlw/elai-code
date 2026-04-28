@@ -351,10 +351,10 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         manager
-            .install(first_source_root.to_str().expect("utf8 path"))
+            .install(first_source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("first plugin install should succeed");
         manager
-            .install(second_source_root.to_str().expect("utf8 path"))
+            .install(second_source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("second plugin install should succeed");
         let registry = manager.plugin_registry().expect("registry should build");
 

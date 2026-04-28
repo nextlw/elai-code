@@ -16,7 +16,7 @@ pub use embed::LocalFastEmbedder;
 pub use embed::OllamaEmbedder;
 pub use facts::{collect_facts, DirSummary, ProjectFacts, TopSymbol};
 pub use indexer::{IndexError, IndexPhase, IndexProgress, Indexer};
-pub use progress::{progress_bar, progress_bar_labeled};
+pub use progress::{progress_bar, progress_bar_labeled, NoopReporter, ProgressReporter};
 pub use store::{Filter, Hit, IndexPoint, MemoryStore, StoreError, VectorStore};
 #[cfg(feature = "vec-sqlite")]
 pub use store::SqliteVecStore;

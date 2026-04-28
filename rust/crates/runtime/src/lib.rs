@@ -125,8 +125,8 @@ pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
 };
 pub use auto_dream::{
-    build_consolidation_prompt, evaluate as evaluate_auto_dream, AutoDreamConfig,
-    AutoDreamDecision, SkipReason as AutoDreamSkipReason,
+    build_consolidation_prompt, evaluate as evaluate_auto_dream, execute_consolidation,
+    AutoDreamConfig, AutoDreamDecision, SkipReason as AutoDreamSkipReason,
 };
 pub use global_config::{
     config_path as global_config_path, is_setup_complete, load as load_global_config,

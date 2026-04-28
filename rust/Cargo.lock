@@ -2942,6 +2942,7 @@ dependencies = [
 name = "plugins"
 version = "0.6.5"
 dependencies = [
+ "code_index",
  "flate2",
  "reqwest",
  "serde",

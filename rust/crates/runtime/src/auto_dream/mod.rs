@@ -140,6 +140,17 @@ fn current_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Execute consolidation after gates have passed.
+/// Currently a stub — full implementation deferred to v0.8.0.
+pub fn execute_consolidation(
+    _root: &Path,
+    _session_ids: &[String],
+    reporter: &dyn crate::ProgressReporter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    reporter.report("[auto-dream] consolidation stub — implementation deferred to v0.8.0");
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn reset_scan_throttle_for_tests() {
     LAST_SESSION_SCAN_AT.store(0, Ordering::Relaxed);

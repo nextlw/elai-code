@@ -1,3 +1,8 @@
+//! NOTE: progress reporting follows the TUI-safe pattern documented at
+//! `rust/docs/progress-pattern.md`. Use `runtime::ProgressReporter` (or any
+//! `Fn(&str) + Send + Sync` closure via blanket impl) instead of `eprintln!`
+//! to avoid corrupting the ratatui alternate screen.
+
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -336,6 +341,7 @@ pub fn render_verify_report_tui(report: &VerifyReport) -> String {
 /// Runs the verify flow and returns `(report, formatted_terminal_string)`.
 pub fn run_verify_inner(
     cwd: &Path,
+    reporter: &dyn runtime::ProgressReporter,
 ) -> Result<(VerifyReport, String), Box<dyn std::error::Error>> {
     // Discover instruction files
     let candidate_names = [
@@ -356,9 +362,16 @@ pub fn run_verify_inner(
         })
         .collect();
 
+    reporter.report("Scanning project files...");
     let files = walk_project(cwd)?;
+    reporter.report("Parsing instruction files...");
     let memory = parse_memory_entries(&instruction_files);
 
+    reporter.report(&format!(
+        "Comparing {} files against {} memory entries...",
+        files.len(),
+        memory.len()
+    ));
     let mut report = diff_entries(cwd, &files, &memory);
 
     // Populate drift: files that exist on disk but memory mentions "DELETE <path>"
@@ -382,12 +395,13 @@ pub fn run_verify_inner(
     }
 
     let rendered = render_verify_report(&report, cwd);
+    reporter.report("Verify complete.");
     Ok((report, rendered))
 }
 
 /// Orchestrates the full verify flow and returns the terminal-formatted report.
 pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let (_, rendered) = run_verify_inner(cwd)?;
+    let (_, rendered) = run_verify_inner(cwd, &runtime::EprintlnReporter::new())?;
     Ok(rendered)
 }
 

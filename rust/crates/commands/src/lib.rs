@@ -14,7 +14,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use plugins::{PluginError, PluginManager, PluginSummary};
-use runtime::{compact_session, CompactionConfig, Session};
+use runtime::{compact_session, CompactionConfig, Session, ProgressReporter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
@@ -977,6 +977,7 @@ pub fn handle_plugins_slash_command(
     action: Option<&str>,
     target: Option<&str>,
     manager: &mut PluginManager,
+    reporter: &dyn runtime::ProgressReporter,
 ) -> Result<PluginsCommandResult, PluginError> {
     match action {
         None | Some("list") => Ok(PluginsCommandResult {
@@ -990,7 +991,7 @@ pub fn handle_plugins_slash_command(
                     reload_runtime: false,
                 });
             };
-            let install = manager.install(target)?;
+            let install = manager.install(target, reporter)?;
             let plugin = manager
                 .list_installed_plugins()?
                 .into_iter()
@@ -1054,7 +1055,7 @@ pub fn handle_plugins_slash_command(
                     reload_runtime: false,
                 });
             };
-            let update = manager.update(target)?;
+            let update = manager.update(target, reporter)?;
             let plugin = manager
                 .list_installed_plugins()?
                 .into_iter()
@@ -1210,7 +1211,11 @@ pub fn handle_worktree_slash_command(
     }
 }
 
-pub fn handle_commit_slash_command(message: &str, cwd: &Path) -> io::Result<String> {
+pub fn handle_commit_slash_command(
+    message: &str,
+    cwd: &Path,
+    reporter: &dyn ProgressReporter,
+) -> io::Result<String> {
     let status = git_stdout(cwd, &["status", "--short"])?;
     if status.trim().is_empty() {
         return Ok(
@@ -1224,7 +1229,9 @@ pub fn handle_commit_slash_command(message: &str, cwd: &Path) -> io::Result<Stri
         return Err(io::Error::other("generated commit message was empty"));
     }
 
+    reporter.report("Staging all changes...");
     git_status_ok(cwd, &["add", "-A"])?;
+    reporter.report("Committing...");
     let path = write_temp_text_file("elai-commit-message", "txt", message)?;
     let path_string = path.to_string_lossy().into_owned();
     git_status_ok(cwd, &["commit", "--file", path_string.as_str()])?;
@@ -1239,12 +1246,15 @@ pub fn handle_commit_slash_command(message: &str, cwd: &Path) -> io::Result<Stri
 pub fn handle_commit_push_pr_slash_command(
     request: &CommitPushPrRequest,
     cwd: &Path,
+    reporter: &dyn ProgressReporter,
 ) -> io::Result<String> {
+    reporter.report("Checking prerequisites...");
     if !command_exists("gh") {
         return Err(io::Error::other("gh CLI is required for /commit-push-pr"));
     }
 
     let default_branch = detect_default_branch(cwd)?;
+    reporter.report(&format!("Detected base branch: {default_branch}"));
     let mut branch = current_branch(cwd)?;
     let mut created_branch = false;
     if branch == default_branch {
@@ -1255,10 +1265,12 @@ pub fn handle_commit_push_pr_slash_command(
         };
         let next_branch = build_branch_name(hint);
         git_status_ok(cwd, &["switch", "-c", next_branch.as_str()])?;
-        branch = next_branch;
+        branch = next_branch.clone();
+        reporter.report(&format!("Created branch: {next_branch}"));
         created_branch = true;
     }
 
+    reporter.report("Checking workspace changes...");
     let workspace_has_changes = !git_stdout(cwd, &["status", "--short"])?.trim().is_empty();
     let commit_report = if workspace_has_changes {
         let Some(message) = request.commit_message.as_deref() else {
@@ -1266,11 +1278,13 @@ pub fn handle_commit_push_pr_slash_command(
                 "commit message is required when workspace changes are present",
             ));
         };
-        Some(handle_commit_slash_command(message, cwd)?)
+        reporter.report("Committing changes...");
+        Some(handle_commit_slash_command(message, cwd, reporter)?)
     } else {
         None
     };
 
+    reporter.report("Verifying branch diff...");
     let branch_diff = git_stdout(
         cwd,
         &["diff", "--stat", &format!("{default_branch}...HEAD")],
@@ -1282,8 +1296,10 @@ pub fn handle_commit_push_pr_slash_command(
         );
     }
 
+    reporter.report(&format!("Pushing to origin/{}...", branch));
     git_status_ok(cwd, &["push", "--set-upstream", "origin", branch.as_str()])?;
 
+    reporter.report("Creating pull request...");
     let body_path = write_temp_text_file("elai-pr-body", "md", request.pr_body.trim())?;
     let body_path_string = body_path.to_string_lossy().into_owned();
     let create = Command::new("gh")
@@ -1340,6 +1356,7 @@ pub fn handle_commit_push_pr_slash_command(
         lines.push(String::new());
         lines.push(report);
     }
+    reporter.report(&format!("PR created: {url}"));
     Ok(lines.join("\n"))
 }
 
@@ -2853,6 +2870,7 @@ mod tests {
             Some("install"),
             Some(source_root.to_str().expect("utf8 path")),
             &mut manager,
+            &runtime::NoopReporter,
         )
         .expect("install command should succeed");
         assert!(install.reload_runtime);
@@ -2861,7 +2879,7 @@ mod tests {
         assert!(install.message.contains("Version          1.0.0"));
         assert!(install.message.contains("Status           enabled"));
 
-        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager, &runtime::NoopReporter)
             .expect("list command should succeed");
         assert!(!list.reload_runtime);
         assert!(list.message.contains("demo"));
@@ -2883,29 +2901,30 @@ mod tests {
             Some("install"),
             Some(source_root.to_str().expect("utf8 path")),
             &mut manager,
+            &runtime::NoopReporter,
         )
         .expect("install command should succeed");
 
-        let disable = handle_plugins_slash_command(Some("disable"), Some("demo"), &mut manager)
+        let disable = handle_plugins_slash_command(Some("disable"), Some("demo"), &mut manager, &runtime::NoopReporter)
             .expect("disable command should succeed");
         assert!(disable.reload_runtime);
         assert!(disable.message.contains("disabled demo@external"));
         assert!(disable.message.contains("Name             demo"));
         assert!(disable.message.contains("Status           disabled"));
 
-        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager, &runtime::NoopReporter)
             .expect("list command should succeed");
         assert!(list.message.contains("demo"));
         assert!(list.message.contains("disabled"));
 
-        let enable = handle_plugins_slash_command(Some("enable"), Some("demo"), &mut manager)
+        let enable = handle_plugins_slash_command(Some("enable"), Some("demo"), &mut manager, &runtime::NoopReporter)
             .expect("enable command should succeed");
         assert!(enable.reload_runtime);
         assert!(enable.message.contains("enabled demo@external"));
         assert!(enable.message.contains("Name             demo"));
         assert!(enable.message.contains("Status           enabled"));
 
-        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager, &runtime::NoopReporter)
             .expect("list command should succeed");
         assert!(list.message.contains("demo"));
         assert!(list.message.contains("enabled"));
@@ -2925,7 +2944,7 @@ mod tests {
         config.bundled_root = Some(bundled_root.clone());
         let mut manager = PluginManager::new(config);
 
-        let list = handle_plugins_slash_command(Some("list"), None, &mut manager)
+        let list = handle_plugins_slash_command(Some("list"), None, &mut manager, &runtime::NoopReporter)
             .expect("list command should succeed");
         assert!(!list.reload_runtime);
         assert!(list.message.contains("starter"));
@@ -2989,7 +3008,7 @@ mod tests {
 
         // when
         let report =
-            handle_commit_slash_command("feat: add notes", &repo).expect("commit succeeds");
+            handle_commit_slash_command("feat: add notes", &repo, &runtime::NoopReporter).expect("commit succeeds");
         let status = run_command(&repo, "git", &["status", "--short"]);
         let message = run_command(&repo, "git", &["log", "-1", "--pretty=%B"]);
 
@@ -3044,7 +3063,7 @@ mod tests {
 
         // when
         let report =
-            handle_commit_push_pr_slash_command(&request, &repo).expect("commit-push-pr succeeds");
+            handle_commit_push_pr_slash_command(&request, &repo, &runtime::NoopReporter).expect("commit-push-pr succeeds");
         let branch = run_command(&repo, "git", &["branch", "--show-current"]);
         let message = run_command(&repo, "git", &["log", "-1", "--pretty=%B"]);
         let gh_invocations = fs::read_to_string(&gh_log).expect("gh log should exist");

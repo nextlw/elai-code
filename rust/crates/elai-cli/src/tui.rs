@@ -47,6 +47,8 @@ use ratatui::widgets::{
 };
 use ratatui::Terminal;
 
+use commands::SlashCategory;
+
 // ─── Inter-thread message types ──────────────────────────────────────────────
 
 /// Events sent from the background runtime thread to the TUI main thread.
@@ -125,7 +127,7 @@ pub enum OverlayKind {
         selected: usize,
     },
     SlashPalette {
-        items: Vec<(String, String)>,
+        items: Vec<(SlashCategory, String, String)>,
         filter: String,
         selected: usize,
     },
@@ -597,10 +599,12 @@ impl UiApp {
 
     pub fn open_slash_palette(&mut self) {
         let items = slash_palette_items();
+        let initial_rows = build_palette_rows(&items, "");
+        let selected = first_selectable_row(&initial_rows);
         self.overlay = Some(OverlayKind::SlashPalette {
             filter: String::new(),
             items,
-            selected: 0,
+            selected,
         });
     }
 
@@ -657,29 +661,177 @@ impl UiApp {
     }
 }
 
-fn slash_palette_items() -> Vec<(String, String)> {
-    vec![
-        ("help".into(), "Mostrar ajuda".into()),
-        ("status".into(), "Status da sessão".into()),
-        ("model".into(), "Mostrar/trocar modelo".into()),
-        ("permissions".into(), "Mostrar/trocar permissões".into()),
-        ("session".into(), "Retomar sessão".into()),
-        ("clear".into(), "Limpar histórico".into()),
-        ("compact".into(), "Compactar histórico".into()),
-        ("cost".into(), "Mostrar custo".into()),
-        ("diff".into(), "Mostrar git diff".into()),
-        ("export".into(), "Exportar conversa".into()),
-        ("init".into(), "Inicializar projeto".into()),
-        ("memory".into(), "Mostrar ELAI.md".into()),
-        ("dream".into(), "Comprimir entradas antigas da memória (AI)".into()),
-        ("verify".into(), "Verificar codebase vs memória (ELAI.md)".into()),
-        ("version".into(), "Mostrar versão".into()),
-        ("swd".into(), "Strict Write Discipline (off/partial/full)".into()),
-        ("budget".into(), "Budget limiter (tokens/custo)".into()),
-        ("keys".into(), "Configurar/trocar API keys".into()),
-        ("uninstall".into(), "Desinstalar Elai Code".into()),
-        ("exit".into(), "Sair".into()),
-    ]
+/// Tradução PT-BR para cada slash command conhecido. Comandos sem entrada
+/// caem no `spec.summary` (inglês) — garante visibilidade mesmo de novos
+/// `SLASH_COMMAND_SPECS` que ainda não foram traduzidos.
+fn slash_command_pt_description(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "help" => "Mostrar ajuda",
+        "status" => "Status da sessão",
+        "compact" => "Compactar histórico",
+        "model" => "Mostrar/trocar modelo",
+        "permissions" => "Mostrar/trocar permissões",
+        "clear" => "Limpar histórico",
+        "cost" => "Mostrar custo",
+        "resume" => "Carregar sessão salva",
+        "config" => "Inspecionar configuração Elai",
+        "memory" => "Mostrar ELAI.md",
+        "init" => "Inicializar projeto",
+        "diff" => "Mostrar git diff",
+        "version" => "Mostrar versão",
+        "update" => "Atualizar Elai Code",
+        "bughunter" => "Caçar bugs no codebase",
+        "branch" => "Listar/criar/trocar branches",
+        "worktree" => "Gerenciar worktrees git",
+        "commit" => "Gerar mensagem e commitar",
+        "commit-push-pr" => "Commit, push e abrir PR",
+        "pr" => "Rascunhar/abrir pull request",
+        "issue" => "Rascunhar/abrir GitHub issue",
+        "ultraplan" => "Plano profundo (multi-step)",
+        "teleport" => "Saltar para arquivo/símbolo",
+        "debug-tool-call" => "Replay do último tool call",
+        "export" => "Exportar conversa",
+        "session" => "Listar/trocar sessões",
+        "plugin" => "Gerenciar plugins",
+        "agents" => "Listar agents configurados",
+        "skills" => "Listar skills disponíveis",
+        "budget" => "Budget limiter (tokens/custo)",
+        "tools" => "Inspecionar tools da sessão",
+        "cache" => "Gerenciar cache de resposta",
+        "dream" => "Comprimir memória antiga (AI)",
+        "stats" => "Estatísticas de tokens/custo",
+        "providers" => "Painel de uso por provider",
+        "verify" => "Verificar codebase vs memória",
+        _ => return None,
+    })
+}
+
+/// Constrói a lista da paleta a partir de `slash_command_specs()` (respeitando
+/// `hidden` e `is_enabled`) e acrescenta os 4 comandos sintetizados pelo REPL
+/// que não vivem como `SlashCommandSpec` (`swd`, `keys`, `uninstall`, `exit`).
+fn slash_palette_items() -> Vec<(SlashCategory, String, String)> {
+    let mut items: Vec<(SlashCategory, String, String)> = commands::slash_command_specs()
+        .iter()
+        .filter(|spec| !spec.hidden && (spec.is_enabled)())
+        .map(|spec| {
+            let display = spec.user_facing_name.unwrap_or(spec.name);
+            let desc = slash_command_pt_description(spec.name)
+                .unwrap_or(spec.summary)
+                .to_string();
+            (spec.category, display.to_string(), desc)
+        })
+        .collect();
+
+    // Comandos REPL-local (não vivem em SLASH_COMMAND_SPECS).
+    items.extend([
+        (
+            SlashCategory::Behavior,
+            "swd".into(),
+            "Strict Write Discipline (off/partial/full)".into(),
+        ),
+        (
+            SlashCategory::Behavior,
+            "keys".into(),
+            "Configurar/trocar API keys".into(),
+        ),
+        (
+            SlashCategory::System,
+            "uninstall".into(),
+            "Desinstalar Elai Code".into(),
+        ),
+        (SlashCategory::Session, "exit".into(), "Sair".into()),
+    ]);
+
+    items
+}
+
+/// Rótulo PT-BR + emoji para o cabeçalho da seção na paleta Ctrl+K.
+fn category_label_pt(cat: SlashCategory) -> &'static str {
+    match cat {
+        SlashCategory::Session => "🗨  Sessão",
+        SlashCategory::Behavior => "⚙  Comportamento",
+        SlashCategory::Project => "📁 Projeto",
+        SlashCategory::Git => "🌿 Git",
+        SlashCategory::Analysis => "🔍 Análise",
+        SlashCategory::System => "🛠  Sistema",
+        SlashCategory::Plugins => "🧩 Plugins",
+        SlashCategory::Custom => "✨ Custom",
+    }
+}
+
+/// Linha renderizada na paleta — separa cabeçalho de comando.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaletteRow {
+    Header(String),
+    Command { cmd: String, desc: String },
+}
+
+/// Constrói o vetor de linhas da paleta agrupando por categoria, respeitando o filtro.
+fn build_palette_rows(
+    items: &[(SlashCategory, String, String)],
+    filter: &str,
+) -> Vec<PaletteRow> {
+    type CatBucket<'a> = (SlashCategory, Vec<(&'a String, &'a String)>);
+    let filtered = filter_slash_items(items, filter);
+    let mut by_cat: std::collections::BTreeMap<u8, CatBucket> =
+        std::collections::BTreeMap::new();
+    for (cat, cmd, desc) in &filtered {
+        by_cat
+            .entry(cat.order())
+            .or_insert_with(|| (*cat, Vec::new()))
+            .1
+            .push((cmd, desc));
+    }
+    let mut rows = Vec::new();
+    for (_, (cat, cmds)) in by_cat {
+        if cmds.is_empty() {
+            continue;
+        }
+        rows.push(PaletteRow::Header(category_label_pt(cat).into()));
+        for (cmd, desc) in cmds {
+            rows.push(PaletteRow::Command {
+                cmd: cmd.clone(),
+                desc: desc.clone(),
+            });
+        }
+    }
+    rows
+}
+
+/// Próximo índice selecionável (pulando `Header`). Mantém posição se já está no fim.
+fn next_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
+    let mut i = from.saturating_add(1);
+    while i < rows.len() {
+        if matches!(rows[i], PaletteRow::Command { .. }) {
+            return i;
+        }
+        i += 1;
+    }
+    from
+}
+
+/// Anterior selecionável (pulando `Header`). Mantém posição se já está no topo.
+fn prev_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
+    if from == 0 {
+        return 0;
+    }
+    let mut i = from - 1;
+    loop {
+        if matches!(rows[i], PaletteRow::Command { .. }) {
+            return i;
+        }
+        if i == 0 {
+            return from;
+        }
+        i -= 1;
+    }
+}
+
+/// Primeiro `Command` (pulando `Header` líder). Retorna 0 se não houver comandos.
+fn first_selectable_row(rows: &[PaletteRow]) -> usize {
+    rows.iter()
+        .position(|r| matches!(r, PaletteRow::Command { .. }))
+        .unwrap_or(0)
 }
 
 // ─── Terminal lifecycle helpers ───────────────────────────────────────────────
@@ -1089,24 +1241,25 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         }) => {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Up) => {
-                    selected = selected.saturating_sub(1);
+                    let rows = build_palette_rows(&items, &filter);
+                    selected = prev_selectable_row(&rows, selected);
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Down) => {
-                    let filtered = filter_slash_items(&items, &filter);
-                    selected = (selected + 1).min(filtered.len().saturating_sub(1));
+                    let rows = build_palette_rows(&items, &filter);
+                    selected = next_selectable_row(&rows, selected);
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
-                    let filtered = filter_slash_items(&items, &filter);
-                    if let Some((cmd, _)) = filtered.get(selected) {
+                    let rows = build_palette_rows(&items, &filter);
+                    if let Some(PaletteRow::Command { cmd, .. }) = rows.get(selected) {
                         let cmd = cmd.clone();
                         app.overlay = None;
                         app.clear_input();
                         return TuiAction::SlashCommand(format!("/{cmd}"));
                     }
-                    app.overlay = None;
-                    app.clear_input();
+                    // Header selecionado ou lista vazia → no-op (não fecha overlay).
+                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Esc) => {
                     app.overlay = None;
@@ -1114,13 +1267,15 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 (KeyModifiers::NONE, KeyCode::Backspace) => {
                     filter.pop();
-                    selected = 0;
+                    let rows = build_palette_rows(&items, &filter);
+                    selected = first_selectable_row(&rows);
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }
                 (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let c = if c == '/' && filter.is_empty() { c } else { c };
                     filter.push(c);
-                    selected = 0;
+                    let rows = build_palette_rows(&items, &filter);
+                    selected = first_selectable_row(&rows);
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }
                 _ => {
@@ -2360,13 +2515,13 @@ fn filter_mention_items<'a>(items: &'a [String], filter: &str) -> Vec<&'a String
 }
 
 fn filter_slash_items<'a>(
-    items: &'a [(String, String)],
+    items: &'a [(SlashCategory, String, String)],
     filter: &str,
-) -> Vec<&'a (String, String)> {
+) -> Vec<&'a (SlashCategory, String, String)> {
     let f = filter.trim_start_matches('/').to_lowercase();
     items
         .iter()
-        .filter(|(cmd, desc)| {
+        .filter(|(_, cmd, desc)| {
             f.is_empty()
                 || cmd.to_lowercase().contains(&f)
                 || desc.to_lowercase().contains(&f)
@@ -2516,6 +2671,9 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 }
 
 fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
+    // Cinza ~30% mais claro que Color::DarkGray (≈ #808080) para melhorar
+    // legibilidade do painel lateral. Indexed 248 ≈ #A8A8A8.
+    let muted = Style::default().fg(Color::Indexed(248));
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             "Tips for getting started",
@@ -2523,18 +2681,9 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
                 .fg(Color::Indexed(215))
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(
-            "  Run /init to create a ELAI.md",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "  F2 trocar modelo · F3 permissões",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "  Ctrl+K slash palette",
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(Span::styled("  Run /init to create a ELAI.md", muted)),
+        Line::from(Span::styled("  F2 trocar modelo · F3 permissões", muted)),
+        Line::from(Span::styled("  Ctrl+K slash palette", muted)),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
             "Recent activity",
@@ -2545,10 +2694,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     ];
 
     if app.recent_sessions.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No recent activity",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(Line::from(Span::styled("  No recent activity", muted)));
     } else {
         for (session_id, msg_count) in app.recent_sessions.iter().take(3) {
             let short_id = session_id
@@ -2559,7 +2705,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
                 .collect::<String>();
             lines.push(Line::from(Span::styled(
                 format!("  • {short_id} ({msg_count} msgs)"),
-                Style::default().fg(Color::DarkGray),
+                muted,
             )));
         }
     }
@@ -3172,20 +3318,8 @@ fn draw_overlay(
             filter,
             selected,
         } => {
-            let filtered = filter_slash_items(items, filter);
-            let labels: Vec<String> = filtered
-                .iter()
-                .map(|(cmd, desc)| format!("/{cmd:<12} {desc}"))
-                .collect();
-            draw_picker(
-                frame,
-                area,
-                "Slash Commands (Ctrl+K)",
-                &labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                *selected,
-                Some(filter),
-                "",
-            );
+            let rows = build_palette_rows(items, filter);
+            draw_slash_palette_grouped(frame, area, &rows, *selected, filter);
         }
         OverlayKind::SessionPicker { items, selected } => {
             let labels: Vec<String> = items
@@ -3332,6 +3466,83 @@ fn draw_picker(
     };
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+}
+
+/// Render da paleta Ctrl+K com cabeçalhos de seção não-selecionáveis.
+/// `selected` indexa diretamente `rows`; assume-se que aponta para um `Command`
+/// (caller usa `first_selectable_row` / `next_selectable_row`).
+fn draw_slash_palette_grouped(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    rows: &[PaletteRow],
+    selected: usize,
+    filter: &str,
+) {
+    let width = (area.width / 2).max(50).min(area.width - 4);
+    // +6 para borda + filtro + hint; usa mesmo cálculo do draw_picker.
+    let height = (rows.len() as u16 + 6).min(area.height - 4);
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Slash Commands (Ctrl+K) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Indexed(215)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let list_area = layout[0];
+    let filter_area = layout[1];
+    let hint_area = layout[2];
+
+    let list_items: Vec<ListItem> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| match row {
+            PaletteRow::Header(label) => ListItem::new(format!("  {label}")).style(
+                Style::default()
+                    .fg(Color::Indexed(215))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            PaletteRow::Command { cmd, desc } => {
+                let body = format!("/{cmd:<12} {desc}");
+                if i == selected {
+                    ListItem::new(format!("▶ {body}"))
+                        .style(Style::default().fg(Color::Black).bg(Color::Indexed(215)))
+                } else {
+                    ListItem::new(format!("  {body}")).style(Style::default().fg(Color::White))
+                }
+            }
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected));
+    frame.render_stateful_widget(List::new(list_items), list_area, &mut list_state);
+
+    frame.render_widget(
+        Paragraph::new(format!("  filtro: {filter}_"))
+            .style(Style::default().fg(Color::DarkGray)),
+        filter_area,
+    );
+    frame.render_widget(
+        Paragraph::new("  ↑/↓ navegar · Enter aplicar · Esc cancelar")
+            .style(Style::default().fg(Color::DarkGray)),
         hint_area,
     );
 }
@@ -4725,5 +4936,133 @@ mod tests {
         assert!(app.overlay.is_none(), "overlay should be closed after Done+Enter");
         let cfg = runtime::load_global_config().expect("config should be loadable");
         assert!(cfg.setup_complete, "setup_complete should be true after wizard");
+    }
+
+    // ── Slash palette: categorização Ctrl+K ──────────────────────────────────
+
+    #[test]
+    fn palette_items_have_valid_categories() {
+        let items = slash_palette_items();
+        let specs = commands::slash_command_specs();
+        let visible_spec_count = specs
+            .iter()
+            .filter(|s| !s.hidden && (s.is_enabled)())
+            .count();
+        // 4 comandos REPL-local: swd, keys, uninstall, exit.
+        assert_eq!(items.len(), visible_spec_count + 4);
+
+        for (cat, name, _desc) in &items {
+            if let Some(spec) = specs.iter().find(|s| s.name == name.as_str()) {
+                assert_eq!(
+                    spec.category, *cat,
+                    "/{name} deveria herdar a categoria do spec"
+                );
+            } else {
+                // Comando local (swd, keys, uninstall, exit) — só validamos
+                // que a categoria atribuída renderiza um label.
+                let _ = category_label_pt(*cat);
+            }
+        }
+    }
+
+    #[test]
+    fn palette_includes_all_visible_specs() {
+        let items = slash_palette_items();
+        for spec in commands::slash_command_specs() {
+            if spec.hidden || !(spec.is_enabled)() {
+                continue;
+            }
+            let display = spec.user_facing_name.unwrap_or(spec.name);
+            assert!(
+                items.iter().any(|(_, name, _)| name == display),
+                "/{display} deveria aparecer na paleta",
+            );
+        }
+    }
+
+    #[test]
+    fn category_label_pt_covers_all_variants() {
+        for cat in [
+            SlashCategory::Session,
+            SlashCategory::Behavior,
+            SlashCategory::Project,
+            SlashCategory::Git,
+            SlashCategory::Analysis,
+            SlashCategory::System,
+            SlashCategory::Plugins,
+            SlashCategory::Custom,
+        ] {
+            let label = category_label_pt(cat);
+            assert!(!label.is_empty(), "label PT-BR vazia para {cat:?}");
+        }
+    }
+
+    #[test]
+    fn build_palette_rows_interleaves_headers() {
+        let items = slash_palette_items();
+        let rows = build_palette_rows(&items, "");
+        assert!(!rows.is_empty());
+        // Primeira linha é sempre um Header.
+        assert!(matches!(rows[0], PaletteRow::Header(_)));
+        // Cada Header deve ser seguido por pelo menos um Command (sem header órfão).
+        for (i, row) in rows.iter().enumerate() {
+            if matches!(row, PaletteRow::Header(_)) {
+                let next = rows.get(i + 1);
+                assert!(
+                    matches!(next, Some(PaletteRow::Command { .. })),
+                    "header em {i} sem Command logo a seguir"
+                );
+            }
+        }
+        // Quantidade de Commands deve bater com items.
+        let cmd_count = rows
+            .iter()
+            .filter(|r| matches!(r, PaletteRow::Command { .. }))
+            .count();
+        assert_eq!(cmd_count, items.len());
+    }
+
+    #[test]
+    fn build_palette_rows_filter_drops_empty_categories() {
+        let items = slash_palette_items();
+        // "diff" → Git; só deve sobrar a categoria Git.
+        let rows = build_palette_rows(&items, "diff");
+        assert!(matches!(rows[0], PaletteRow::Header(_)));
+        let header_count = rows
+            .iter()
+            .filter(|r| matches!(r, PaletteRow::Header(_)))
+            .count();
+        assert_eq!(header_count, 1, "filtro deve produzir apenas o header Git");
+    }
+
+    #[test]
+    fn navigation_skips_headers() {
+        let items = slash_palette_items();
+        let rows = build_palette_rows(&items, "");
+        // first_selectable nunca cai num Header.
+        let first = first_selectable_row(&rows);
+        assert!(matches!(rows[first], PaletteRow::Command { .. }));
+        // Down a partir do primeiro Command pula para o próximo Command,
+        // não para o próximo Header.
+        let after_down = next_selectable_row(&rows, first);
+        assert!(matches!(rows[after_down], PaletteRow::Command { .. }));
+        // Up a partir do segundo Command volta para o primeiro (pulando Header se houver).
+        let after_up = prev_selectable_row(&rows, after_down);
+        assert_eq!(after_up, first);
+        // Up no topo é idempotente.
+        assert_eq!(prev_selectable_row(&rows, first), first);
+    }
+
+    #[test]
+    fn enter_on_header_does_not_dispatch() {
+        // Quando rows.get(selected) é Header, o handler não emite SlashCommand.
+        // Validamos a forma direta: rows[0] é Header → caller deve não despachar.
+        let items = slash_palette_items();
+        let rows = build_palette_rows(&items, "");
+        let header_idx = 0usize;
+        assert!(matches!(rows[header_idx], PaletteRow::Header(_)));
+        // Simula a checagem do handler:
+        let dispatched = matches!(rows.get(header_idx), Some(PaletteRow::Command { .. }));
+        assert!(!dispatched);
     }
 }

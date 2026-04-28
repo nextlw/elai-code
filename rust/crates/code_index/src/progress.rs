@@ -2,6 +2,26 @@
 //! sem `\r` — apenas Unicode estático para ser renderizado como qualquer
 //! linha de chat/log dentro do TUI.
 
+/// Receptor de mensagens de progresso de comandos longos.
+/// Implementações DEVEM ser thread-safe (`Send + Sync`).
+pub trait ProgressReporter: Send + Sync {
+    fn report(&self, msg: &str);
+}
+
+/// Blanket impl: qualquer `Fn(&str) + Send + Sync` é um `ProgressReporter`.
+impl<F: Fn(&str) + Send + Sync> ProgressReporter for F {
+    fn report(&self, msg: &str) {
+        self(msg);
+    }
+}
+
+/// Reporter silencioso. Use em CI, batch scripts, ou testes.
+pub struct NoopReporter;
+
+impl ProgressReporter for NoopReporter {
+    fn report(&self, _msg: &str) {}
+}
+
 /// Retorna `[██████████░░░░░░░░░░] 50%` ou similar.
 /// `pct` é clamped para [0.0, 100.0]. `width` é a largura visual em chars.
 #[must_use]

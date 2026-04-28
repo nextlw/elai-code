@@ -30,9 +30,10 @@ use api::{
 };
 
 use commands::{
-    handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
-    handle_tools_slash_command, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, try_user_command, SlashCommand, UserCommandRegistry,
+    handle_agents_slash_command, handle_commit_push_pr_slash_command, handle_plugins_slash_command,
+    handle_skills_slash_command, handle_tools_slash_command, render_slash_command_help,
+    resume_supported_slash_commands, slash_command_specs, try_user_command, CommitPushPrRequest,
+    SlashCommand, UserCommandRegistry,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::{initialize_repo, initialize_repo_with};
@@ -42,10 +43,10 @@ use runtime::{
     check_rate_limit, generate_cache_key, load_budget_config, load_system_prompt, now_millis,
     save_budget_config, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
     BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
-    PermissionMode, PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session,
-    TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    ContentBlock, ConversationMessage, ConversationRuntime, EprintlnReporter, McpServerManager,
+    MessageRole, PermissionMode, PermissionPolicy, ProjectContext, ResponseCache,
+    RuntimeError, Session, TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker,
+    TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -2297,15 +2298,51 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             ));
         }
         "verify" => {
+            let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_default();
-            match verify::run_verify_inner(&cwd) {
-                Ok((report, _)) => app.push_chat(tui::ChatEntry::SystemNote(
-                    verify::render_verify_report_tui(&report),
-                )),
-                Err(e) => {
-                    app.push_chat(tui::ChatEntry::SystemNote(format!("❌ Erro no /verify: {e}")));
+            std::thread::spawn(move || {
+                let send_note = |s: &str| {
+                    let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string()));
+                };
+                match verify::run_verify_inner(&cwd, &send_note) {
+                    Ok((report, _)) => {
+                        let _ = tx.send(tui::TuiMsg::SystemNote(verify::render_verify_report_tui(&report)));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("verify: {e}")));
+                    }
                 }
-            }
+            });
+            app.push_chat(tui::ChatEntry::SystemNote("Verificando codebase em background...".to_string()));
+        }
+        "plugin" | "plugins" => {
+            let tx = msg_tx.clone();
+            let raw = arg.unwrap_or("").trim().to_string();
+            std::thread::spawn(move || {
+                let send = |s: &str| { let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string())); };
+                let mut parts = raw.splitn(2, char::is_whitespace);
+                let action = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
+                let target = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let loader = runtime::ConfigLoader::default_for(&cwd);
+                let cfg = match loader.load() {
+                    Ok(c) => c,
+                    Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); return; }
+                };
+                let mut manager = build_plugin_manager(&cwd, &loader, &cfg);
+
+                match handle_plugins_slash_command(
+                    action.as_deref(),
+                    target.as_deref(),
+                    &mut manager,
+                    &send,
+                ) {
+                    Ok(result) => { let _ = tx.send(tui::TuiMsg::SystemNote(result.message)); }
+                    Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); }
+                }
+            });
+            app.push_chat(tui::ChatEntry::SystemNote("Plugin: processando em background...".to_string()));
         }
         "swd" => {
             use std::sync::atomic::Ordering;
@@ -2931,8 +2968,50 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             SlashCommand::Worktree { .. } => Self::repl_feature_not_wired(
                 "git worktree commands not yet wired to REPL",
             ),
-            SlashCommand::CommitPushPr { .. } => {
-                Self::repl_feature_not_wired("commit-push-pr not yet wired to REPL")
+            SlashCommand::CommitPushPr { context } => {
+                let cwd = std::env::current_dir()?;
+
+                let staged_stat = std::process::Command::new("git")
+                    .args(["diff", "--cached", "--stat"])
+                    .current_dir(&cwd)
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .unwrap_or_default();
+                let unstaged_stat = std::process::Command::new("git")
+                    .args(["diff", "--stat"])
+                    .current_dir(&cwd)
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .unwrap_or_default();
+
+                let context_str = context.as_deref().unwrap_or("");
+                let prompt = format!(
+                    "Generate a concise commit message, PR title, and PR body for the following changes.\n\
+                     Context: {}\n\nStaged:\n{}\n\nUnstaged:\n{}\n\n\
+                     Respond as JSON: {{\"commit_message\": \"...\", \"pr_title\": \"...\", \"pr_body\": \"...\"}}",
+                    context_str, staged_stat, unstaged_stat
+                );
+
+                let response = self.run_internal_prompt_text(&prompt, false)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let parsed: serde_json::Value = serde_json::from_str(&response)
+                    .map_err(|e| std::io::Error::other(format!("AI returned invalid JSON: {e}\n--- response ---\n{response}")))?;
+
+                let request = CommitPushPrRequest {
+                    commit_message: parsed["commit_message"].as_str().map(|s| s.to_string()),
+                    pr_title: parsed["pr_title"].as_str().unwrap_or("Update").to_string(),
+                    pr_body: parsed["pr_body"].as_str().unwrap_or("").to_string(),
+                    branch_name_hint: String::new(),
+                };
+
+                let reporter = EprintlnReporter::new();
+                match handle_commit_push_pr_slash_command(&request, &cwd, &reporter) {
+                    Ok(report) => println!("{report}"),
+                    Err(e) => eprintln!("commit-push-pr: {e}"),
+                }
+                false
             }
             SlashCommand::Budget { .. } => {
                 Self::repl_feature_not_wired("budget command available in TUI mode")
@@ -3306,7 +3385,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         let loader = ConfigLoader::default_for(&cwd);
         let runtime_config = loader.load()?;
         let mut manager = build_plugin_manager(&cwd, &loader, &runtime_config);
-        let result = handle_plugins_slash_command(action, target, &mut manager)?;
+        let result = handle_plugins_slash_command(action, target, &mut manager, &runtime::EprintlnReporter::new())?;
         println!("{}", result.message);
         if result.reload_runtime {
             self.reload_runtime_features()?;
@@ -3529,47 +3608,12 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
     fn run_dream(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
-        let Some(path) = dream::find_memory_file(&cwd) else {
-            println!("Dream\n  Result           skipped\n  Reason           no memory file found (ELAI.md, CLAUDE.md, .elai/ELAI.md, .elai/instructions.md)");
-            return Ok(());
-        };
-        let content = fs::read_to_string(&path)?;
-        let before_size = content.len();
-        let parsed = dream::parse_memory_sections(&content);
-        let entries_to_compress: Vec<String>;
-        if parsed.old_entries.is_empty() {
-            if !force {
-                println!(
-                    "Dream\n  Result           skipped\n  Reason           <= 20 entries ({}). Use /dream --force to override.",
-                    parsed.recent_entries.len()
-                );
-                return Ok(());
-            }
-            entries_to_compress = if parsed.recent_entries.len() > 20 {
-                parsed.recent_entries[..parsed.recent_entries.len() - 20].to_vec()
-            } else {
-                parsed.recent_entries.clone()
-            };
-        } else {
-            entries_to_compress = parsed.old_entries.clone();
+        let reporter = EprintlnReporter::new();
+        let model_call = |prompt: &str| self.run_internal_prompt_text(prompt, false);
+        match dream::execute_dream(&cwd, force, &model_call, &reporter)? {
+            Some(result) => println!("{}", dream::format_dream_output(&result)),
+            None => {}
         }
-        println!(
-            "Dream  Compressing {} entries from {} ...",
-            entries_to_compress.len(),
-            path.display()
-        );
-        let prompt =
-            dream::build_compression_prompt(&entries_to_compress, parsed.existing_summary.as_deref());
-        let summary = self.run_internal_prompt_text(&prompt, false)?;
-        dream::rewrite_memory(&path, &summary, &parsed.recent_entries)?;
-        let after_content = fs::read_to_string(&path)?;
-        let result = dream::DreamResult {
-            entries_compressed: entries_to_compress.len(),
-            before_size,
-            after_size: after_content.len(),
-            summary,
-        };
-        println!("{}", dream::format_dream_output(&result));
         Ok(())
     }
 }

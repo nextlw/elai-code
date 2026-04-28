@@ -48,25 +48,7 @@
 
 use std::sync::Mutex;
 
-pub use code_index::progress::{progress_bar, progress_bar_labeled};
-
-/// Receptor de mensagens de progresso de comandos longos.
-///
-/// Implementações DEVEM ser thread-safe (`Send + Sync`) e tolerar mensagens
-/// arbitrariamente curtas/longas. Mensagens NÃO devem conter ANSI control
-/// codes — apenas Unicode estático (incluindo barras `█`/`░` de
-/// [`progress_bar`]).
-pub trait ProgressReporter: Send + Sync {
-    fn report(&self, msg: &str);
-}
-
-/// Blanket impl: qualquer `Fn(&str) + Send + Sync` é um `ProgressReporter`.
-/// Permite passar closures como reporters sem boilerplate.
-impl<F: Fn(&str) + Send + Sync> ProgressReporter for F {
-    fn report(&self, msg: &str) {
-        self(msg);
-    }
-}
+pub use code_index::progress::{progress_bar, progress_bar_labeled, NoopReporter, ProgressReporter};
 
 /// Reporter que escreve em stderr via `eprintln!`. Use em CLI puro (sem TUI).
 /// Cada mensagem é prefixada com 2 espaços para alinhamento visual.
@@ -96,14 +78,6 @@ impl ProgressReporter for EprintlnReporter {
     fn report(&self, msg: &str) {
         eprintln!("{}{msg}", self.prefix);
     }
-}
-
-/// Reporter silencioso. Use em CI, batch scripts, ou quando o caller não quer
-/// nenhum output durante a operação.
-pub struct NoopReporter;
-
-impl ProgressReporter for NoopReporter {
-    fn report(&self, _msg: &str) {}
 }
 
 /// Reporter que acumula mensagens em memória. Útil para testes ou para

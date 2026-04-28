@@ -1,6 +1,11 @@
+//! NOTE: progress reporting follows the TUI-safe pattern documented at
+//! `rust/docs/progress-pattern.md`.
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use runtime::ProgressReporter;
 
 const RECENT_KEEP: usize = 20;
 const SUMMARY_OPEN: &str = "<!-- [COMPRESSED SUMMARY] -->";
@@ -198,6 +203,60 @@ pub fn format_dream_output(result: &DreamResult) -> String {
         },
         summary_preview,
     )
+}
+
+/// Execute the dream compression workflow.
+///
+/// Accepts a `model_call` closure (so the caller supplies the LLM backend) and a
+/// `reporter` for TUI-safe progress messages.  Returns `None` when the run is
+/// skipped, or `Some(DreamResult)` on success.
+pub fn execute_dream(
+    cwd: &Path,
+    force: bool,
+    model_call: &dyn Fn(&str) -> Result<String, Box<dyn std::error::Error>>,
+    reporter: &dyn ProgressReporter,
+) -> Result<Option<DreamResult>, Box<dyn std::error::Error>> {
+    let Some(path) = find_memory_file(cwd) else {
+        reporter.report(
+            "Dream\n  Result           skipped\n  Reason           no memory file (CLAUDE.md/AGENTS.md/ELAI.md)",
+        );
+        return Ok(None);
+    };
+    let content = fs::read_to_string(&path)?;
+    let before_size = content.len();
+    let parsed = parse_memory_sections(&content);
+    let entries_to_compress: Vec<String>;
+    if parsed.old_entries.is_empty() {
+        if !force {
+            reporter.report(&format!(
+                "Dream\n  Result           skipped\n  Reason           <= 20 entries (currently {})",
+                parsed.recent_entries.len()
+            ));
+            return Ok(None);
+        }
+        entries_to_compress = if parsed.recent_entries.len() > 20 {
+            parsed.recent_entries[..parsed.recent_entries.len() - 20].to_vec()
+        } else {
+            parsed.recent_entries.clone()
+        };
+    } else {
+        entries_to_compress = parsed.old_entries.clone();
+    }
+    reporter.report(&format!(
+        "Dream\n  Compressing {} entries from {} ...",
+        entries_to_compress.len(),
+        path.display()
+    ));
+    let prompt = build_compression_prompt(&entries_to_compress, parsed.existing_summary.as_deref());
+    let summary = model_call(&prompt)?;
+    rewrite_memory(&path, &summary, &parsed.recent_entries)?;
+    let after_content = fs::read_to_string(&path)?;
+    Ok(Some(DreamResult {
+        entries_compressed: entries_to_compress.len(),
+        before_size,
+        after_size: after_content.len(),
+        summary,
+    }))
 }
 
 #[cfg(test)]

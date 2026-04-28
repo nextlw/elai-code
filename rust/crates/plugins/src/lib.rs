@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use code_index::ProgressReporter;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -983,14 +984,16 @@ impl PluginManager {
         load_plugin_from_directory(&path)
     }
 
-    pub fn install(&mut self, source: &str) -> Result<InstallOutcome, PluginError> {
+    pub fn install(&mut self, source: &str, reporter: &dyn ProgressReporter) -> Result<InstallOutcome, PluginError> {
+        reporter.report("Resolving plugin source...");
         let install_source = parse_install_source(source)?;
         let temp_root = self.install_root().join(".tmp");
-        let staged_source = materialize_source(&install_source, &temp_root)?;
+        let staged_source = materialize_source(&install_source, &temp_root, reporter)?;
         let cleanup_source = matches!(
             install_source,
             PluginInstallSource::GitUrl { .. } | PluginInstallSource::Tarball { .. }
         );
+        reporter.report("Validating plugin manifest...");
         let manifest = load_plugin_from_directory(&staged_source)?;
 
         let plugin_id = plugin_id(&manifest.name, EXTERNAL_MARKETPLACE);
@@ -998,6 +1001,7 @@ impl PluginManager {
         if install_path.exists() {
             fs::remove_dir_all(&install_path)?;
         }
+        reporter.report("Installing plugin files...");
         copy_dir_all(&staged_source, &install_path)?;
         if cleanup_source {
             let _ = fs::remove_dir_all(&staged_source);
@@ -1016,6 +1020,7 @@ impl PluginManager {
             updated_at_unix_ms: now,
         };
 
+        reporter.report("Registering plugin...");
         let mut registry = self.load_registry()?;
         registry.plugins.insert(plugin_id.clone(), record);
         self.store_registry(&registry)?;
@@ -1067,28 +1072,32 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn update(&mut self, plugin_id: &str) -> Result<UpdateOutcome, PluginError> {
+    pub fn update(&mut self, plugin_id: &str, reporter: &dyn ProgressReporter) -> Result<UpdateOutcome, PluginError> {
+        reporter.report("Resolving plugin source...");
         let mut registry = self.load_registry()?;
         let record = registry.plugins.get(plugin_id).cloned().ok_or_else(|| {
             PluginError::NotFound(format!("plugin `{plugin_id}` is not installed"))
         })?;
 
         let temp_root = self.install_root().join(".tmp");
-        let staged_source = materialize_source(&record.source, &temp_root)?;
+        let staged_source = materialize_source(&record.source, &temp_root, reporter)?;
         let cleanup_source = matches!(
             record.source,
             PluginInstallSource::GitUrl { .. } | PluginInstallSource::Tarball { .. }
         );
+        reporter.report("Validating plugin manifest...");
         let manifest = load_plugin_from_directory(&staged_source)?;
 
         if record.install_path.exists() {
             fs::remove_dir_all(&record.install_path)?;
         }
+        reporter.report("Installing plugin files...");
         copy_dir_all(&staged_source, &record.install_path)?;
         if cleanup_source {
             let _ = fs::remove_dir_all(&staged_source);
         }
 
+        reporter.report("Registering plugin...");
         let updated_record = InstalledPluginRecord {
             version: manifest.version.clone(),
             description: manifest.description,
@@ -1925,11 +1934,13 @@ fn parse_install_source(source: &str) -> Result<PluginInstallSource, PluginError
 fn materialize_source(
     source: &PluginInstallSource,
     temp_root: &Path,
+    reporter: &dyn ProgressReporter,
 ) -> Result<PathBuf, PluginError> {
     fs::create_dir_all(temp_root)?;
     match source {
         PluginInstallSource::LocalPath { path } => Ok(path.clone()),
         PluginInstallSource::GitUrl { url } => {
+            reporter.report(&format!("Cloning {url}..."));
             let destination = temp_root.join(format!("plugin-{}", unix_time_ms()));
             let output = Command::new("git")
                 .arg("clone")
@@ -1947,7 +1958,7 @@ fn materialize_source(
             Ok(destination)
         }
         PluginInstallSource::Tarball { url, archive_kind } => {
-            materialize_tarball(url, archive_kind, temp_root)
+            materialize_tarball(url, archive_kind, temp_root, reporter)
         }
     }
 }
@@ -1956,6 +1967,7 @@ fn materialize_tarball(
     url: &str,
     archive_kind: &ArchiveKind,
     temp_root: &Path,
+    reporter: &dyn ProgressReporter,
 ) -> Result<PathBuf, PluginError> {
     let ts = unix_time_ms();
     let archive_ext = match archive_kind {
@@ -1974,23 +1986,38 @@ fn materialize_tarball(
             ))
         })?
     } else {
-        let response = reqwest::blocking::get(url).map_err(|error| {
-            PluginError::CommandFailed(format!("HTTP request for `{url}` failed: {error}"))
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(PluginError::CommandFailed(format!(
-                "HTTP {status} downloading `{url}`"
-            )));
+        reporter.report("Downloading plugin archive...");
+        let client = reqwest::blocking::Client::new();
+        let mut response = client.get(url).send().map_err(|e| PluginError::CommandFailed(format!("download: {e}")))?;
+        if !response.status().is_success() {
+            return Err(PluginError::CommandFailed(format!("download failed: HTTP {}", response.status())));
         }
-        response.bytes().map_err(|error| {
-            PluginError::CommandFailed(format!("failed to read response body for `{url}`: {error}"))
-        })?.to_vec()
+        let total = response.content_length().unwrap_or(0);
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut last_report = 0u64;
+        loop {
+            use std::io::Read;
+            let n = response.read(&mut chunk).map_err(|e| PluginError::CommandFailed(format!("download: {e}")))?;
+            if n == 0 { break; }
+            buf.extend_from_slice(&chunk[..n]);
+            if total > 0 {
+                let downloaded = buf.len() as u64;
+                if downloaded - last_report >= 65536 {
+                    last_report = downloaded;
+                    reporter.report(&code_index::progress_bar_labeled("Downloading", downloaded as usize, total as usize, 20));
+                }
+            } else if buf.len() % (256 * 1024) == 0 {
+                reporter.report(&format!("Downloading... {} KB", buf.len() / 1024));
+            }
+        }
+        buf
     };
 
     fs::write(&archive_path, &bytes)?;
 
     // Extract.
+    reporter.report("Extracting archive...");
     fs::create_dir_all(&extract_dir)?;
     match archive_kind {
         ArchiveKind::TarGz => {
@@ -2613,7 +2640,7 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         let install = manager
-            .install(source_root.to_str().expect("utf8 path"))
+            .install(source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("install should succeed");
         assert_eq!(install.plugin_id, "demo@external");
         assert!(manager
@@ -2636,7 +2663,7 @@ mod tests {
         manager.enable("demo@external").expect("enable should work");
 
         write_external_plugin(&source_root, "demo", "2.0.0");
-        let update = manager.update("demo@external").expect("update should work");
+        let update = manager.update("demo@external", &code_index::NoopReporter).expect("update should work");
         assert_eq!(update.old_version, "1.0.0");
         assert_eq!(update.new_version, "2.0.0");
 
@@ -2952,7 +2979,7 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         manager
-            .install(source_root.to_str().expect("utf8 path"))
+            .install(source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("install should succeed");
         manager
             .disable("registry-demo@external")
@@ -2985,7 +3012,7 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         let install_error = manager
-            .install(source_root.to_str().expect("utf8 path"))
+            .install(source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect_err("install should reject invalid hook paths");
         assert!(install_error.to_string().contains("does not exist"));
 
@@ -3001,7 +3028,7 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         let install = manager
-            .install(source_root.to_str().expect("utf8 path"))
+            .install(source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("install should succeed");
         let log_path = install.install_path.join("lifecycle.log");
 
@@ -3024,7 +3051,7 @@ mod tests {
 
         let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
         manager
-            .install(source_root.to_str().expect("utf8 path"))
+            .install(source_root.to_str().expect("utf8 path"), &code_index::NoopReporter)
             .expect("install should succeed");
 
         let tools = manager.aggregated_tools().expect("tools should aggregate");
@@ -3197,7 +3224,7 @@ mod tests {
         };
 
         let temp_root = tmp.join("work");
-        let extracted_path = materialize_source(&source, &temp_root).expect("materialize should succeed");
+        let extracted_path = materialize_source(&source, &temp_root, &code_index::NoopReporter).expect("materialize should succeed");
         assert!(
             extracted_path.join("plugin.json").exists(),
             "extracted path should contain plugin.json"
