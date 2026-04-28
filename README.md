@@ -39,20 +39,9 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v0.6.7
+## What's New — v0.6.8
 
-- docs(README): update theme customization section with detailed usage instructions
-- feat(theme): introduce theme customization and TUI-safe progress reporting
-- chore: remove ELAI.md guidance file
-- feat(progress): enhance task progress reporting with TUI integration
-- feat(progress): integrate TUI-safe progress reporting across commands
-- feat(progress): TUI-safe progress reporting pattern + /init streaming
-- fix(uninstall): centralize fastembed cache + sweep legacy locations
-- fix(init): silence fastembed download progress to preserve TUI render
-- feat(runtime): TaskRegistry process-wide singleton
-- feat(repl): wire-up autoDream + custom commands + /help Custom section
-- feat: plugin tarball install + setup wizard FeatureFlags refactor
-- feat: Claude Code parity — Tasks, custom commands, autoDream, categorization
+- alterações de readme e cargo
 
 ---
 
