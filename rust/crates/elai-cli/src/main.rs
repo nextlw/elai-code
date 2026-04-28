@@ -115,7 +115,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 auth::dispatch_auth_list().map_err(|e| e.to_string())?
             }
         },
-        CliAction::Init => run_init()?,
+        CliAction::Init(args) => run_init(&args)?,
         CliAction::Repl {
             model,
             allowed_tools,
@@ -268,7 +268,7 @@ enum CliAction {
     Auth {
         cmd: crate::args::AuthCmd,
     },
-    Init,
+    Init(crate::args::InitArgs),
     Repl {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
@@ -561,7 +561,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "login" => parse_login_args(&rest[1..]),
         "logout" => Ok(CliAction::Logout),
         "auth" => parse_auth_args(&rest[1..]),
-        "init" => Ok(CliAction::Init),
+        "init" => Ok(CliAction::Init(parse_init_args(&rest[1..]))),
         "update" => Ok(CliAction::Update),
         "uninstall" => Ok(CliAction::Uninstall),
         "verify" => Ok(CliAction::Verify),
@@ -795,6 +795,35 @@ fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
 }
 
 /// Remove o binário, ~/.elai/ e as linhas do shell RC inseridas pelo instalador.
+#[cfg(windows)]
+fn schedule_windows_cleanup(
+    bin: &std::path::Path,
+    elai_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    // CREATE_NO_WINDOW (0x0800_0000) | DETACHED_PROCESS (0x0000_0008)
+    const FLAGS: u32 = 0x0800_0000 | 0x0000_0008;
+
+    let bin_str = bin.display().to_string();
+    let dir_clause = match elai_dir {
+        Some(d) => format!(r#" & rmdir /s /q "{}""#, d.display()),
+        None => String::new(),
+    };
+    // timeout aguarda o processo pai (este elai.exe) liberar o lock antes de
+    // tentar deletar. /nobreak impede interrupção por tecla.
+    let cleanup = format!(
+        r#"timeout /t 2 /nobreak > nul & del /f /q "{bin_str}"{dir_clause}"#
+    );
+
+    Command::new("cmd")
+        .args(["/c", &cleanup])
+        .creation_flags(FLAGS)
+        .spawn()
+        .map(|_| ())
+}
+
 fn perform_uninstall() -> String {
     let mut log = Vec::<String>::new();
     let mut errors = Vec::<String>::new();
@@ -806,17 +835,43 @@ fn perform_uninstall() -> String {
                 .unwrap_or_else(|_| "/usr/local/bin".into());
             std::path::PathBuf::from(install_dir).join("elai")
         });
-    match std::fs::remove_file(&bin) {
-        Ok(_) => log.push(format!("✅ Removido: {}", bin.display())),
-        Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
+
+    let elai_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| std::path::PathBuf::from(home).join(".elai"));
+
+    #[cfg(windows)]
+    {
+        // Windows mantém lock exclusivo no .exe em execução: remove_file() falha
+        // com "Access is denied". Agendamos um cmd destacado que aguarda o
+        // processo morrer e então apaga binário + diretório.
+        match schedule_windows_cleanup(&bin, elai_dir.as_deref()) {
+            Ok(()) => {
+                log.push(format!("✅ Agendado para remoção: {}", bin.display()));
+                if let Some(dir) = &elai_dir {
+                    log.push(format!("✅ Agendado para remoção: {}", dir.display()));
+                }
+                log.push(
+                    "ℹ Limpeza ocorre 2s após o Elai encerrar. Reabra o terminal em seguida.".into(),
+                );
+            }
+            Err(e) => errors.push(format!("⚠ Falha ao agendar limpeza: {e}")),
+        }
     }
 
-    // 2. Diretório ~/.elai/
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let elai_dir = std::path::PathBuf::from(home).join(".elai");
-        match std::fs::remove_dir_all(&elai_dir) {
-            Ok(_) => log.push(format!("✅ Removido: {}", elai_dir.display())),
-            Err(e) => errors.push(format!("⚠ {}: {e}", elai_dir.display())),
+    #[cfg(not(windows))]
+    {
+        match std::fs::remove_file(&bin) {
+            Ok(_) => log.push(format!("✅ Removido: {}", bin.display())),
+            Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
+        }
+
+        // 2. Diretório ~/.elai/
+        if let Some(dir) = &elai_dir {
+            match std::fs::remove_dir_all(dir) {
+                Ok(_) => log.push(format!("✅ Removido: {}", dir.display())),
+                Err(e) => errors.push(format!("⚠ {}: {e}", dir.display())),
+            }
         }
     }
 
@@ -2180,7 +2235,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "init" => {
             let cwd = env::current_dir().unwrap_or_default();
-            match initialize_repo(&cwd) {
+            match initialize_repo(&cwd, &crate::args::InitArgs::default()) {
                 Ok(report) => app.push_chat(tui::ChatEntry::SystemNote(
                     format!("✅ {}", report.render()),
                 )),
@@ -2749,7 +2804,8 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 false
             }
             SlashCommand::Init => {
-                run_init()?;
+                // /init na TUI usa defaults; pra customizar use `elai init --flags` no shell.
+                run_init(&crate::args::InitArgs::default())?;
                 false
             }
             SlashCommand::Diff => {
@@ -3754,12 +3810,59 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
 
 fn init_elai_md() -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    Ok(initialize_repo(&cwd)?.render())
+    Ok(initialize_repo(&cwd, &crate::args::InitArgs::default())?.render())
 }
 
-fn run_init() -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", init_elai_md()?);
+fn run_init(args: &crate::args::InitArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let report = init::initialize_repo(&cwd, args)?;
+    println!("{}", report.render());
     Ok(())
+}
+
+fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
+    use crate::args::{EmbedProviderArg, IndexBackend, InitArgs};
+    let mut args = InitArgs::default();
+    let mut idx = 0;
+    while idx < rest.len() {
+        match rest[idx].as_str() {
+            "--no-index" => { args.no_index = true; idx += 1; }
+            "--no-watcher" => { args.no_watcher = true; idx += 1; }
+            "--reindex" => { args.reindex = true; idx += 1; }
+            "--backend" => {
+                if let Some(v) = rest.get(idx + 1) {
+                    args.backend = match v.as_str() {
+                        "qdrant" => IndexBackend::Qdrant,
+                        _ => IndexBackend::Sqlite,
+                    };
+                    idx += 2;
+                } else { idx += 1; }
+            }
+            "--embed-provider" => {
+                if let Some(v) = rest.get(idx + 1) {
+                    args.embed_provider = match v.as_str() {
+                        "ollama" => EmbedProviderArg::Ollama,
+                        "jina" => EmbedProviderArg::Jina,
+                        "openai" => EmbedProviderArg::Openai,
+                        "voyage" => EmbedProviderArg::Voyage,
+                        _ => EmbedProviderArg::Local,
+                    };
+                    idx += 2;
+                } else { idx += 1; }
+            }
+            "--embed-model" => {
+                if let Some(v) = rest.get(idx + 1) { args.embed_model = Some(v.clone()); idx += 2; } else { idx += 1; }
+            }
+            "--ollama-url" => {
+                if let Some(v) = rest.get(idx + 1) { args.ollama_url = Some(v.clone()); idx += 2; } else { idx += 1; }
+            }
+            "--qdrant-url" => {
+                if let Some(v) = rest.get(idx + 1) { args.qdrant_url = Some(v.clone()); idx += 2; } else { idx += 1; }
+            }
+            _ => { idx += 1; }
+        }
+    }
+    args
 }
 
 fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
@@ -6239,7 +6342,7 @@ mod tests {
         );
         assert_eq!(
             parse_args(&["init".to_string()]).expect("init should parse"),
-            CliAction::Init
+            CliAction::Init(crate::args::InitArgs::default())
         );
         assert_eq!(
             parse_args(&["agents".to_string()]).expect("agents should parse"),
@@ -6645,9 +6748,12 @@ mod tests {
 
     #[test]
     fn init_template_mentions_detected_rust_workspace() {
+        // O novo render_init_elai_md usa collect_facts → render_static_elai_md (grounded
+        // em fatos extraídos), substituindo o template estático antigo. Verifica apenas
+        // que o cabeçalho e seções principais foram renderizados.
         let rendered = crate::init::render_init_elai_md(std::path::Path::new("."));
         assert!(rendered.contains("# ELAI.md"));
-        assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
+        assert!(rendered.contains("## Estrutura"));
     }
 
     #[test]

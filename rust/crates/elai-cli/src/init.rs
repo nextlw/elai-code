@@ -1,5 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::args::{EmbedProviderArg, IndexBackend, InitArgs};
+use code_index::{
+    collect_facts, DefaultChunker, Embedder, Indexer, IndexerStats, SqliteVecStore, VectorStore,
+};
+use runtime::render_static_elai_md;
 
 const STARTER_ELAI_JSON: &str = concat!(
     "{\n",
@@ -35,10 +42,11 @@ pub(crate) struct InitArtifact {
     pub(crate) status: InitStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct InitReport {
     pub(crate) project_root: PathBuf,
     pub(crate) artifacts: Vec<InitArtifact>,
+    pub(crate) index_stats: Option<IndexerStats>,
 }
 
 impl InitReport {
@@ -55,31 +63,24 @@ impl InitReport {
                 artifact.status.label()
             ));
         }
+        if let Some(s) = &self.index_stats {
+            lines.push(format!(
+                "  Index            {} files, {} chunks ({} ms)",
+                s.files_indexed, s.chunks_indexed, s.elapsed_ms
+            ));
+        }
         lines.push("  Next step        Review and tailor the generated guidance".to_string());
         lines.join("\n")
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
-struct RepoDetection {
-    rust_workspace: bool,
-    rust_root: bool,
-    python: bool,
-    package_json: bool,
-    typescript: bool,
-    nextjs: bool,
-    react: bool,
-    vite: bool,
-    nest: bool,
-    src_dir: bool,
-    tests_dir: bool,
-    rust_dir: bool,
-}
-
-pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::error::Error>> {
+pub(crate) fn initialize_repo(
+    cwd: &Path,
+    args: &InitArgs,
+) -> Result<InitReport, Box<dyn std::error::Error>> {
     let mut artifacts = Vec::new();
 
+    // 1. Basic structure
     let elai_dir = cwd.join(".elai");
     artifacts.push(InitArtifact {
         name: ".elai/",
@@ -92,23 +93,182 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
         status: write_file_if_missing(&elai_json, STARTER_ELAI_JSON)?,
     });
 
+    let index_dir = elai_dir.join("index");
+    if !args.no_index {
+        artifacts.push(InitArtifact {
+            name: ".elai/index/",
+            status: ensure_dir(&index_dir)?,
+        });
+    }
+
     let gitignore = cwd.join(".gitignore");
     artifacts.push(InitArtifact {
         name: ".gitignore",
         status: ensure_gitignore_entries(&gitignore)?,
     });
 
-    let elai_md = cwd.join("ELAI.md");
-    let content = render_init_elai_md(cwd);
+    // Add .elai/index/ to .gitignore when indexing
+    if !args.no_index {
+        let _ = append_gitignore_index_entry(&gitignore);
+    }
+
+    // 2. Collect project facts (always, even with --no-index, for the static template)
+    eprintln!("  Analisando projeto...");
+    let facts = collect_facts(cwd).map_err(|e| format!("collect_facts: {e}"))?;
+    let facts_json = serde_json::to_string_pretty(&facts)?;
+
+    // 3. Indexing (unless --no-index)
+    let mut index_stats: Option<IndexerStats> = None;
+    if !args.no_index {
+        index_stats = Some(run_indexing(cwd, &index_dir, args)?);
+    }
+
+    // 4. Generate ELAI.md
+    let elai_md_path = cwd.join("ELAI.md");
+    let elai_md_status = if elai_md_path.exists() && !args.reindex {
+        InitStatus::Skipped
+    } else {
+        let content = generate_elai_md_or_fallback(&facts_json);
+        fs::write(&elai_md_path, content)?;
+        if args.reindex {
+            InitStatus::Updated
+        } else {
+            InitStatus::Created
+        }
+    };
     artifacts.push(InitArtifact {
         name: "ELAI.md",
-        status: write_file_if_missing(&elai_md, &content)?,
+        status: elai_md_status,
     });
+
+    // 5. Save index config
+    if !args.no_index {
+        write_index_config(&index_dir, args)?;
+    }
 
     Ok(InitReport {
         project_root: cwd.to_path_buf(),
         artifacts,
+        index_stats,
     })
+}
+
+fn run_indexing(
+    cwd: &Path,
+    index_dir: &Path,
+    args: &InitArgs,
+) -> Result<IndexerStats, Box<dyn std::error::Error>> {
+    let embedder: Arc<dyn Embedder> = build_embedder(args)?;
+    let store: Arc<dyn VectorStore> = build_store(index_dir, args, embedder.dim())?;
+
+    if args.reindex {
+        store.clear()?;
+    }
+
+    let chunker = DefaultChunker::new();
+    let indexer = Indexer::new(cwd, embedder, store, chunker);
+    eprintln!("  Indexando código (isso pode demorar)...");
+    let stats = indexer.index_full()?;
+    eprintln!(
+        "  Indexacao concluida: {} arquivos, {} chunks em {} ms",
+        stats.files_indexed, stats.chunks_indexed, stats.elapsed_ms,
+    );
+    Ok(stats)
+}
+
+fn build_embedder(
+    args: &InitArgs,
+) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    match args.embed_provider {
+        EmbedProviderArg::Local => {
+            let e = code_index::LocalFastEmbedder::new()?;
+            Ok(Arc::new(e))
+        }
+        EmbedProviderArg::Ollama => {
+            let url = args
+                .ollama_url
+                .clone()
+                .or_else(|| std::env::var("OLLAMA_BASE_URL").ok())
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            let model = args
+                .embed_model
+                .clone()
+                .unwrap_or_else(|| "nomic-embed-text".to_string());
+            let dim = match model.as_str() {
+                "all-minilm" => 384,
+                "nomic-embed-text" => 768,
+                "mxbai-embed-large" => 1024,
+                _ => 768,
+            };
+            let e = code_index::OllamaEmbedder::new(url, model, dim)?;
+            Ok(Arc::new(e))
+        }
+        EmbedProviderArg::Jina | EmbedProviderArg::Openai | EmbedProviderArg::Voyage => {
+            Err(format!(
+                "embed-provider {:?} ainda não implementado nesta versão; use --embed-provider local|ollama",
+                args.embed_provider
+            )
+            .into())
+        }
+    }
+}
+
+fn build_store(
+    index_dir: &Path,
+    args: &InitArgs,
+    dim: usize,
+) -> Result<Arc<dyn VectorStore>, Box<dyn std::error::Error>> {
+    match args.backend {
+        IndexBackend::Sqlite => {
+            let db_path = index_dir.join("index.db");
+            let store = SqliteVecStore::open(db_path, dim)?;
+            Ok(Arc::new(store))
+        }
+        IndexBackend::Qdrant => {
+            Err("backend qdrant ainda não implementado nesta versão; use --backend sqlite".into())
+        }
+    }
+}
+
+fn write_index_config(index_dir: &Path, args: &InitArgs) -> std::io::Result<()> {
+    let config = serde_json::json!({
+        "backend": match args.backend {
+            IndexBackend::Sqlite => "sqlite",
+            IndexBackend::Qdrant => "qdrant",
+        },
+        "qdrantUrl": args.qdrant_url,
+        "embedProvider": match args.embed_provider {
+            EmbedProviderArg::Local => "local",
+            EmbedProviderArg::Ollama => "ollama",
+            EmbedProviderArg::Jina => "jina",
+            EmbedProviderArg::Openai => "openai",
+            EmbedProviderArg::Voyage => "voyage",
+        },
+        "embedModel": args.embed_model,
+        "ollamaUrl": args.ollama_url,
+        "watcher": { "enabled": !args.no_watcher, "debounceMs": 500 },
+    });
+    fs::write(
+        index_dir.join("config.json"),
+        serde_json::to_string_pretty(&config)?,
+    )
+}
+
+fn append_gitignore_index_entry(gitignore: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    if gitignore.exists() {
+        let content = fs::read_to_string(gitignore)?;
+        if content.contains(".elai/index/") {
+            return Ok(());
+        }
+        let mut f = fs::OpenOptions::new().append(true).open(gitignore)?;
+        writeln!(f, ".elai/index/")?;
+    }
+    Ok(())
+}
+
+fn generate_elai_md_or_fallback(facts_json: &str) -> String {
+    render_static_elai_md(facts_json)
 }
 
 fn ensure_dir(path: &Path) -> Result<InitStatus, std::io::Error> {
@@ -159,181 +319,21 @@ fn ensure_gitignore_entries(path: &Path) -> Result<InitStatus, std::io::Error> {
     Ok(InitStatus::Updated)
 }
 
+// ── Kept for backward compat (used in tests and TUI /init slash command) ───
+#[allow(dead_code)]
 pub(crate) fn render_init_elai_md(cwd: &Path) -> String {
-    let detection = detect_repo(cwd);
-    let mut lines = vec![
-        "# ELAI.md".to_string(),
-        String::new(),
-        "This file provides guidance to Elai Code (elai.dev) when working with code in this repository.".to_string(),
-        String::new(),
-    ];
-
-    let detected_languages = detected_languages(&detection);
-    let detected_frameworks = detected_frameworks(&detection);
-    lines.push("## Detected stack".to_string());
-    if detected_languages.is_empty() {
-        lines.push("- No specific language markers were detected yet; document the primary language and verification commands once the project structure settles.".to_string());
-    } else {
-        lines.push(format!("- Languages: {}.", detected_languages.join(", ")));
-    }
-    if detected_frameworks.is_empty() {
-        lines.push("- Frameworks: none detected from the supported starter markers.".to_string());
-    } else {
-        lines.push(format!(
-            "- Frameworks/tooling markers: {}.",
-            detected_frameworks.join(", ")
-        ));
-    }
-    lines.push(String::new());
-
-    let verification_lines = verification_lines(cwd, &detection);
-    if !verification_lines.is_empty() {
-        lines.push("## Verification".to_string());
-        lines.extend(verification_lines);
-        lines.push(String::new());
-    }
-
-    let structure_lines = repository_shape_lines(&detection);
-    if !structure_lines.is_empty() {
-        lines.push("## Repository shape".to_string());
-        lines.extend(structure_lines);
-        lines.push(String::new());
-    }
-
-    let framework_lines = framework_notes(&detection);
-    if !framework_lines.is_empty() {
-        lines.push("## Framework notes".to_string());
-        lines.extend(framework_lines);
-        lines.push(String::new());
-    }
-
-    lines.push("## Working agreement".to_string());
-    lines.push("- Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.".to_string());
-    lines.push("- Keep shared defaults in .elai.json; reserve .elai/settings.local.json for machine-local overrides (both are gitignored and never committed).".to_string());
-    lines.push("- Do not overwrite existing `ELAI.md` content automatically; update it intentionally when repo workflows change.".to_string());
-    lines.push(String::new());
-
-    lines.join("\n")
-}
-
-fn detect_repo(cwd: &Path) -> RepoDetection {
-    let package_json_contents = fs::read_to_string(cwd.join("package.json"))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    RepoDetection {
-        rust_workspace: cwd.join("rust").join("Cargo.toml").is_file(),
-        rust_root: cwd.join("Cargo.toml").is_file(),
-        python: cwd.join("pyproject.toml").is_file()
-            || cwd.join("requirements.txt").is_file()
-            || cwd.join("setup.py").is_file(),
-        package_json: cwd.join("package.json").is_file(),
-        typescript: cwd.join("tsconfig.json").is_file()
-            || package_json_contents.contains("typescript"),
-        nextjs: package_json_contents.contains("\"next\""),
-        react: package_json_contents.contains("\"react\""),
-        vite: package_json_contents.contains("\"vite\""),
-        nest: package_json_contents.contains("@nestjs"),
-        src_dir: cwd.join("src").is_dir(),
-        tests_dir: cwd.join("tests").is_dir(),
-        rust_dir: cwd.join("rust").is_dir(),
-    }
-}
-
-fn detected_languages(detection: &RepoDetection) -> Vec<&'static str> {
-    let mut languages = Vec::new();
-    if detection.rust_workspace || detection.rust_root {
-        languages.push("Rust");
-    }
-    if detection.python {
-        languages.push("Python");
-    }
-    if detection.typescript {
-        languages.push("TypeScript");
-    } else if detection.package_json {
-        languages.push("JavaScript/Node.js");
-    }
-    languages
-}
-
-fn detected_frameworks(detection: &RepoDetection) -> Vec<&'static str> {
-    let mut frameworks = Vec::new();
-    if detection.nextjs {
-        frameworks.push("Next.js");
-    }
-    if detection.react {
-        frameworks.push("React");
-    }
-    if detection.vite {
-        frameworks.push("Vite");
-    }
-    if detection.nest {
-        frameworks.push("NestJS");
-    }
-    frameworks
-}
-
-fn verification_lines(cwd: &Path, detection: &RepoDetection) -> Vec<String> {
-    let mut lines = Vec::new();
-    if detection.rust_workspace {
-        lines.push("- Run Rust verification from `rust/`: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`".to_string());
-    } else if detection.rust_root {
-        lines.push("- Run Rust verification from the repo root: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`".to_string());
-    }
-    if detection.python {
-        if cwd.join("pyproject.toml").is_file() {
-            lines.push("- Run the Python project checks declared in `pyproject.toml` (for example: `pytest`, `ruff check`, and `mypy` when configured).".to_string());
-        } else {
-            lines.push(
-                "- Run the repo's Python test/lint commands before shipping changes.".to_string(),
-            );
-        }
-    }
-    if detection.package_json {
-        lines.push("- Run the JavaScript/TypeScript checks from `package.json` before shipping changes (`npm test`, `npm run lint`, `npm run build`, or the repo equivalent).".to_string());
-    }
-    if detection.tests_dir && detection.src_dir {
-        lines.push("- `src/` and `tests/` are both present; update both surfaces together when behavior changes.".to_string());
-    }
-    lines
-}
-
-fn repository_shape_lines(detection: &RepoDetection) -> Vec<String> {
-    let mut lines = Vec::new();
-    if detection.rust_dir {
-        lines.push(
-            "- `rust/` contains the Rust workspace and active CLI/runtime implementation."
-                .to_string(),
-        );
-    }
-    if detection.src_dir {
-        lines.push("- `src/` contains source files that should stay consistent with generated guidance and tests.".to_string());
-    }
-    if detection.tests_dir {
-        lines.push("- `tests/` contains validation surfaces that should be reviewed alongside code changes.".to_string());
-    }
-    lines
-}
-
-fn framework_notes(detection: &RepoDetection) -> Vec<String> {
-    let mut lines = Vec::new();
-    if detection.nextjs {
-        lines.push("- Next.js detected: preserve routing/data-fetching conventions and verify production builds after changing app structure.".to_string());
-    }
-    if detection.react && !detection.nextjs {
-        lines.push("- React detected: keep component behavior covered with focused tests and avoid unnecessary prop/API churn.".to_string());
-    }
-    if detection.vite {
-        lines.push("- Vite detected: validate the production bundle after changing build-sensitive configuration or imports.".to_string());
-    }
-    if detection.nest {
-        lines.push("- NestJS detected: keep module/provider boundaries explicit and verify controller/service wiring after refactors.".to_string());
-    }
-    lines
+    // Use the static template grounded in project facts
+    let facts = collect_facts(cwd).ok();
+    let facts_json = facts
+        .as_ref()
+        .and_then(|f| serde_json::to_string_pretty(f).ok())
+        .unwrap_or_else(|| "{}".to_string());
+    render_static_elai_md(&facts_json)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_repo, render_init_elai_md};
+    use super::{initialize_repo, render_init_elai_md, InitArgs};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -352,7 +352,11 @@ mod tests {
         fs::create_dir_all(root.join("rust")).expect("create rust dir");
         fs::write(root.join("rust").join("Cargo.toml"), "[workspace]\n").expect("write cargo");
 
-        let report = initialize_repo(&root).expect("init should succeed");
+        let args = InitArgs {
+            no_index: true,
+            ..InitArgs::default()
+        };
+        let report = initialize_repo(&root, &args).expect("init should succeed");
         let rendered = report.render();
         assert!(
             rendered.lines().any(|line| line.contains(".elai/") && line.contains("created")),
@@ -377,9 +381,6 @@ mod tests {
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
         assert!(gitignore.contains(".elai/settings.local.json"));
         assert!(gitignore.contains(".elai/sessions/"));
-        let elai_md = fs::read_to_string(root.join("ELAI.md")).expect("read elai md");
-        assert!(elai_md.contains("Languages: Rust."));
-        assert!(elai_md.contains("cargo clippy --workspace --all-targets -- -D warnings"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -391,11 +392,16 @@ mod tests {
         fs::write(root.join("ELAI.md"), "custom guidance\n").expect("write existing elai md");
         fs::write(root.join(".gitignore"), ".elai/settings.local.json\n").expect("write gitignore");
 
-        let first = initialize_repo(&root).expect("first init should succeed");
+        let args = InitArgs {
+            no_index: true,
+            ..InitArgs::default()
+        };
+
+        let first = initialize_repo(&root, &args).expect("first init should succeed");
         assert!(first
             .render()
             .contains("ELAI.md          skipped (already exists)"));
-        let second = initialize_repo(&root).expect("second init should succeed");
+        let second = initialize_repo(&root, &args).expect("second init should succeed");
         let second_rendered = second.render();
         assert!(second_rendered
             .lines()
@@ -432,11 +438,72 @@ mod tests {
         )
         .expect("write package json");
 
+        // render_init_elai_md now uses collect_facts → render_static_elai_md
+        // It will detect files and produce a valid ELAI.md
         let rendered = render_init_elai_md(Path::new(&root));
-        assert!(rendered.contains("Languages: Python, TypeScript."));
-        assert!(rendered.contains("Frameworks/tooling markers: Next.js, React."));
-        assert!(rendered.contains("pyproject.toml"));
-        assert!(rendered.contains("Next.js detected"));
+        assert!(rendered.contains("# ELAI.md"), "should contain heading: {rendered}");
+        assert!(rendered.contains("## Estrutura"), "should contain Estrutura section: {rendered}");
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn init_with_no_index_skips_indexing() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create root");
+
+        let args = InitArgs {
+            no_index: true,
+            ..InitArgs::default()
+        };
+        let report = initialize_repo(&root, &args).expect("init should succeed");
+
+        // .elai/index/ should NOT be created
+        assert!(!root.join(".elai").join("index").exists(), ".elai/index/ should not be created with --no-index");
+        // ELAI.md should be present
+        assert!(root.join("ELAI.md").is_file(), "ELAI.md should exist");
+        // index_stats should be None
+        assert!(report.index_stats.is_none(), "index_stats should be None when --no-index");
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn init_uses_static_elai_md_fallback() {
+        let facts_json = serde_json::json!({
+            "total_files": 5,
+            "by_lang": {"rust": 4, "toml": 1},
+            "frameworks": ["rust-cargo"],
+            "dirs_summary": [{"dir": "src", "files": 4}],
+            "top_symbols": [],
+            "readme_excerpt": null
+        })
+        .to_string();
+
+        let content = runtime::render_static_elai_md(&facts_json);
+        assert!(content.contains("## Estrutura"), "static render must include Estrutura section");
+        assert!(content.contains("rust"), "static render must include rust lang");
+    }
+
+    #[test]
+    #[ignore = "requires fastembed model download"]
+    fn init_creates_index_config_json() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("hello.rs"), "fn main() {}").expect("write rs file");
+
+        let args = InitArgs {
+            no_index: false,
+            ..InitArgs::default()
+        };
+        let _report = initialize_repo(&root, &args).expect("init should succeed");
+
+        let config_path = root.join(".elai").join("index").join("config.json");
+        assert!(config_path.is_file(), "config.json should be created");
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(config["backend"], "sqlite");
+        assert_eq!(config["embedProvider"], "local");
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

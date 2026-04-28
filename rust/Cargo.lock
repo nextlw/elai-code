@@ -1033,6 +1033,7 @@ version = "0.6.0"
 dependencies = [
  "api",
  "clap",
+ "code_index",
  "commands",
  "compat-harness",
  "crossterm",

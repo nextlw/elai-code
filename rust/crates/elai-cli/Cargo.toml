@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 api = { path = "../api" }
+code_index = { path = "../code_index" }
 clap = { version = "4", features = ["derive"] }
 commands = { path = "../commands" }
 dotenvy = "0.15"
