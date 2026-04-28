@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod global_config;
 pub mod auto_dream;
 pub mod tasks;
 mod response_cache;
@@ -125,6 +126,10 @@ pub use usage::{
 pub use auto_dream::{
     build_consolidation_prompt, evaluate as evaluate_auto_dream, AutoDreamConfig,
     AutoDreamDecision, SkipReason as AutoDreamSkipReason,
+};
+pub use global_config::{
+    config_path as global_config_path, is_setup_complete, load as load_global_config,
+    save as save_global_config, FeatureFlags, GlobalConfig,
 };
 pub use tasks::{
     generate_task_id, task_output_path, TaskHandle, TaskOutputWriter, TaskRegistry,

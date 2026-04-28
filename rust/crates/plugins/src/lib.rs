@@ -343,10 +343,18 @@ fn default_tool_permission_label() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveKind {
+    TarGz,
+    Zip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginInstallSource {
     LocalPath { path: PathBuf },
     GitUrl { url: String },
+    Tarball { url: String, archive_kind: ArchiveKind },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -979,7 +987,10 @@ impl PluginManager {
         let install_source = parse_install_source(source)?;
         let temp_root = self.install_root().join(".tmp");
         let staged_source = materialize_source(&install_source, &temp_root)?;
-        let cleanup_source = matches!(install_source, PluginInstallSource::GitUrl { .. });
+        let cleanup_source = matches!(
+            install_source,
+            PluginInstallSource::GitUrl { .. } | PluginInstallSource::Tarball { .. }
+        );
         let manifest = load_plugin_from_directory(&staged_source)?;
 
         let plugin_id = plugin_id(&manifest.name, EXTERNAL_MARKETPLACE);
@@ -1064,7 +1075,10 @@ impl PluginManager {
 
         let temp_root = self.install_root().join(".tmp");
         let staged_source = materialize_source(&record.source, &temp_root)?;
-        let cleanup_source = matches!(record.source, PluginInstallSource::GitUrl { .. });
+        let cleanup_source = matches!(
+            record.source,
+            PluginInstallSource::GitUrl { .. } | PluginInstallSource::Tarball { .. }
+        );
         let manifest = load_plugin_from_directory(&staged_source)?;
 
         if record.install_path.exists() {
@@ -1864,12 +1878,39 @@ fn resolve_local_source(source: &str) -> Result<PathBuf, PluginError> {
 }
 
 fn parse_install_source(source: &str) -> Result<PluginInstallSource, PluginError> {
+    // Strip query strings / fragments for extension detection (use path component only).
+    let path_part = source.split('?').next().unwrap_or(source);
+    let path_part = path_part.split('#').next().unwrap_or(path_part);
+
+    let ext = Path::new(path_part)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    // .tar.gz / .tgz detection: check for ".tgz" extension, or ".gz" with parent extension "tar".
+    let is_tar_gz = ext.eq_ignore_ascii_case("tgz")
+        || (ext.eq_ignore_ascii_case("gz")
+            && Path::new(path_part)
+                .file_stem()
+                .and_then(|s| Path::new(s).extension())
+                .is_some_and(|e| e.eq_ignore_ascii_case("tar")));
+
+    if is_tar_gz {
+        return Ok(PluginInstallSource::Tarball {
+            url: source.to_string(),
+            archive_kind: ArchiveKind::TarGz,
+        });
+    }
+    if ext.eq_ignore_ascii_case("zip") {
+        return Ok(PluginInstallSource::Tarball {
+            url: source.to_string(),
+            archive_kind: ArchiveKind::Zip,
+        });
+    }
     if source.starts_with("http://")
         || source.starts_with("https://")
         || source.starts_with("git@")
-        || Path::new(source)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("git"))
+        || ext.eq_ignore_ascii_case("git")
     {
         Ok(PluginInstallSource::GitUrl {
             url: source.to_string(),
@@ -1905,7 +1946,129 @@ fn materialize_source(
             }
             Ok(destination)
         }
+        PluginInstallSource::Tarball { url, archive_kind } => {
+            materialize_tarball(url, archive_kind, temp_root)
+        }
     }
+}
+
+fn materialize_tarball(
+    url: &str,
+    archive_kind: &ArchiveKind,
+    temp_root: &Path,
+) -> Result<PathBuf, PluginError> {
+    let ts = unix_time_ms();
+    let archive_ext = match archive_kind {
+        ArchiveKind::TarGz => "tar.gz",
+        ArchiveKind::Zip => "zip",
+    };
+    let archive_path = temp_root.join(format!("plugin-{ts}.{archive_ext}"));
+    let extract_dir = temp_root.join(format!("plugin-{ts}-extracted"));
+
+    // Download — supports both http(s):// and file:// URLs.
+    let bytes = if url.starts_with("file://") {
+        let file_path = url.trim_start_matches("file://");
+        fs::read(file_path).map_err(|error| {
+            PluginError::CommandFailed(format!(
+                "failed to read local archive `{file_path}`: {error}"
+            ))
+        })?
+    } else {
+        let response = reqwest::blocking::get(url).map_err(|error| {
+            PluginError::CommandFailed(format!("HTTP request for `{url}` failed: {error}"))
+        })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(PluginError::CommandFailed(format!(
+                "HTTP {status} downloading `{url}`"
+            )));
+        }
+        response.bytes().map_err(|error| {
+            PluginError::CommandFailed(format!("failed to read response body for `{url}`: {error}"))
+        })?.to_vec()
+    };
+
+    fs::write(&archive_path, &bytes)?;
+
+    // Extract.
+    fs::create_dir_all(&extract_dir)?;
+    match archive_kind {
+        ArchiveKind::TarGz => {
+            let archive_file = fs::File::open(&archive_path).map_err(|error| {
+                PluginError::CommandFailed(format!(
+                    "failed to open archive `{}`: {error}",
+                    archive_path.display()
+                ))
+            })?;
+            let gz = flate2::read::GzDecoder::new(archive_file);
+            let mut tar = tar::Archive::new(gz);
+            tar.unpack(&extract_dir).map_err(|error| {
+                PluginError::CommandFailed(format!(
+                    "failed to extract tar.gz archive `{}`: {error}",
+                    archive_path.display()
+                ))
+            })?;
+        }
+        ArchiveKind::Zip => {
+            let archive_file = fs::File::open(&archive_path).map_err(|error| {
+                PluginError::CommandFailed(format!(
+                    "failed to open archive `{}`: {error}",
+                    archive_path.display()
+                ))
+            })?;
+            let mut zip_archive = zip::ZipArchive::new(archive_file).map_err(|error| {
+                PluginError::CommandFailed(format!(
+                    "failed to read zip archive `{}`: {error}",
+                    archive_path.display()
+                ))
+            })?;
+            zip_archive.extract(&extract_dir).map_err(|error| {
+                PluginError::CommandFailed(format!(
+                    "failed to extract zip archive `{}`: {error}",
+                    archive_path.display()
+                ))
+            })?;
+        }
+    }
+
+    // Clean up the downloaded archive file now that it's extracted.
+    let _ = fs::remove_file(&archive_path);
+
+    // Find the plugin root: either the extract_dir itself (if plugin.json/elai-plugin/plugin.json
+    // is at the top) or a single sub-directory inside it.
+    let plugin_root = find_plugin_root_in_extracted(&extract_dir).ok_or_else(|| {
+        PluginError::InvalidManifest(format!(
+            "archive extracted to `{}` does not contain `plugin.json` or `.elai-plugin/plugin.json`",
+            extract_dir.display()
+        ))
+    })?;
+
+    Ok(plugin_root)
+}
+
+fn find_plugin_root_in_extracted(extract_dir: &Path) -> Option<PathBuf> {
+    // Check if the plugin manifest is directly at the root of the extracted dir.
+    if extract_dir.join(MANIFEST_FILE_NAME).exists()
+        || extract_dir.join(MANIFEST_RELATIVE_PATH).exists()
+    {
+        return Some(extract_dir.to_path_buf());
+    }
+
+    // Otherwise, look for a single top-level subdirectory that contains the manifest.
+    let entries: Vec<PathBuf> = fs::read_dir(extract_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+
+    if entries.len() == 1 {
+        let sub = &entries[0];
+        if sub.join(MANIFEST_FILE_NAME).exists() || sub.join(MANIFEST_RELATIVE_PATH).exists() {
+            return Some(sub.clone());
+        }
+    }
+
+    None
 }
 
 fn discover_plugin_dirs(root: &Path) -> Result<Vec<PathBuf>, PluginError> {
@@ -1943,7 +2106,9 @@ fn sanitize_plugin_id(plugin_id: &str) -> String {
 fn describe_install_source(source: &PluginInstallSource) -> String {
     match source {
         PluginInstallSource::LocalPath { path } => path.display().to_string(),
-        PluginInstallSource::GitUrl { url } => url.clone(),
+        PluginInstallSource::GitUrl { url } | PluginInstallSource::Tarball { url, .. } => {
+            url.clone()
+        }
     }
 }
 
@@ -2939,5 +3104,110 @@ mod tests {
 
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(bundled_root);
+    }
+
+    #[test]
+    fn parse_install_source_detects_tar_gz_url() {
+        let source = parse_install_source("https://example.com/plugin.tar.gz")
+            .expect("tar.gz URL should parse");
+        assert_eq!(
+            source,
+            PluginInstallSource::Tarball {
+                url: "https://example.com/plugin.tar.gz".to_string(),
+                archive_kind: ArchiveKind::TarGz,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_install_source_detects_tgz_url() {
+        let source = parse_install_source("https://example.com/plugin.tgz")
+            .expect("tgz URL should parse");
+        assert_eq!(
+            source,
+            PluginInstallSource::Tarball {
+                url: "https://example.com/plugin.tgz".to_string(),
+                archive_kind: ArchiveKind::TarGz,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_install_source_detects_zip_url() {
+        let source = parse_install_source("https://example.com/plugin.zip")
+            .expect("zip URL should parse");
+        assert_eq!(
+            source,
+            PluginInstallSource::Tarball {
+                url: "https://example.com/plugin.zip".to_string(),
+                archive_kind: ArchiveKind::Zip,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_install_source_keeps_git_for_git_urls() {
+        let source = parse_install_source("https://github.com/user/repo.git")
+            .expect("git URL should parse");
+        assert_eq!(
+            source,
+            PluginInstallSource::GitUrl {
+                url: "https://github.com/user/repo.git".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn materialize_tarball_extracts_archive() {
+
+        let tmp = temp_dir("tarball-extract");
+        fs::create_dir_all(&tmp).expect("create tmp dir");
+
+        // Build a minimal tar.gz archive in memory containing plugin.json.
+        let manifest_json = r#"{
+  "name": "tarball-demo",
+  "version": "1.0.0",
+  "description": "Tarball install test plugin"
+}"#;
+
+        let gz_path = tmp.join("test-plugin.tar.gz");
+        {
+            let gz_file = fs::File::create(&gz_path).expect("create gz file");
+            let gz_encoder =
+                flate2::write::GzEncoder::new(gz_file, flate2::Compression::default());
+            let mut tar_builder = tar::Builder::new(gz_encoder);
+
+            let manifest_bytes = manifest_json.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(manifest_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar_builder
+                .append_data(&mut header, "plugin.json", manifest_bytes)
+                .expect("append manifest to tar");
+
+            tar_builder.finish().expect("finish tar");
+        }
+
+        // Use a file:// URL so materialize_tarball reads it without network.
+        let file_url = format!("file://{}", gz_path.to_str().expect("utf8 path"));
+        let source = PluginInstallSource::Tarball {
+            url: file_url,
+            archive_kind: ArchiveKind::TarGz,
+        };
+
+        let temp_root = tmp.join("work");
+        let extracted_path = materialize_source(&source, &temp_root).expect("materialize should succeed");
+        assert!(
+            extracted_path.join("plugin.json").exists(),
+            "extracted path should contain plugin.json"
+        );
+
+        let manifest =
+            load_plugin_from_directory(&extracted_path).expect("manifest should load from tarball");
+        assert_eq!(manifest.name, "tarball-demo");
+        assert_eq!(manifest.version, "1.0.0");
+
+        let _ = fs::remove_dir_all(tmp);
     }
 }

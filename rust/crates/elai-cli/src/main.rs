@@ -1767,8 +1767,10 @@ fn run_tui_repl(
         });
     }
 
-    // First-run or missing key: open auth picker immediately.
-    if !has_any_auth() {
+    // First-run: open setup wizard; otherwise only open auth picker if no auth present.
+    if !runtime::is_setup_complete() {
+        app.open_first_run_wizard();
+    } else if !has_any_auth() {
         app.open_auth_picker();
     }
 

@@ -163,6 +163,11 @@ pub enum OverlayKind {
     AuthPicker {
         step: AuthStep,
     },
+    /// Multi-step first-run setup wizard (model + permissions + defaults).
+    FirstRunWizard {
+        step: WizardStep,
+        state: WizardState,
+    },
 }
 
 /// Which authentication method the user selected in the AuthPicker.
@@ -232,6 +237,42 @@ pub enum AuthEvent {
     Progress(String),
     Success(String),
     Error(String),
+}
+
+// ─── First-run setup wizard types ────────────────────────────────────────────
+
+/// State collected while the setup wizard is running.
+#[derive(Debug, Clone)]
+pub struct WizardState {
+    pub model: String,
+    pub permission_mode: String,
+    pub features: runtime::FeatureFlags,
+}
+
+impl Default for WizardState {
+    fn default() -> Self {
+        Self {
+            model: "claude-opus-4-7".into(),
+            permission_mode: "workspace-write".into(),
+            features: runtime::FeatureFlags::default(),
+        }
+    }
+}
+
+/// Step state machine for the first-run setup wizard.
+#[derive(Debug, Clone)]
+pub enum WizardStep {
+    /// Welcome screen — press Enter to continue.
+    Welcome,
+    /// Model selection (4 choices).
+    Model { selected: usize },
+    /// Permission mode selection (3 choices).
+    Permissions { selected: usize },
+    /// Optional defaults toggle (auto-update / telemetry / indexing).
+    /// `focused` is 0..2 indicating which toggle the cursor is on.
+    Defaults { focused: usize },
+    /// Summary + persist — press Enter to close.
+    Done,
 }
 
 // ─── Application state ────────────────────────────────────────────────────────
@@ -601,6 +642,13 @@ impl UiApp {
                 selected: 0,
                 claude_code_detected: detected,
             },
+        });
+    }
+
+    pub fn open_first_run_wizard(&mut self) {
+        self.overlay = Some(OverlayKind::FirstRunWizard {
+            step: WizardStep::Welcome,
+            state: WizardState::default(),
         });
     }
 
@@ -1419,6 +1467,10 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             handle_auth_picker_key(app, key, step)
         }
 
+        Some(OverlayKind::FirstRunWizard { step, state }) => {
+            handle_first_run_wizard_key(app, key, step, state)
+        }
+
         None => TuiAction::None,
     }
 }
@@ -1796,6 +1848,243 @@ pub fn drain_auth_events(app: &mut UiApp) {
         app.overlay = Some(OverlayKind::AuthPicker { step: next_step });
     } else {
         app.overlay = overlay;
+    }
+}
+
+const WIZARD_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "gpt-4o-mini",
+];
+
+const WIZARD_PERMS: &[&str] = &[
+    "read-only",
+    "workspace-write",
+    "danger-full-access",
+];
+
+fn handle_first_run_wizard_key(
+    app: &mut UiApp,
+    key: KeyEvent,
+    step: WizardStep,
+    state: WizardState,
+) -> TuiAction {
+    match step {
+        WizardStep::Welcome => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                app.overlay = None;
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { selected: 0 },
+                    state,
+                });
+                TuiAction::None
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Welcome,
+                    state,
+                });
+                TuiAction::None
+            }
+        },
+
+        WizardStep::Model { selected } => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Welcome,
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Up) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model {
+                        selected: selected.saturating_sub(1),
+                    },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Down) => {
+                let next = (selected + 1).min(WIZARD_MODELS.len().saturating_sub(1));
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { selected: next },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                let model = WIZARD_MODELS
+                    .get(selected)
+                    .copied()
+                    .unwrap_or("claude-opus-4-7")
+                    .to_string();
+                let new_state = WizardState { model, ..state };
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions { selected: 0 },
+                    state: new_state,
+                });
+                TuiAction::None
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { selected },
+                    state,
+                });
+                TuiAction::None
+            }
+        },
+
+        WizardStep::Permissions { selected } => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { selected: 0 },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Up) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions {
+                        selected: selected.saturating_sub(1),
+                    },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Down) => {
+                let next = (selected + 1).min(WIZARD_PERMS.len().saturating_sub(1));
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions { selected: next },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                let perm = WIZARD_PERMS
+                    .get(selected)
+                    .copied()
+                    .unwrap_or("workspace-write")
+                    .to_string();
+                let new_state = WizardState {
+                    permission_mode: perm,
+                    ..state
+                };
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { focused: 0 },
+                    state: new_state,
+                });
+                TuiAction::None
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions { selected },
+                    state,
+                });
+                TuiAction::None
+            }
+        },
+
+        WizardStep::Defaults { focused } => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions { selected: 0 },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Tab)
+            | (KeyModifiers::NONE, KeyCode::Down) => {
+                let next = (focused + 1) % 3;
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { focused: next },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::SHIFT, KeyCode::BackTab)
+            | (KeyModifiers::NONE, KeyCode::Up) => {
+                let prev = if focused == 0 { 2 } else { focused - 1 };
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { focused: prev },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+                let new_state = match focused {
+                    0 => WizardState {
+                        features: runtime::FeatureFlags {
+                            auto_update: !state.features.auto_update,
+                            ..state.features
+                        },
+                        ..state
+                    },
+                    1 => WizardState {
+                        features: runtime::FeatureFlags {
+                            telemetry: !state.features.telemetry,
+                            ..state.features
+                        },
+                        ..state
+                    },
+                    _ => WizardState {
+                        features: runtime::FeatureFlags {
+                            indexing: !state.features.indexing,
+                            ..state.features
+                        },
+                        ..state
+                    },
+                };
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { focused },
+                    state: new_state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Done,
+                    state,
+                });
+                TuiAction::None
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { focused },
+                    state,
+                });
+                TuiAction::None
+            }
+        },
+
+        WizardStep::Done => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Esc) => {
+                // Persist global config.
+                let cfg = runtime::GlobalConfig {
+                    setup_complete: true,
+                    default_model: state.model.clone(),
+                    default_permission_mode: state.permission_mode.clone(),
+                    features: state.features.clone(),
+                };
+                let _ = runtime::save_global_config(&cfg);
+                // Apply to live app state.
+                app.model = state.model.clone();
+                app.permission_mode = state.permission_mode.clone();
+                app.overlay = None;
+                TuiAction::SetupComplete
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Done,
+                    state,
+                });
+                TuiAction::None
+            }
+        },
     }
 }
 
@@ -2933,6 +3222,9 @@ fn draw_overlay(
         OverlayKind::AuthPicker { step } => {
             draw_auth_picker(frame, area, step);
         }
+        OverlayKind::FirstRunWizard { step, state } => {
+            draw_first_run_wizard(frame, area, step, state);
+        }
         OverlayKind::FileMentionPicker {
             items,
             filter,
@@ -3284,6 +3576,252 @@ fn draw_setup_wizard(
                 Style::default().fg(Color::DarkGray),
             )),
         ]
+    };
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_first_run_wizard(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    step: &WizardStep,
+    state: &WizardState,
+) {
+    let width = (area.width * 2 / 3).max(60).min(area.width.saturating_sub(4));
+    let height = 18u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let (step_label, total_steps) = match step {
+        WizardStep::Welcome => ("1", "5"),
+        WizardStep::Model { .. } => ("2", "5"),
+        WizardStep::Permissions { .. } => ("3", "5"),
+        WizardStep::Defaults { .. } => ("4", "5"),
+        WizardStep::Done => ("5", "5"),
+    };
+
+    let block = Block::default()
+        .title(format!(" Setup  [{step_label}/{total_steps}] "))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Indexed(215)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines: Vec<Line> = match step {
+        WizardStep::Welcome => vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Bem-vindo ao Elai Code!",
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Este assistente vai configurar:",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "   • Modelo de IA padrão",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                "   • Modo de permissões",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                "   • Preferências opcionais",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Se ainda não tem auth, use `elai login` após o setup.",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter para começar  ·  Esc para cancelar",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+
+        WizardStep::Model { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Escolha o modelo padrão:",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+            ];
+            let labels = [
+                "claude-opus-4-7        (recommended)",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5-20251001",
+                "gpt-4o-mini            (fallback)",
+            ];
+            for (i, label) in labels.iter().enumerate() {
+                if i == *selected {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ▶ {label}"),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Indexed(215))
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {label}"),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines
+        }
+
+        WizardStep::Permissions { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Modo de permissões:",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+            ];
+            let labels = [
+                ("read-only", "Apenas leitura — sem alterações"),
+                ("workspace-write", "Workspace write — escreve no projeto"),
+                ("danger-full-access", "Full access — power users (recomendado)"),
+            ];
+            for (i, (mode, desc)) in labels.iter().enumerate() {
+                if i == *selected {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ▶ {mode:<22} {desc}"),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Indexed(215))
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {mode:<22} {desc}"),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines
+        }
+
+        WizardStep::Defaults { focused } => {
+            let toggles: &[(&str, bool)] = &[
+                ("Auto-update", state.features.auto_update),
+                ("Telemetry  ", state.features.telemetry),
+                ("Indexing   ", state.features.indexing),
+            ];
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Preferências opcionais:",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+            ];
+            for (i, (label, enabled)) in toggles.iter().enumerate() {
+                let check = if *enabled { "[x]" } else { "[ ]" };
+                let check_color = if *enabled { Color::Green } else { Color::DarkGray };
+                let is_focused = i == *focused;
+                let prefix = if is_focused { "  ▶ " } else { "    " };
+                if is_focused {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            prefix,
+                            Style::default().fg(Color::Indexed(215)),
+                        ),
+                        Span::styled(
+                            check,
+                            Style::default().fg(check_color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  {label}"),
+                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(check, Style::default().fg(check_color)),
+                        Span::styled(
+                            format!("  {label}"),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Tab/↑↓ navegar  ·  Space alternar  ·  Enter próximo  ·  Esc voltar",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines
+        }
+
+        WizardStep::Done => vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Configuração concluída!",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Modelo       ", Style::default().fg(Color::DarkGray)),
+                Span::styled(state.model.clone(), Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Permissões   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    state.permission_mode.clone(),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  Auto-update  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if state.features.auto_update { "on" } else { "off" },
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  Telemetry    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if state.features.telemetry { "on" } else { "off" },
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  Indexing     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if state.features.indexing { "on" } else { "off" },
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter para fechar e iniciar",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
     };
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -4032,5 +4570,160 @@ mod tests {
         let items: Vec<String> = (0..100).map(|i| format!("file_{i}.rs")).collect();
         let result = filter_mention_items(&items, "");
         assert_eq!(result.len(), 50);
+    }
+
+    // ─── First-run wizard tests ───────────────────────────────────────────────
+
+    #[test]
+    fn setup_wizard_starts_at_welcome() {
+        let mut app = make_app();
+        app.open_first_run_wizard();
+        match &app.overlay {
+            Some(OverlayKind::FirstRunWizard { step: WizardStep::Welcome, .. }) => {}
+            other => panic!("expected Welcome step, got: {other:?}"),
+        }
+    }
+
+    fn wizard_enter(app: &mut UiApp) {
+        handle_overlay_key(app, make_key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn setup_wizard_enter_advances_through_steps() {
+        let mut app = make_app();
+        app.open_first_run_wizard();
+
+        // Welcome -> Model
+        wizard_enter(&mut app);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::FirstRunWizard { step: WizardStep::Model { .. }, .. })
+            ),
+            "expected Model step"
+        );
+
+        // Model -> Permissions
+        wizard_enter(&mut app);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Permissions { .. },
+                    ..
+                })
+            ),
+            "expected Permissions step"
+        );
+
+        // Permissions -> Defaults
+        wizard_enter(&mut app);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Defaults { .. },
+                    ..
+                })
+            ),
+            "expected Defaults step"
+        );
+
+        // Defaults -> Done
+        wizard_enter(&mut app);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::FirstRunWizard { step: WizardStep::Done, .. })
+            ),
+            "expected Done step"
+        );
+    }
+
+    #[test]
+    fn setup_wizard_model_selection_is_captured() {
+        let mut app = make_app();
+        app.open_first_run_wizard();
+        wizard_enter(&mut app); // -> Model
+
+        // Navigate down once to select index 1 (claude-sonnet-4-6)
+        handle_overlay_key(&mut app, make_key(KeyCode::Down));
+        wizard_enter(&mut app); // -> Permissions
+
+        // Skip to Done
+        wizard_enter(&mut app); // -> Defaults
+        wizard_enter(&mut app); // -> Done
+
+        match &app.overlay {
+            Some(OverlayKind::FirstRunWizard {
+                step: WizardStep::Done,
+                state,
+            }) => {
+                assert_eq!(state.model, "claude-sonnet-4-6");
+            }
+            other => panic!("expected Done, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn setup_wizard_defaults_toggle_works() {
+        let mut app = make_app();
+        app.open_first_run_wizard();
+        wizard_enter(&mut app); // Welcome -> Model
+        wizard_enter(&mut app); // Model -> Permissions
+        wizard_enter(&mut app); // Permissions -> Defaults
+
+        // Initially features.auto_update = true; Space should toggle it off
+        handle_overlay_key(&mut app, make_key(KeyCode::Char(' ')));
+        match &app.overlay {
+            Some(OverlayKind::FirstRunWizard {
+                step: WizardStep::Defaults { .. },
+                state,
+            }) => {
+                assert!(!state.features.auto_update, "auto_update should be toggled off");
+            }
+            other => panic!("expected Defaults, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn setup_wizard_esc_from_welcome_closes_overlay() {
+        let mut app = make_app();
+        app.open_first_run_wizard();
+        handle_overlay_key(&mut app, make_key(KeyCode::Esc));
+        assert!(app.overlay.is_none(), "overlay should be closed after Esc on Welcome");
+    }
+
+    #[test]
+    fn setup_wizard_done_persists_global_config() {
+        use std::sync::Mutex;
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+        let td = tempfile::TempDir::new().unwrap();
+        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct HomeRestore(Option<std::ffi::OsString>);
+        impl Drop for HomeRestore {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(p) => std::env::set_var("HOME", p),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _restore = HomeRestore(std::env::var_os("HOME"));
+        std::env::set_var("HOME", td.path());
+
+        let mut app = make_app();
+        app.open_first_run_wizard();
+        wizard_enter(&mut app); // Welcome -> Model
+        wizard_enter(&mut app); // Model -> Permissions
+        wizard_enter(&mut app); // Permissions -> Defaults
+        wizard_enter(&mut app); // Defaults -> Done
+        wizard_enter(&mut app); // Done -> close + persist
+
+        assert!(app.overlay.is_none(), "overlay should be closed after Done+Enter");
+        let cfg = runtime::load_global_config().expect("config should be loadable");
+        assert!(cfg.setup_complete, "setup_complete should be true after wizard");
     }
 }
