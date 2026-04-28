@@ -132,9 +132,12 @@ pub fn dispatch_login(args: &LoginArgs) -> Result<(), AuthError> {
     if args.use_foundry {
         return toggle_3p(AuthMethod::Foundry, "CLAUDE_CODE_USE_FOUNDRY");
     }
+    if args.import_claude_code {
+        return import_claude_code_login();
+    }
     // No method selected — interactive picker placeholder for Layer 4
     Err(AuthError::InvalidInput(
-        "no method selected; rerun with --console|--claudeai|--sso|--api-key|--token|--use-bedrock|--use-vertex|--use-foundry, or use the TUI".into(),
+        "no method selected; rerun with --console|--claudeai|--sso|--api-key|--token|--use-bedrock|--use-vertex|--use-foundry|--import-claude-code, or use the TUI".into(),
     ))
 }
 
@@ -388,6 +391,121 @@ fn toggle_3p(method: AuthMethod, env_var: &str) -> Result<(), AuthError> {
     println!("Add to your shell rc to enable: export {env_var}=1");
     println!("Then restart elai.");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Import credentials from an existing Claude Code installation
+// ---------------------------------------------------------------------------
+
+/// Attempt to import Claude Code credentials (headless/agent-mode login).
+///
+/// Search order:
+///   1. `~/.claude/.credentials.json`  — Claude Code stores OAuth & API keys here
+///   2. macOS Keychain entry "Claude Code-credentials" (best-effort, macOS only)
+///   3. `ANTHROPIC_API_KEY` environment variable
+fn import_claude_code_login() -> Result<(), AuthError> {
+    // 1. Try ~/.claude/.credentials.json
+    if let Some(home) = std::env::var_os("HOME") {
+        let creds_path = std::path::PathBuf::from(home).join(".claude").join(".credentials.json");
+        if let Ok(data) = std::fs::read_to_string(&creds_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                // OAuth token object (claudeAiOAuthToken key)
+                if let Some(oauth) = json.get("claudeAiOAuthToken") {
+                    let access = oauth.get("accessToken")
+                        .or_else(|| oauth.get("access_token"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if !access.is_empty() {
+                        let refresh = oauth.get("refreshToken")
+                            .or_else(|| oauth.get("refresh_token"))
+                            .and_then(|v| v.as_str())
+                            .map(ToOwned::to_owned);
+                        let expires_at = oauth.get("expiresAt")
+                            .or_else(|| oauth.get("expires_at"))
+                            .and_then(|v| v.as_u64());
+                        let scopes: Vec<String> = oauth.get("scopes")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|s| s.as_str().map(ToOwned::to_owned)).collect())
+                            .unwrap_or_default();
+                        save_auth_method(&AuthMethod::ClaudeAiOAuth {
+                            token_set: OAuthTokenSet {
+                                access_token: access,
+                                refresh_token: refresh,
+                                expires_at,
+                                scopes,
+                            },
+                            subscription: None,
+                        })
+                        .map_err(AuthError::Io)?;
+                        println!("Imported Claude Code OAuth credentials from {}.", creds_path.display());
+                        return Ok(());
+                    }
+                }
+                // API key (apiKey key)
+                if let Some(key) = json.get("apiKey").and_then(|v| v.as_str()) {
+                    if !key.is_empty() {
+                        save_auth_method(&AuthMethod::ConsoleApiKey {
+                            api_key: key.to_string(),
+                            origin: ApiKeyOrigin::Pasted,
+                        })
+                        .map_err(AuthError::Io)?;
+                        println!("Imported Claude Code API key from {}.", creds_path.display());
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. macOS Keychain (best-effort, silent on non-macOS)
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !raw.is_empty() {
+                    // The keychain may store the full JSON or just a token string
+                    let token = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        json.get("accessToken")
+                            .or_else(|| json.get("access_token"))
+                            .and_then(|v| v.as_str())
+                            .map(ToOwned::to_owned)
+                            .unwrap_or(raw.clone())
+                    } else {
+                        raw.clone()
+                    };
+                    if !token.is_empty() {
+                        save_auth_method(&AuthMethod::AnthropicAuthToken { token })
+                            .map_err(AuthError::Io)?;
+                        println!("Imported Claude Code credentials from macOS Keychain.");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. ANTHROPIC_API_KEY env var
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            save_auth_method(&AuthMethod::ConsoleApiKey {
+                api_key: key,
+                origin: ApiKeyOrigin::Pasted,
+            })
+            .map_err(AuthError::Io)?;
+            println!("Imported credentials from ANTHROPIC_API_KEY environment variable.");
+            return Ok(());
+        }
+    }
+
+    Err(AuthError::InvalidInput(
+        "Could not find Claude Code credentials. \
+         Ensure Claude Code is installed and logged in, or set ANTHROPIC_API_KEY.".into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
