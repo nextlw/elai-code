@@ -144,6 +144,177 @@ elai --model gpt-4o-mini --api-base https://your-proxy/v1
 
 ---
 
+## Authentication
+
+`elai login` supports 10 methods. Pick by environment.
+
+| Flag                    | When to use                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `--claudeai`            | Pro/Max/Team/Enterprise subscriber — OAuth via claude.ai                             |
+| `--console`             | Anthropic Console — OAuth that creates an API key for you                            |
+| `--sso`                 | Enterprise SSO — claude.ai flow with `login_method=sso`                              |
+| `--api-key`             | Paste an `sk-ant-…` API key (interactive prompt or `--stdin`)                        |
+| `--token`               | Paste a Bearer token (`ANTHROPIC_AUTH_TOKEN`)                                        |
+| `--use-bedrock`         | AWS Bedrock — sets `CLAUDE_CODE_USE_BEDROCK=1`; AWS creds via standard chain         |
+| `--use-vertex`          | Google Vertex AI — sets `CLAUDE_CODE_USE_VERTEX=1`                                   |
+| `--use-foundry`         | Azure Foundry — sets `CLAUDE_CODE_USE_FOUNDRY=1`                                     |
+| `--import-claude-code`  | Import credentials from `~/.claude/credentials.json` (no interaction)                |
+| `--legacy-elai`         | Legacy `elai.dev` OAuth (deprecated; kept for upgrade paths)                         |
+
+Useful flags for any method:
+
+- `--email <addr>` pre-fills the OAuth login page (`login_hint`).
+- `--no-browser` prints the OAuth URL instead of opening one (CI / remote shells).
+- `--stdin` reads the secret from stdin (only with `--api-key` / `--token`).
+
+Inspect / list methods:
+
+```bash
+elai auth status        # active method, expiry, scopes
+elai auth list          # all available methods
+elai logout             # clear saved credentials
+```
+
+---
+
+## Indexing & Embeddings
+
+`elai init` creates `.elai/`, writes a starter `ELAI.md`, and indexes the codebase for semantic search.
+
+```bash
+elai init                          # default: SQLite + local fastembed
+elai init --backend qdrant --qdrant-url http://localhost:6333
+elai init --embed-provider ollama --ollama-url http://localhost:11434
+elai init --no-index               # skip indexing, only scaffold .elai/ + ELAI.md
+elai init --reindex                # wipe existing index and rebuild
+```
+
+| Flag                   | Values                                            | Default       |
+| ---------------------- | ------------------------------------------------- | ------------- |
+| `--backend`            | `sqlite` (vec-sqlite), `qdrant`                   | `sqlite`      |
+| `--embed-provider`     | `local` (fastembed), `ollama`, `jina`, `openai`, `voyage` | `local` |
+| `--embed-model`        | model name (overrides provider default)           | provider auto |
+| `--qdrant-url`         | URL of running Qdrant instance                    | —             |
+| `--ollama-url`         | URL of running Ollama instance                    | —             |
+| `--no-watcher`         | don't spawn the background re-indexer             | false         |
+| `--no-index`           | scaffold only, skip indexing                      | false         |
+| `--reindex`            | drop existing index and rebuild from scratch      | false         |
+
+Notes:
+
+- The **`local`** embed provider requires a build with `embed-fastembed` (default cargo feature). It is **not** available in musl Linux binaries (x86_64 / arm64) and macOS x86_64 binaries — those builds ship without `fastembed`. Use `--embed-provider ollama` or any HTTP provider on those targets.
+- After `init`, a background watcher keeps the index in sync. Manage it with `/cache stats` and `/cache clear` from inside the REPL.
+
+---
+
+## Plugins, Skills & Agents
+
+| Concept | Lives in | What it is |
+| ------- | -------- | ---------- |
+| **Plugin** | `~/.elai/plugins/<id>/` (configurable via `install_root`) | Versioned bundle that adds tools, skills, or hooks. Has `metadata.toml` (id, name, version) and a manifest. |
+| **Skill** | `.elai/skills/<name>/SKILL.md`, `.codex/skills/`, legacy `/commands/` | Markdown file with YAML frontmatter (`name`, `description`, `priority`, `budget_multiplier`, `force_provider`, `incompatible_with`). Auto-loaded into the prompt when keywords match. |
+| **Agent** | `.elai/agents/`, `.codex/agents/`, `$CODEX_HOME/agents` | Sub-agent definition (markdown + frontmatter). Triggered by tool dispatch or the orchestration pipeline. |
+
+Plugin commands:
+
+```text
+/plugin                          # list installed plugins
+/plugin install <path-or-url>    # install from a local path or git URL
+/plugin enable <name>            # enable a previously installed plugin
+/plugin disable <name>           # disable without uninstalling
+/plugin uninstall <id>           # remove from disk
+/plugin update <id>              # pull and re-install latest
+```
+
+Skills and agents are listed (and explained) by:
+
+```text
+/skills                          # discovered skills + origin/priority
+/agents                          # discovered agent definitions
+```
+
+Skills and agents are file-driven — drop a `SKILL.md` or agent file in the discovery path and it shows up on the next reload. No install step.
+
+---
+
+## Slash Commands
+
+35 commands grouped by purpose. Run `/help` inside the REPL for the live, runtime-filtered list.
+
+### Session
+
+| Command | Description |
+| --- | --- |
+| `/help` | Show available slash commands |
+| `/status` | Show current session status |
+| `/compact` | Compact local session history |
+| `/clear [--confirm]` | Start a fresh local session |
+| `/cost` | Show cumulative token usage for this session |
+| `/resume <session-path>` | Load a saved session into the REPL |
+| `/export [file]` | Export the current conversation to a file |
+
+### Behavior
+
+| Command | Description |
+| --- | --- |
+| `/model [name]` | Show or switch the active model |
+| `/permissions [read-only\|workspace-write\|danger-full-access]` | Show or switch the active permission mode |
+| `/tools [why]` | Inspect tool selection (`why` explains the last decision) |
+| `/budget [tokens] [usd] \| off` | Set or clear the per-session budget cap |
+| `/cache [clear\|stats]` | Manage the response/index cache |
+| `/providers [--verbose]` | Show provider usage dashboard |
+
+### Project
+
+| Command | Description |
+| --- | --- |
+| `/init` | Create a starter `ELAI.md` for this repo |
+| `/memory` | Inspect loaded Elai instruction memory files |
+| `/config [env\|hooks\|model\|plugins]` | Inspect Elai config files or merged sections |
+| `/verify` | Verify codebase files against memory entries |
+
+### Git
+
+| Command | Description |
+| --- | --- |
+| `/diff` | Show git diff for current workspace changes |
+| `/branch [list\|create <name>\|switch <name>]` | List, create, or switch git branches |
+| `/worktree [list\|add <path> [branch]\|remove <path>\|prune]` | Manage git worktrees |
+| `/commit` | Generate a commit message and create a git commit |
+| `/commit-push-pr [context]` | Commit, push, and open a PR in one step |
+| `/pr [context]` | Draft or create a pull request from the conversation |
+| `/issue [context]` | Draft or create a GitHub issue from the conversation |
+
+### Analysis
+
+| Command | Description |
+| --- | --- |
+| `/bughunter [scope]` | Inspect the codebase for likely bugs |
+| `/ultraplan [task]` | Run a deep planning prompt with multi-step reasoning |
+| `/teleport <symbol-or-path>` | Jump to a file or symbol by searching the workspace |
+| `/debug-tool-call` | Replay the last tool call with debug details |
+
+### Plugins / Skills / Agents
+
+| Command | Description |
+| --- | --- |
+| `/plugin [list\|install\|enable\|disable\|uninstall\|update]` | Manage Elai Code plugins |
+| `/skills` | List available skills |
+| `/agents` | List configured agents |
+| `/session [list\|switch <session-id>]` | List or switch managed local sessions |
+| `/dream [--force]` | Compress old memory entries into a summary |
+| `/stats [--days N] [--by-model] [--by-project]` | Token usage and cost statistics |
+
+### System
+
+| Command | Description |
+| --- | --- |
+| `/version` | Show CLI version and build information |
+| `/update` | Check for and install the latest Elai Code release |
+| `/swd [off\|partial\|full]` | Toggle or set Strict Write Discipline level |
+
+---
+
 ## Architecture
 
 ```
@@ -161,19 +332,6 @@ rust/
 src/                    # Python reference workspace (audit and parity surface)
 tests/                  # Python verification suite
 ```
-
-### Key Slash Commands
-
-| Command         | Description                                 |
-| --------------- | ------------------------------------------- |
-| `/model [name]` | Switch model mid-session                    |
-| `/cost`         | Show session token usage and USD cost       |
-| `/swd [level]`  | Toggle or set Strict Write Discipline level |
-| `/diff`         | Show git diff of workspace changes          |
-| `/compact`      | Compress conversation context               |
-| `/tools`        | List available tools                        |
-| `/tools why`    | Explain current tool rate-limit decisions   |
-| `/status`       | Show session status and config              |
 
 ---
 

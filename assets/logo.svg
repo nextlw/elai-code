@@ -1,23 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 112" width="720">
-  <rect width="720" height="112" fill="#0d1117" rx="6"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 112" width="800">
+  <rect width="800" height="112" fill="#0d1117" rx="6"/>
   <text
     font-family="'Courier New', 'Lucida Console', monospace"
     font-size="13.5"
     xml:space="preserve"
   >
-    <tspan x="16" y="24"  fill="#f2dece">  ██████████████████   </tspan><tspan fill="#f2dece">███████╗██╗      █████╗ ██╗</tspan>
-    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">▄▄</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">▄▄</tspan><tspan fill="#f2dece">░░   ██╔════╝██║     ██╔══██╗██║</tspan>
-    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">██</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">██</tspan><tspan fill="#f2dece">░░   █████╗  ██║     ███████║██║</tspan>
-    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">▀▀</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">▀▀</tspan><tspan fill="#f2dece">░░   ██╔══╝  ██║     ██╔══██║██║</tspan>
-    <tspan x="16" dy="17" fill="#f2dece">  ██████████████████   </tspan><tspan fill="#f2dece">███████╗███████╗██║  ██║██║</tspan>
-    <tspan x="16" dy="17" fill="#f2dece">        ████  ████     </tspan><tspan fill="#f2dece">╚══════╝╚══════╝╚═╝  ╚═╝╚═╝</tspan>
+    <tspan x="16" y="24"  fill="#f2dece">  ██████████████████   </tspan><tspan fill="#f2dece">███████╗██╗      █████╗ ██╗       ██████╗ ██████╗ ██████╗ ███████╗</tspan>
+    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">▄▄</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">▄▄</tspan><tspan fill="#f2dece">░░   ██╔════╝██║     ██╔══██╗██║      ██╔════╝██╔═══██╗██╔══██╗██╔════╝</tspan>
+    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">██</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">██</tspan><tspan fill="#f2dece">░░   █████╗  ██║     ███████║██║      ██║     ██║   ██║██║  ██║█████╗  </tspan>
+    <tspan x="16" dy="17" fill="#f2dece">  ████████░░</tspan><tspan fill="#c97b4a">▀▀</tspan><tspan fill="#f2dece">░░</tspan><tspan fill="#c97b4a">▀▀</tspan><tspan fill="#f2dece">░░   ██╔══╝  ██║     ██╔══██║██║      ██║     ██║   ██║██║  ██║██╔══╝  </tspan>
+    <tspan x="16" dy="17" fill="#f2dece">  ██████████████████   </tspan><tspan fill="#f2dece">███████╗███████╗██║  ██║██║   ██╗╚██████╗╚██████╔╝██████╔╝███████╗</tspan>
+    <tspan x="16" dy="17" fill="#f2dece">        ████  ████     </tspan><tspan fill="#f2dece">╚══════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝</tspan>
   </text>
   <text
     font-family="'Courier New', 'Lucida Console', monospace"
     text-anchor="start"
-    x="432"
+    x="600"
   >
-    <tspan y="95" font-size="13" fill="#f2dece">Elai Code</tspan>
-    <tspan x="432" y="109" font-size="10" fill="#f2dece">GenAI</tspan>
+    <tspan y="95" font-size="13" fill="#f2dece">ELAI.CODE</tspan>
+    <tspan x="600" y="109" font-size="10" fill="#f2dece">GenAI</tspan>
   </text>
 </svg>

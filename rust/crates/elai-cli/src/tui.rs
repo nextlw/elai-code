@@ -2688,7 +2688,7 @@ pub fn render(
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(10), // header
+                Constraint::Length(11), // header
                 Constraint::Min(3),     // chat body
                 Constraint::Length(1),  // status footer
                 Constraint::Length(3),  // input + hint
@@ -2717,7 +2717,7 @@ fn draw_header(
 ) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
         .split(area);
 
     draw_elai_card(frame, cols[0], app);
@@ -2725,15 +2725,15 @@ fn draw_header(
 }
 
 const ELAI_ASCII: &str = "\
-  ██████████████████   ███████╗██╗      █████╗ ██╗\n\
-  ████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║\n\
-  ████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
-  ████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
-  ██████████████████   ███████╗███████╗██║  ██║██║\n\
+  ██████████████████   ███████╗██╗      █████╗ ██╗       ██████╗ ██████╗ ██████╗ ███████╗\n\
+  ████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║      ██╔════╝██╔═══██╗██╔══██╗██╔════╝\n\
+  ████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║      ██║     ██║   ██║██║  ██║█████╗  \n\
+  ████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║      ██║     ██║   ██║██║  ██║██╔══╝  \n\
+  ██████████████████   ███████╗███████╗██║  ██║██║   ██╗╚██████╗╚██████╔╝██████╔╝███████╗\n\
 ";
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
-    // corpo do mascote e texto ELAI: laranja claro
+    // corpo do mascote e texto ELAI.CODE: laranja claro
     let body_style = Style::default().fg(theme().easter_egg.body);
     // olhos (▄ ▀ e █ depois de ▓): laranja saturado
     let eye_style = Style::default().fg(theme().easter_egg.warm);
@@ -2787,16 +2787,20 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     // Braços do mascote: cada um em uma span separada (gap não colapsa).
     // Braço direito recua 1 col da borda para não ficar colado na quina do corpo.
-    // Última linha do "ELAI" (╚══════╝...) compartilha esta linha à direita.
+    // Última linha do "ELAI.CODE" (╚══════╝...) compartilha esta linha à direita.
     lines.push(Line::from(vec![
         Span::raw("         "),
         Span::styled("███", body_style),
         Span::raw("  "),
         Span::styled("███", body_style),
         Span::raw("    "),
-        Span::styled("╚══════╝╚══════╝╚═╝  ╚═╝╚═╝", body_style),
+        Span::styled(
+            "╚══════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+            body_style,
+        ),
     ]));
 
+    lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(vec![
         Span::styled(format!("  Welcome back, {username}!"), dim),
         Span::raw("  "),
