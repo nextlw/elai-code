@@ -129,6 +129,12 @@ pub enum OverlayKind {
         filter: String,
         selected: usize,
     },
+    FileMentionPicker {
+        items: Vec<String>,    // paths relativos do projeto (cache)
+        filter: String,        // texto após o `@` (live)
+        selected: usize,       // índice na lista filtrada
+        anchor_pos: usize,     // posição do `@` no input (em chars, não bytes)
+    },
     SessionPicker {
         items: Vec<(String, usize)>,
         selected: usize,
@@ -245,6 +251,7 @@ pub struct UiApp {
     #[allow(dead_code)]
     pub cost_usd: f64,
     pub recent_sessions: Vec<(String, usize)>,
+    pub indexed_paths: Vec<String>, // cache lazy de `.elai/index/metadata.json` ou re-walk
     pub should_quit: bool,
     pub history: Vec<String>,
     pub history_index: Option<usize>,
@@ -279,6 +286,7 @@ impl UiApp {
             output_tokens: 0,
             cost_usd: 0.0,
             recent_sessions,
+            indexed_paths: Vec::new(),
             should_quit: false,
             history: Vec::new(),
             history_index: None,
@@ -559,6 +567,18 @@ impl UiApp {
         self.overlay = Some(OverlayKind::SessionPicker {
             items: self.recent_sessions.clone(),
             selected: 0,
+        });
+    }
+
+    pub fn open_file_mention_picker(&mut self, cwd: &std::path::Path, anchor_pos: usize) {
+        if self.indexed_paths.is_empty() {
+            self.indexed_paths = load_indexed_paths(cwd);
+        }
+        self.overlay = Some(OverlayKind::FileMentionPicker {
+            items: self.indexed_paths.clone(),
+            filter: String::new(),
+            selected: 0,
+            anchor_pos,
         });
     }
 
@@ -889,6 +909,16 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
 
         // Regular character
         (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if c == '@' {
+                // Insert '@' then open file mention picker (works at any cursor position)
+                let anchor_pos = app.cursor_col;
+                app.input_char('@');
+                app.open_file_mention_picker(
+                    &std::env::current_dir().unwrap_or_default(),
+                    anchor_pos,
+                );
+                return TuiAction::None;
+            }
             app.input_char(c);
             TuiAction::None
         }
@@ -1047,6 +1077,109 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 _ => {
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                }
+            }
+            TuiAction::None
+        }
+
+        Some(OverlayKind::FileMentionPicker {
+            items,
+            filter,
+            selected,
+            anchor_pos,
+        }) => {
+            let filtered = filter_mention_items(&items, &filter);
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                }
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    let new_sel = if selected == 0 {
+                        filtered.len().saturating_sub(1)
+                    } else {
+                        selected - 1
+                    };
+                    app.overlay = Some(OverlayKind::FileMentionPicker {
+                        items,
+                        filter,
+                        selected: new_sel,
+                        anchor_pos,
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    let new_sel = if filtered.is_empty() {
+                        0
+                    } else {
+                        (selected + 1) % filtered.len()
+                    };
+                    app.overlay = Some(OverlayKind::FileMentionPicker {
+                        items,
+                        filter,
+                        selected: new_sel,
+                        anchor_pos,
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    if let Some(path) = filtered.get(selected).copied() {
+                        let path_s = path.to_string();
+                        let insert_pos = anchor_pos + 1; // após o `@`
+                        let byte_idx = app
+                            .input
+                            .char_indices()
+                            .nth(insert_pos)
+                            .map(|(i, _)| i)
+                            .unwrap_or(app.input.len());
+                        let chars_inserted = path_s.chars().count() + 1; // +1 do espaço
+                        app.input.insert_str(byte_idx, &format!("{path_s} "));
+                        app.cursor_col = insert_pos + chars_inserted;
+                    }
+                    app.overlay = None;
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace) => {
+                    if filter.is_empty() {
+                        // Remove o @ e fecha overlay
+                        let byte_idx = app
+                            .input
+                            .char_indices()
+                            .nth(anchor_pos)
+                            .map(|(i, _)| i);
+                        if let Some(idx) = byte_idx {
+                            if app.input[idx..].starts_with('@') {
+                                app.input.remove(idx);
+                                if app.cursor_col > anchor_pos {
+                                    app.cursor_col -= 1;
+                                }
+                            }
+                        }
+                        app.overlay = None;
+                    } else {
+                        let mut new_filter = filter.clone();
+                        new_filter.pop();
+                        app.overlay = Some(OverlayKind::FileMentionPicker {
+                            items,
+                            filter: new_filter,
+                            selected: 0,
+                            anchor_pos,
+                        });
+                    }
+                }
+                (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let mut new_filter = filter.clone();
+                    new_filter.push(c);
+                    app.overlay = Some(OverlayKind::FileMentionPicker {
+                        items,
+                        filter: new_filter,
+                        selected: 0,
+                        anchor_pos,
+                    });
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::FileMentionPicker {
+                        items,
+                        filter,
+                        selected,
+                        anchor_pos,
+                    });
                 }
             }
             TuiAction::None
@@ -1878,6 +2011,63 @@ fn start_oauth_flow(
     });
 
     (url, port, rx, cancel)
+}
+
+/// Carrega lista de paths para o picker. Tenta:
+/// 1. `.elai/index/metadata.json` se existe (rápido).
+/// 2. Fallback: re-walk do projeto via `crate::verify::walk_project`.
+/// Limita a 5000 paths.
+fn load_indexed_paths(cwd: &std::path::Path) -> Vec<String> {
+    const MAX_PATHS: usize = 5000;
+    let metadata_path = cwd.join(".elai").join("index").join("metadata.json");
+    if metadata_path.is_file() {
+        if let Ok(s) = std::fs::read_to_string(&metadata_path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                if let Some(arr) = v.get("indexed_paths").and_then(|x| x.as_array()) {
+                    let paths: Vec<String> = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .take(MAX_PATHS)
+                        .collect();
+                    if !paths.is_empty() {
+                        return paths;
+                    }
+                }
+            }
+        }
+    }
+    // Fallback: walk via verify::walk_project (returns relative paths)
+    crate::verify::walk_project(cwd)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .take(MAX_PATHS)
+        .collect()
+}
+
+/// Ranking: basename match > path match. Case-insensitive substring.
+fn filter_mention_items<'a>(items: &'a [String], filter: &str) -> Vec<&'a String> {
+    if filter.is_empty() {
+        return items.iter().take(50).collect();
+    }
+    let needle = filter.to_lowercase();
+    let mut basename_hits: Vec<&'a String> = Vec::new();
+    let mut path_hits: Vec<&'a String> = Vec::new();
+    for item in items {
+        let lower = item.to_lowercase();
+        let basename = std::path::Path::new(item)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if basename.contains(&needle) {
+            basename_hits.push(item);
+        } else if lower.contains(&needle) {
+            path_hits.push(item);
+        }
+    }
+    basename_hits.extend(path_hits);
+    basename_hits.into_iter().take(50).collect()
 }
 
 fn filter_slash_items<'a>(
@@ -2742,6 +2932,33 @@ fn draw_overlay(
         }
         OverlayKind::AuthPicker { step } => {
             draw_auth_picker(frame, area, step);
+        }
+        OverlayKind::FileMentionPicker {
+            items,
+            filter,
+            selected,
+            ..
+        } => {
+            let filtered = filter_mention_items(items, filter);
+            let title = if filter.is_empty() {
+                format!(" Mention file ({} indexed) ", items.len())
+            } else {
+                format!(" Mention: {} ({} matches) ", filter, filtered.len())
+            };
+            let labels: Vec<String> = filtered
+                .iter()
+                .take(8)
+                .map(|p| format!("  {p}"))
+                .collect();
+            draw_picker(
+                frame,
+                area,
+                &title,
+                &labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                (*selected).min(labels.len().saturating_sub(1)),
+                Some(filter),
+                "",
+            );
         }
     }
 }
@@ -3675,5 +3892,145 @@ mod tests {
         } else {
             panic!("expected EmailInput step");
         }
+    }
+
+    // ─── FileMentionPicker tests ──────────────────────────────────────────────
+
+    fn make_key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn file_mention_picker_opens_with_at_char() {
+        let mut app = make_app();
+        app.input = String::new();
+        app.cursor_col = 0;
+        let anchor_pos = app.cursor_col;
+        app.input_char('@');
+        app.open_file_mention_picker(std::path::Path::new("/tmp"), anchor_pos);
+        assert_eq!(app.input, "@");
+        assert_eq!(app.cursor_col, 1);
+        assert!(matches!(
+            app.overlay,
+            Some(OverlayKind::FileMentionPicker { anchor_pos: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn file_mention_picker_filters_by_substring() {
+        let items = vec![
+            "src/foo.rs".to_string(),
+            "src/bar.rs".to_string(),
+            "tests/baz.rs".to_string(),
+        ];
+        let filtered = filter_mention_items(&items, "foo");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], "src/foo.rs");
+    }
+
+    #[test]
+    fn file_mention_picker_ranks_basename_first() {
+        // Items where only one has basename match (the other only path-component match)
+        let items = vec![
+            "src/foo_match/bar.rs".to_string(), // path match, not basename
+            "match_b.rs".to_string(),            // basename match
+        ];
+        let filtered = filter_mention_items(&items, "match");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0], "match_b.rs", "basename match should come first");
+        assert_eq!(filtered[1], "src/foo_match/bar.rs");
+    }
+
+    #[test]
+    fn file_mention_picker_enter_inserts_path_in_input() {
+        let mut app = make_app();
+        app.input = "@".to_string();
+        app.cursor_col = 1;
+        app.overlay = Some(OverlayKind::FileMentionPicker {
+            items: vec!["src/foo.rs".to_string()],
+            filter: String::new(),
+            selected: 0,
+            anchor_pos: 0,
+        });
+        handle_overlay_key(&mut app, make_key(crossterm::event::KeyCode::Enter));
+        assert_eq!(app.input, "@src/foo.rs ");
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn file_mention_picker_esc_closes_without_modifying_input() {
+        let mut app = make_app();
+        app.input = "hello @".to_string();
+        app.cursor_col = 7;
+        app.overlay = Some(OverlayKind::FileMentionPicker {
+            items: vec!["src/foo.rs".to_string()],
+            filter: String::new(),
+            selected: 0,
+            anchor_pos: 6,
+        });
+        handle_overlay_key(&mut app, make_key(crossterm::event::KeyCode::Esc));
+        assert!(app.overlay.is_none());
+        assert_eq!(app.input, "hello @");
+    }
+
+    #[test]
+    fn file_mention_picker_backspace_at_empty_filter_removes_at_char() {
+        let mut app = make_app();
+        app.input = "@".to_string();
+        app.cursor_col = 1;
+        app.overlay = Some(OverlayKind::FileMentionPicker {
+            items: vec![],
+            filter: String::new(),
+            selected: 0,
+            anchor_pos: 0,
+        });
+        handle_overlay_key(&mut app, make_key(crossterm::event::KeyCode::Backspace));
+        assert_eq!(app.input, "");
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn load_indexed_paths_reads_metadata_json_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "elai_test_meta_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        let index_dir = dir.join(".elai").join("index");
+        std::fs::create_dir_all(&index_dir).unwrap();
+        let metadata = r#"{"indexed_paths": ["a.rs", "b.rs"]}"#;
+        std::fs::write(index_dir.join("metadata.json"), metadata).unwrap();
+        let paths = load_indexed_paths(&dir);
+        assert_eq!(paths, vec!["a.rs".to_string(), "b.rs".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_indexed_paths_falls_back_to_walk_when_no_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "elai_test_walk_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("foo.rs"), "fn main() {}").unwrap();
+        let paths = load_indexed_paths(&dir);
+        assert!(
+            paths.contains(&"foo.rs".to_string()),
+            "should find foo.rs via walk; got: {:?}",
+            paths
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn filter_mention_items_returns_top_50_when_filter_empty() {
+        let items: Vec<String> = (0..100).map(|i| format!("file_{i}.rs")).collect();
+        let result = filter_mention_items(&items, "");
+        assert_eq!(result.len(), 50);
     }
 }

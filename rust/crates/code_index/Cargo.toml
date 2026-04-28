@@ -1,0 +1,47 @@
+[package]
+name = "code_index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["tree-sitter-langs", "vec-sqlite", "embed-fastembed", "embed-http"]
+embed-fastembed = ["dep:fastembed"]
+embed-http = ["dep:reqwest"]
+vec-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
+vec-qdrant = ["dep:qdrant-client"]
+tree-sitter-langs = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-go",
+]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Tree-sitter parsing — habilitado por default via feature `tree-sitter-langs`
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+
+# Optional, ativadas por features
+fastembed = { version = "5", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+sqlite-vec = { version = "0.1", optional = true }
+qdrant-client = { version = "1.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

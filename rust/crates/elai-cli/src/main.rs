@@ -1574,6 +1574,7 @@ fn run_resume_command(
         | SlashCommand::Providers { .. }
         | SlashCommand::Cache { .. }
         | SlashCommand::Verify
+        | SlashCommand::Update
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -1678,16 +1679,35 @@ fn run_tui_repl(
     );
     app.budget_enabled = budget_tracker.lock().unwrap().is_enabled();
 
-    // Background update check — result surfaces as a SystemNote inside the TUI,
-    // never blocks startup or forces a terminal-mode prompt.
+    // Background update check — first run at startup, then every hour while the
+    // TUI is alive. Results surface as a SystemNote; never blocks or forces a
+    // terminal-mode prompt. Each new latest version is announced at most once
+    // per session to avoid spamming long-running sessions.
     {
         let update_tx = msg_tx.clone();
+        let interval_secs: u64 = std::env::var("ELAI_UPDATE_CHECK_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
         std::thread::spawn(move || {
-            if let Some(upd) = updater::check_available() {
-                let _ = update_tx.send(tui::TuiMsg::SystemNote(format!(
-                    "⬆ Nova versão disponível: v{} → v{}. Digite /update para atualizar.",
-                    upd.current, upd.latest
-                )));
+            let interval = std::time::Duration::from_secs(interval_secs);
+            let mut last_notified: Option<String> = None;
+            loop {
+                if let Some(upd) = updater::check_available() {
+                    if last_notified.as_deref() != Some(upd.latest.as_str()) {
+                        if update_tx
+                            .send(tui::TuiMsg::SystemNote(format!(
+                                "⬆ Nova versão disponível: v{} → v{}. Digite /update para atualizar.",
+                                upd.current, upd.latest
+                            )))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        last_notified = Some(upd.latest);
+                    }
+                }
+                std::thread::sleep(interval);
             }
         });
     }
@@ -2483,6 +2503,11 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Enriquece o input com conteúdo de arquivos mencionados via `@<path>`.
+        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let enriched = enrich_input_with_mentions(input, &cwd);
+        let input = enriched.as_str();
+
         // Build cache key from current session messages + this user input.
         let cache_key = {
             let mut msgs = self.runtime.session().messages.clone();
@@ -2733,6 +2758,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             }
             SlashCommand::Version => {
                 Self::print_version();
+                false
+            }
+            SlashCommand::Update => {
+                updater::run_update();
                 false
             }
             SlashCommand::Export { path } => {
@@ -4063,6 +4092,30 @@ fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
         env::consts::OS,
         "unknown",
     )?)
+}
+
+/// Enriquece o input do usuário com conteúdo de arquivos mencionados via `@<path>`.
+/// Retorna o input original concatenado com cada arquivo lido em bloco fenced.
+/// Se não houver menções válidas, retorna o input original sem mudanças.
+fn enrich_input_with_mentions(input: &str, cwd: &Path) -> String {
+    let mentions = runtime::parse_mentions(input);
+    if mentions.is_empty() {
+        return input.to_string();
+    }
+    let files = runtime::read_mentioned_files(cwd, &mentions);
+    if files.is_empty() {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len() + 4096);
+    out.push_str(input);
+    out.push_str("\n\n---\n\n# Mentioned files\n\n");
+    for f in &files {
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("## {}\n\n```\n{}\n```\n\n", f.path.display(), f.content),
+        );
+    }
+    out
 }
 
 fn build_runtime_plugin_state(

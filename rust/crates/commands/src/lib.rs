@@ -144,6 +144,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "update",
+        aliases: &[],
+        summary: "Check for and install the latest Elai Code release",
+        argument_hint: None,
+        resume_supported: false,
+    },
+    SlashCommandSpec {
         name: "bughunter",
         aliases: &[],
         summary: "Inspect the codebase for likely bugs",
@@ -355,6 +362,7 @@ pub enum SlashCommand {
     Init,
     Diff,
     Version,
+    Update,
     Export {
         path: Option<String>,
     },
@@ -457,6 +465,7 @@ impl SlashCommand {
             "init" => Self::Init,
             "diff" => Self::Diff,
             "version" => Self::Version,
+            "update" => Self::Update,
             "export" => Self::Export {
                 path: parts.next().map(ToOwned::to_owned),
             },
@@ -1824,6 +1833,7 @@ pub fn handle_slash_command(
         | SlashCommand::Init
         | SlashCommand::Diff
         | SlashCommand::Version
+        | SlashCommand::Update
         | SlashCommand::Export { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
@@ -2155,6 +2165,7 @@ mod tests {
         assert_eq!(SlashCommand::parse("/init"), Some(SlashCommand::Init));
         assert_eq!(SlashCommand::parse("/diff"), Some(SlashCommand::Diff));
         assert_eq!(SlashCommand::parse("/version"), Some(SlashCommand::Version));
+        assert_eq!(SlashCommand::parse("/update"), Some(SlashCommand::Update));
         assert_eq!(
             SlashCommand::parse("/export notes.txt"),
             Some(SlashCommand::Export {
