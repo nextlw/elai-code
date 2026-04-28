@@ -38,11 +38,11 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
     ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Terminal;
@@ -2688,7 +2688,7 @@ pub fn render(
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(11), // header
+                Constraint::Length(12), // header
                 Constraint::Min(3),     // chat body
                 Constraint::Length(1),  // status footer
                 Constraint::Length(3),  // input + hint
@@ -2715,22 +2715,112 @@ fn draw_header(
     area: Rect,
     app: &UiApp,
 ) {
+    // Quadro único arredondado com título compacto " Elai Code v0.7.1 "
+    let title_style = Style::default()
+        .fg(theme().easter_egg.warm)
+        .add_modifier(Modifier::BOLD);
+    let title = Span::styled(
+        format!(" Elai Code v{} ", env!("CARGO_PKG_VERSION")),
+        title_style,
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme().easter_egg.warm))
+        .title(title);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Split horizontal: mascote+ELAI | divisor | tips/recent.
+    // `Min(52)` garante o ASCII (≈50 cols) na esquerda e cresce em telas largas;
+    // o divisor acompanha a fronteira proporcional entre os dois `Min`.
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
-        .split(area);
+        .constraints([
+            Constraint::Min(52),
+            Constraint::Length(1),
+            Constraint::Min(20),
+        ])
+        .split(inner);
 
     draw_elai_card(frame, cols[0], app);
-    draw_side_panel(frame, cols[1], app);
+    draw_header_divider(frame, cols[1]);
+    draw_side_panel(frame, cols[2], app);
 }
 
+fn draw_header_divider(frame: &mut ratatui::Frame, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme().easter_egg.warm));
+    frame.render_widget(block, area);
+}
+
+// Mascote + "ELAI" (sem o ".CODE" gigante). Sem indent fixo: centralizado via Alignment::Center.
 const ELAI_ASCII: &str = "\
-  ██████████████████   ███████╗██╗      █████╗ ██╗       ██████╗ ██████╗ ██████╗ ███████╗\n\
-  ████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║      ██╔════╝██╔═══██╗██╔══██╗██╔════╝\n\
-  ████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║      ██║     ██║   ██║██║  ██║█████╗  \n\
-  ████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║      ██║     ██║   ██║██║  ██║██╔══╝  \n\
-  ██████████████████   ███████╗███████╗██║  ██║██║   ██╗╚██████╗╚██████╔╝██████╔╝███████╗\n\
+██████████████████   ███████╗██╗      █████╗ ██╗\n\
+████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║\n\
+████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
+████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
+██████████████████   ███████╗███████╗██║  ██║██║\n\
 ";
+
+// Largura do bloco mascote+ELAI (cada linha do ELAI_ASCII).
+const ELAI_BLOCK_WIDTH: usize = 48;
+
+/// Encurta o caminho atual:
+/// 1. Substitui `$HOME` por `~`.
+/// 2. Se ainda exceder `max_width`, elide segmentos do meio com `…`,
+///    preservando a raiz e o(s) último(s) segmento(s) do caminho.
+fn shorten_cwd(max_width: usize) -> String {
+    let raw = env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "~".to_string());
+
+    let home = env::var("HOME").unwrap_or_default();
+    let path = if !home.is_empty() && raw.starts_with(&home) {
+        format!("~{}", &raw[home.len()..])
+    } else {
+        raw
+    };
+
+    if path.chars().count() <= max_width || max_width == 0 {
+        return path;
+    }
+
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return path;
+    }
+
+    let head = if path.starts_with('~') { "~" } else { "" };
+    let mut tail_count = parts.len().min(2);
+
+    while tail_count > 0 {
+        let tail = parts[parts.len() - tail_count..].join("/");
+        let candidate = if head.is_empty() {
+            format!("/…/{tail}")
+        } else {
+            format!("{head}/…/{tail}")
+        };
+        if candidate.chars().count() <= max_width {
+            return candidate;
+        }
+        tail_count -= 1;
+    }
+
+    // Último recurso: só o último segmento, possivelmente truncado.
+    let last = parts.last().copied().unwrap_or("");
+    let prefix = if head.is_empty() { "…/" } else { "~/…/" };
+    let mut s = format!("{prefix}{last}");
+    if s.chars().count() > max_width && max_width > 1 {
+        let take = max_width.saturating_sub(1);
+        s = format!("{}…", s.chars().take(take).collect::<String>());
+    }
+    s
+}
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     // corpo do mascote e texto ELAI.CODE: laranja claro
@@ -2742,11 +2832,13 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     let dim = Style::default().fg(theme().text_secondary);
 
     let username = whoami_user();
-    let cwd = env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "~".to_string());
+    // Texto vai centralizado na coluna; reserva apenas 1 col de respiro de cada lado.
+    let cwd_budget = (area.width as usize).saturating_sub(2);
+    let cwd = shorten_cwd(cwd_budget);
 
-    let mut lines: Vec<Line> = ELAI_ASCII
+    // Margem mínima de 1 linha acima do mascote.
+    let mut lines: Vec<Line> = vec![Line::from(Span::raw(""))];
+    lines.extend(ELAI_ASCII
         .lines()
         .map(|l| {
             #[derive(Clone, Copy, PartialEq)]
@@ -2782,63 +2874,67 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
                 }));
             }
             Line::from(spans)
-        })
-        .collect();
+        }));
 
-    // Braços do mascote: cada um em uma span separada (gap não colapsa).
-    // Braço direito recua 1 col da borda para não ficar colado na quina do corpo.
-    // Última linha do "ELAI.CODE" (╚══════╝...) compartilha esta linha à direita.
+    // Braços do mascote + linha de fechamento do "ELAI" (╚══════╝...).
+    // Largura total = 7 + 3 + 2 + 3 + 4 + 27 = 46 chars; padding para 48 mantém
+    // o alinhamento vertical com as linhas do mascote/ELAI sob `Alignment::Center`.
     lines.push(Line::from(vec![
         Span::raw("         "),
         Span::styled("███", body_style),
-        Span::raw("  "),
+        Span::raw("   "),
         Span::styled("███", body_style),
         Span::raw("    "),
         Span::styled(
-            "╚══════╝╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+            "╚══════╝╚══════╝╚═╝  ╚═╝╚═╝",
             body_style,
         ),
+        Span::raw(" ".repeat(ELAI_BLOCK_WIDTH.saturating_sub(46))),
     ]));
 
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(vec![
-        Span::styled(format!("  Welcome back, {username}!"), dim),
-        Span::raw("  "),
         Span::styled(
-            format!("v{}", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(theme().easter_egg.warm),
+            format!("Welcome back, {username}!"),
+            Style::default().fg(theme().easter_egg.warm).add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  "),
+
     ]));
-    lines.push(Line::from(Span::styled(format!("  {cwd}"), dim)));
+    lines.push(Line::from(Span::styled(cwd, dim)));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme().easter_egg.warm))
-        .padding(Padding::new(2, 0, 0, 0));
-
-    let paragraph = Paragraph::new(lines).block(block);
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default())
+        .alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
 }
 
 fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let muted = Style::default().fg(theme().text_secondary);
     let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(
-            "Tips for getting started",
-            Style::default()
-                .fg(theme().primary_accent)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::raw("")),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Tips for getting started",
+                Style::default()
+                    .fg(theme().primary_accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled("  Run /init to create a ELAI.md", muted)),
         Line::from(Span::styled("  F2 trocar modelo · F3 permissões", muted)),
         Line::from(Span::styled("  Ctrl+K slash palette", muted)),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            "Recent activity",
-            Style::default()
-                .fg(theme().primary_accent)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Recent activity",
+                Style::default()
+                    .fg(theme().primary_accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ];
 
     if app.recent_sessions.is_empty() {
@@ -2858,11 +2954,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         }
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme().border_active));
-
-    let paragraph = Paragraph::new(lines).block(block);
+    let paragraph = Paragraph::new(lines).block(Block::default());
     frame.render_widget(paragraph, area);
 }
 
