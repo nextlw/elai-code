@@ -13,6 +13,7 @@ mod mcp;
 mod mcp_client;
 mod mcp_stdio;
 mod oauth;
+pub mod oneshot;
 mod permissions;
 mod prompt;
 mod remote;
@@ -90,10 +91,13 @@ pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,
 };
+pub use oneshot::{
+    build_elai_md_prompt, generate_elai_md_with, render_static_elai_md, OneshotError,
+};
 pub use prompt::{
-    load_system_prompt, load_system_prompt_with_output, prepend_bullets, ContextFile,
-    ProjectContext, PromptBuildError, SystemPromptBuilder, SystemPromptOutput,
-    FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    load_system_prompt, load_system_prompt_with_output, parse_mentions, prepend_bullets,
+    read_mentioned_files, ContextFile, ProjectContext, PromptBuildError, SystemPromptBuilder,
+    SystemPromptOutput, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use skills::{
     build_skill_prompt_sections, load_all_skills, validate_skills, Skill, SkillMetadata,

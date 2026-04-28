@@ -14,6 +14,73 @@ function Ok    { param($m) Write-Host "  " -NoNewline; Write-Host "v" -Foregroun
 function Warn  { param($m) Write-Host "  " -NoNewline; Write-Host "!" -ForegroundColor Yellow -NoNewline; Write-Host " $m" }
 function Fail  { param($m) Write-Host "  " -NoNewline; Write-Host "x" -ForegroundColor Red -NoNewline; Write-Host " $m"; exit 1 }
 
+# ── Pre-flight safety checks ──────────────────────────────────────────────────
+# Sessões elevadas e/ou perfis de sistema deixam o Elai inacessível ao usuário
+# normal. Falhamos cedo com uma mensagem clara em vez de instalar errado.
+
+# 1. Sem sessão elevada (Administrator).
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+)
+if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host ""
+    Write-Host "  x  Não execute o instalador como Administrador." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "     PowerShell elevado escreve no perfil do administrador," -ForegroundColor Yellow
+    Write-Host "     o que impede:" -ForegroundColor Yellow
+    Write-Host "       - executar 'elai' em terminais normais" -ForegroundColor Yellow
+    Write-Host "       - importar credenciais do Claude Code (~/.claude/...)" -ForegroundColor Yellow
+    Write-Host "       - usar o PATH do seu usuário" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "     Abra um PowerShell *normal* (sem 'Executar como administrador')" -ForegroundColor White
+    Write-Host "     e rode novamente." -ForegroundColor White
+    Write-Host ""
+    exit 1
+}
+
+# 2. USERPROFILE deve apontar para uma pasta real do usuário (C:\Users\<nome>),
+#    não para systemprofile / Default / Public.
+if (-not $env:USERPROFILE -or
+    $env:USERPROFILE -like "*\config\systemprofile*" -or
+    $env:USERPROFILE -like "*\Default*" -or
+    $env:USERPROFILE -like "*\Public*") {
+    Write-Host ""
+    Write-Host "  x  USERPROFILE inválido: '$env:USERPROFILE'" -ForegroundColor Red
+    Write-Host "     Esperado algo como C:\Users\<seu-nome>\." -ForegroundColor Yellow
+    Write-Host "     Abra um PowerShell na sua sessão de usuário e rode novamente." -ForegroundColor White
+    Write-Host ""
+    exit 1
+}
+
+# 3. Sair de System32 se o terminal abriu lá — confunde caminhos relativos
+#    e dá a falsa impressão de que o Elai precisa ser instalado em local de sistema.
+if ($PWD.Path -like "*\System32*" -or $PWD.Path -like "*\system32*") {
+    Set-Location $env:USERPROFILE
+}
+
+# 4. Encerrar processos elai.exe ativos — Windows mantém lock no executável
+#    enquanto rodando, e o download falha silenciosamente ou corrompe o binário.
+$runningElai = Get-Process -Name "elai" -ErrorAction SilentlyContinue
+if ($runningElai) {
+    Write-Host ""
+    Warn "Detectado(s) $($runningElai.Count) processo(s) elai.exe em execução."
+    Write-Host "     Eles precisam ser encerrados para que o binário seja substituído." -ForegroundColor Yellow
+    Write-Host ""
+    $kill = Read-Host "  Encerrar agora? [Y/n]"
+    if ([string]::IsNullOrWhiteSpace($kill)) { $kill = "y" }
+    if ($kill -match '^[Yy]') {
+        try {
+            $runningElai | Stop-Process -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 500
+            Ok "Processos encerrados."
+        } catch {
+            Fail "Não foi possível encerrar elai.exe: $_"
+        }
+    } else {
+        Fail "Feche o(s) processo(s) elai e rode novamente."
+    }
+}
+
 function Read-Secret {
     param([string]$Prompt)
     Write-Host "  $Prompt" -NoNewline

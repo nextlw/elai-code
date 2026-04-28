@@ -39,6 +39,8 @@ pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDA
 pub const FRONTIER_MODEL_NAME: &str = "Opus 4.6";
 const MAX_INSTRUCTION_FILE_CHARS: usize = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
+const MAX_MENTIONED_FILE_BYTES: usize = 50 * 1024;
+const MAX_MENTIONED_TOTAL_BYTES: usize = 80 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFile {
@@ -53,6 +55,7 @@ pub struct ProjectContext {
     pub git_status: Option<String>,
     pub git_diff: Option<String>,
     pub instruction_files: Vec<ContextFile>,
+    pub mentioned_files: Vec<ContextFile>,
 }
 
 impl ProjectContext {
@@ -68,6 +71,7 @@ impl ProjectContext {
             git_status: None,
             git_diff: None,
             instruction_files,
+            mentioned_files: Vec::new(),
         })
     }
 
@@ -79,6 +83,12 @@ impl ProjectContext {
         context.git_status = read_git_status(&context.cwd);
         context.git_diff = read_git_diff(&context.cwd);
         Ok(context)
+    }
+
+    #[must_use]
+    pub fn with_mentions(mut self, files: Vec<ContextFile>) -> Self {
+        self.mentioned_files = files;
+        self
     }
 }
 
@@ -157,6 +167,10 @@ impl SystemPromptBuilder {
             if !project_context.instruction_files.is_empty() {
                 sections.push(render_instruction_files(&project_context.instruction_files));
             }
+            let mentioned = render_mentioned_files(&project_context.mentioned_files);
+            if !mentioned.is_empty() {
+                sections.push(mentioned);
+            }
         }
         if let Some(config) = &self.config {
             sections.push(render_config_section(config));
@@ -212,6 +226,107 @@ fn project_basename(cwd: &str) -> &str {
 #[must_use]
 pub fn prepend_bullets(items: Vec<String>) -> Vec<String> {
     items.into_iter().map(|item| format!(" - {item}")).collect()
+}
+
+/// Extrai menções `@<path>` do texto. Retorna paths relativos limpos.
+///
+/// Heurísticas:
+/// - Match: `@` seguido por sequência de `[A-Za-z0-9_./\-]+`.
+/// - Rejeita emails: se o token ANTES do `@` é alfanumérico contínuo (sem espaço/início), trata como email e ignora.
+/// - Rejeita absolutos (`@/etc/passwd`) — só relativos.
+/// - Rejeita travessia (`@../foo`) — drop ".." segments.
+#[must_use]
+pub fn parse_mentions(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' {
+            // Verifica se é começo de token (não precedido por alfanumérico → não é email)
+            let is_email_left = i > 0 && {
+                let prev = bytes[i - 1];
+                prev.is_ascii_alphanumeric() || prev == b'.' || prev == b'_'
+            };
+            if is_email_left {
+                i += 1;
+                continue;
+            }
+            // Captura o path
+            let mut j = i + 1;
+            while j < bytes.len() {
+                let c = bytes[j];
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'/' || c == b'-' {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j > i + 1 {
+                let path = std::str::from_utf8(&bytes[i + 1..j]).unwrap_or("");
+                if !path.is_empty()
+                    && !path.starts_with('/')
+                    && !path.contains("..")
+                    && !path.contains(".com")
+                    && !path.contains(".net")
+                    && !path.contains(".org")
+                {
+                    out.push(path.to_string());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Lê arquivos mencionados validando que ficam dentro do `cwd`.
+/// Retorna `ContextFile`s prontos para serem incluídos no `ProjectContext`.
+/// Trunca cada arquivo a `MAX_MENTIONED_FILE_BYTES`.
+#[must_use]
+pub fn read_mentioned_files(cwd: &std::path::Path, mentions: &[String]) -> Vec<ContextFile> {
+    let cwd_abs = match cwd.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for m in mentions {
+        let candidate = cwd.join(m);
+        let abs = match candidate.canonicalize() {
+            Ok(p) => p,
+            Err(_) => continue, // arquivo não existe — ignora
+        };
+        if !abs.starts_with(&cwd_abs) {
+            // path traversal — skip
+            continue;
+        }
+        if !abs.is_file() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&abs) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let truncated = if content.len() > MAX_MENTIONED_FILE_BYTES {
+            let mut idx = MAX_MENTIONED_FILE_BYTES;
+            while idx > 0 && !content.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            format!(
+                "{}\n[truncated at {} bytes]",
+                &content[..idx],
+                MAX_MENTIONED_FILE_BYTES
+            )
+        } else {
+            content
+        };
+        out.push(ContextFile {
+            path: PathBuf::from(m),
+            content: truncated,
+        });
+    }
+    out
 }
 
 fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
@@ -346,6 +461,39 @@ fn render_instruction_files(files: &[ContextFile]) -> String {
         sections.push(rendered_content);
     }
     sections.join("\n\n")
+}
+
+fn render_mentioned_files(files: &[ContextFile]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n# Mentioned files (this turn)\n\n");
+    let mut total = 0usize;
+    for f in files {
+        let header = format!("## {}\n\n```\n", f.path.display());
+        let footer = "\n```\n\n";
+        let body = if total + header.len() + f.content.len() + footer.len()
+            > MAX_MENTIONED_TOTAL_BYTES
+        {
+            let remaining = MAX_MENTIONED_TOTAL_BYTES
+                .saturating_sub(total + header.len() + footer.len());
+            let mut idx = remaining.min(f.content.len());
+            while idx > 0 && !f.content.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            format!("{}\n[truncated at total budget]", &f.content[..idx])
+        } else {
+            f.content.clone()
+        };
+        out.push_str(&header);
+        out.push_str(&body);
+        out.push_str(footer);
+        total = out.len();
+        if total >= MAX_MENTIONED_TOTAL_BYTES {
+            break;
+        }
+    }
+    out
 }
 
 fn dedupe_instruction_files(files: Vec<ContextFile>) -> Vec<ContextFile> {
@@ -845,5 +993,110 @@ mod tests {
         assert!(rendered.contains("# Elai instructions"));
         assert!(rendered.contains("scope: /tmp/project"));
         assert!(rendered.contains("Project rules"));
+    }
+
+    // ── parse_mentions tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_mentions_extracts_simple_paths() {
+        let result = super::parse_mentions("explain @src/foo.rs and @bar/baz.py");
+        assert_eq!(result, vec!["src/foo.rs", "bar/baz.py"]);
+    }
+
+    #[test]
+    fn parse_mentions_ignores_email_addresses() {
+        let result = super::parse_mentions("contact me at john@example.com or @path.rs");
+        // john@example.com filtered by is_email_left; example.com filtered by .com check
+        // @path.rs should be captured
+        assert_eq!(result, vec!["path.rs"]);
+    }
+
+    #[test]
+    fn parse_mentions_rejects_absolute_paths() {
+        let result = super::parse_mentions("see @/etc/passwd");
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_mentions_rejects_traversal() {
+        let result = super::parse_mentions("check @../../../etc/passwd");
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_mentions_handles_no_mentions() {
+        let result = super::parse_mentions("hello world");
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_mentions_dedup_not_required_but_preserves_order() {
+        let result = super::parse_mentions("@a.rs @b.rs @a.rs");
+        assert_eq!(result, vec!["a.rs", "b.rs", "a.rs"]);
+    }
+
+    // ── read_mentioned_files tests ────────────────────────────────────────────
+
+    #[test]
+    fn read_mentioned_files_skips_nonexistent() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        let mentions = vec!["nonexistent.rs".to_string()];
+        let result = super::read_mentioned_files(&root, &mentions);
+        assert!(result.is_empty());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn read_mentioned_files_rejects_outside_cwd() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        // "../outside.txt" would resolve outside root — should be rejected
+        let mentions = vec!["../outside.txt".to_string()];
+        let result = super::read_mentioned_files(&root, &mentions);
+        assert!(result.is_empty());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn read_mentioned_files_truncates_large_file() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        let large_content = "x".repeat(100 * 1024); // 100 KB
+        fs::write(root.join("big.txt"), &large_content).expect("write big file");
+        let mentions = vec!["big.txt".to_string()];
+        let result = super::read_mentioned_files(&root, &mentions);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].content.len() <= super::MAX_MENTIONED_FILE_BYTES + 100);
+        assert!(result[0].content.contains("[truncated at 51200 bytes]"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    // ── render_mentioned_files tests ──────────────────────────────────────────
+
+    #[test]
+    fn render_mentioned_files_includes_path_and_code_block() {
+        let rendered = super::render_mentioned_files(&[ContextFile {
+            path: PathBuf::from("src/foo.rs"),
+            content: "fn main() {}".to_string(),
+        }]);
+        assert!(rendered.contains("# Mentioned files (this turn)"));
+        assert!(rendered.contains("## src/foo.rs"));
+        assert!(rendered.contains("```"));
+        assert!(rendered.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn render_mentioned_files_respects_total_budget() {
+        // 3 files of 50 KB each; total budget is 80 KB
+        let files: Vec<ContextFile> = (0..3)
+            .map(|i| ContextFile {
+                path: PathBuf::from(format!("file{i}.txt")),
+                content: "y".repeat(50 * 1024),
+            })
+            .collect();
+        let rendered = super::render_mentioned_files(&files);
+        // Output should not exceed budget + reasonable header overhead
+        assert!(rendered.len() <= super::MAX_MENTIONED_TOTAL_BYTES + 1024);
     }
 }

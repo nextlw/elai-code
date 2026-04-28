@@ -84,6 +84,66 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Initialize project: create .elai/, ELAI.md, and index code
+    Init(InitArgs),
+}
+
+#[derive(Debug, Clone, clap::Args, PartialEq, Eq)]
+pub struct InitArgs {
+    /// Backend de armazenamento vetorial
+    #[arg(long, value_enum, default_value_t = IndexBackend::Sqlite)]
+    pub backend: IndexBackend,
+    /// URL do Qdrant (apenas para --backend qdrant)
+    #[arg(long)]
+    pub qdrant_url: Option<String>,
+    /// Provedor de embeddings
+    #[arg(long, value_enum, default_value_t = EmbedProviderArg::Local)]
+    pub embed_provider: EmbedProviderArg,
+    /// Modelo de embedding (override do default por provider)
+    #[arg(long)]
+    pub embed_model: Option<String>,
+    /// URL do Ollama (apenas para --embed-provider ollama)
+    #[arg(long)]
+    pub ollama_url: Option<String>,
+    /// Não rodar watcher background após init
+    #[arg(long)]
+    pub no_watcher: bool,
+    /// Pular indexação (apenas cria arquivos básicos + ELAI.md template)
+    #[arg(long)]
+    pub no_index: bool,
+    /// Apaga índice existente e reindexa do zero
+    #[arg(long)]
+    pub reindex: bool,
+}
+
+impl Default for InitArgs {
+    fn default() -> Self {
+        Self {
+            backend: IndexBackend::Sqlite,
+            qdrant_url: None,
+            embed_provider: EmbedProviderArg::Local,
+            embed_model: None,
+            ollama_url: None,
+            no_watcher: false,
+            no_index: false,
+            reindex: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub enum IndexBackend {
+    Sqlite,
+    Qdrant,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub enum EmbedProviderArg {
+    Local,
+    Ollama,
+    Jina,
+    Openai,
+    Voyage,
 }
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
@@ -203,7 +263,7 @@ pub enum OutputFormat {
 mod tests {
     use clap::Parser;
 
-    use super::{AuthCmd, ChatCmd, Cli, Command, LoginArgs, ModelCmd, OutputFormat, PermissionMode};
+    use super::{AuthCmd, ChatCmd, Cli, Command, EmbedProviderArg, IndexBackend, InitArgs, LoginArgs, ModelCmd, OutputFormat, PermissionMode};
 
     #[test]
     fn parses_requested_flags() {
@@ -377,6 +437,56 @@ mod tests {
             Some(Command::Chat {
                 cmd: ChatCmd::Show { last: 5, json: false }
             })
+        );
+    }
+
+    #[test]
+    fn parses_init_with_defaults() {
+        let cli = Cli::parse_from(["elai", "init"]);
+        assert_eq!(cli.command, Some(Command::Init(InitArgs::default())));
+    }
+
+    #[test]
+    fn parses_init_with_ollama() {
+        let cli = Cli::parse_from([
+            "elai",
+            "init",
+            "--embed-provider",
+            "ollama",
+            "--ollama-url",
+            "http://localhost:11434",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Init(InitArgs {
+                embed_provider: EmbedProviderArg::Ollama,
+                ollama_url: Some("http://localhost:11434".to_string()),
+                ..InitArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_init_with_no_index_flag() {
+        let cli = Cli::parse_from(["elai", "init", "--no-index"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Init(InitArgs {
+                no_index: true,
+                ..InitArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_init_with_backend_sqlite() {
+        let cli = Cli::parse_from(["elai", "init", "--backend", "sqlite"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Init(InitArgs {
+                backend: IndexBackend::Sqlite,
+                ..InitArgs::default()
+            }))
         );
     }
 }

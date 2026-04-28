@@ -24,150 +24,22 @@ pub struct VerifyReport {
     pub memory_entries: usize,
 }
 
-// ─── IgnoreRules ─────────────────────────────────────────────────────────────
-
-enum IgnorePattern {
-    Exact(String),
-    Extension(String),
-    PathPrefix(String),
-    Negation(String),
-}
-
-struct IgnoreRules {
-    patterns: Vec<IgnorePattern>,
-}
-
-impl IgnoreRules {
-    fn load(root: &Path) -> Self {
-        let hardcoded = [
-            ".git",
-            "target",
-            "node_modules",
-            ".DS_Store",
-            ".omc",
-            ".elai/sessions",
-        ];
-
-        let mut patterns: Vec<IgnorePattern> = hardcoded
-            .iter()
-            .map(|s| IgnorePattern::Exact((*s).to_string()))
-            .collect();
-
-        if let Ok(content) = fs::read_to_string(root.join(".gitignore")) {
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                if let Some(rest) = line.strip_prefix('!') {
-                    patterns.push(IgnorePattern::Negation(rest.to_string()));
-                } else if line.starts_with("*.") {
-                    let ext = line[1..].to_string(); // e.g. ".log"
-                    patterns.push(IgnorePattern::Extension(ext));
-                } else if line.ends_with('/') {
-                    let prefix = line.trim_end_matches('/').to_string();
-                    patterns.push(IgnorePattern::PathPrefix(prefix));
-                } else {
-                    patterns.push(IgnorePattern::Exact(line.to_string()));
-                }
-            }
-        }
-
-        Self { patterns }
-    }
-
-    fn should_ignore(&self, name: &str, rel_path: &Path) -> bool {
-        let rel_str = rel_path.to_string_lossy();
-        let mut ignored = false;
-
-        for pattern in &self.patterns {
-            match pattern {
-                IgnorePattern::Exact(s) => {
-                    if name == s || rel_str == *s {
-                        ignored = true;
-                    }
-                }
-                IgnorePattern::Extension(ext) => {
-                    if name.ends_with(ext.as_str()) {
-                        ignored = true;
-                    }
-                }
-                IgnorePattern::PathPrefix(prefix) => {
-                    if name == prefix
-                        || rel_str.starts_with(&format!("{prefix}/"))
-                        || rel_str == *prefix
-                    {
-                        ignored = true;
-                    }
-                }
-                IgnorePattern::Negation(s) => {
-                    if name == s || rel_str == *s {
-                        ignored = false;
-                    }
-                }
-            }
-        }
-
-        ignored
-    }
-}
 
 // ─── walk_project ─────────────────────────────────────────────────────────────
 
-const MAX_DEPTH: usize = 15;
-
 /// Recursively walk the project tree, returning relative paths for all files.
-/// Respects `.gitignore` and hardcoded ignore patterns. Depth is capped at 15.
+/// Delegates to `code_index::walker` for the actual traversal.
 pub fn walk_project(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let rules = IgnoreRules::load(root);
-    let mut files = Vec::new();
-    walk_inner(root, root, &rules, 0, &mut files)?;
-    Ok(files)
-}
-
-fn walk_inner(
-    dir: &Path,
-    root: &Path,
-    rules: &IgnoreRules,
-    depth: usize,
-    out: &mut Vec<PathBuf>,
-) -> io::Result<()> {
-    if depth >= MAX_DEPTH {
-        return Ok(());
-    }
-
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-
-        // Skip hidden files/dirs (starting with '.') unless checked explicitly later
-        // The ignore rules will catch .git, .omc, etc.
-
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_path_buf();
-
-        if rules.should_ignore(name, &rel) {
-            continue;
-        }
-
-        if path.is_dir() {
-            walk_inner(&path, root, rules, depth + 1, out)?;
-        } else if path.is_file() {
-            out.push(rel);
-        }
-    }
-
-    Ok(())
+    let abs_paths = code_index::walker::walk_project(root);
+    let rel_paths = abs_paths
+        .into_iter()
+        .map(|p| {
+            p.strip_prefix(root)
+                .map(PathBuf::from)
+                .unwrap_or(p)
+        })
+        .collect();
+    Ok(rel_paths)
 }
 
 // ─── parse_memory_entries ────────────────────────────────────────────────────
@@ -648,6 +520,8 @@ MODIFY: src/lib.rs — add new function
 
     #[test]
     fn test_ignore_rules_parse() {
+        use code_index::walker::IgnoreRules;
+
         let dir = TempDir::new("ignore_rules");
         let root = dir.path();
 
@@ -659,23 +533,23 @@ MODIFY: src/lib.rs — add new function
         let rules = IgnoreRules::load(root);
 
         assert!(
-            rules.should_ignore("debug.log", &PathBuf::from("debug.log")),
+            rules.should_ignore(&PathBuf::from("debug.log"), "debug.log"),
             "*.log pattern should match debug.log"
         );
         assert!(
-            !rules.should_ignore("important.log", &PathBuf::from("important.log")),
+            !rules.should_ignore(&PathBuf::from("important.log"), "important.log"),
             "!important.log negation should not ignore important.log"
         );
         assert!(
-            rules.should_ignore("build", &PathBuf::from("build")),
+            rules.should_ignore(&PathBuf::from("build"), "build"),
             "build/ pattern should ignore build dir"
         );
         assert!(
-            rules.should_ignore("target", &PathBuf::from("target")),
+            rules.should_ignore(&PathBuf::from("target"), "target"),
             "hardcoded target should always be ignored"
         );
         assert!(
-            !rules.should_ignore("main.rs", &PathBuf::from("src/main.rs")),
+            !rules.should_ignore(&PathBuf::from("src/main.rs"), "main.rs"),
             "regular .rs file should not be ignored"
         );
     }
