@@ -19,17 +19,29 @@
 **macOS / Linux**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.sh | sh
 curl -fsSL https://get.nexcode.live | sh
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.ps1 | iex
+irm https://get.nexcode.live/ps | iex
 ```
 
-Both commands download the latest binary, install it, and add it to your PATH. After installing, open a new terminal and run:
+**Windows** (CMD)
+
+```cmd
+powershell -Command "irm https://get.nexcode.live/ps | iex"
+```
+
+All three commands download the latest binary from the latest GitHub release, install it, and add it to your PATH. The `get.nexcode.live` endpoint is a Cloudflare Worker that detects the client User-Agent and serves the matching install script (`install.sh` for shells, `install.ps1` for PowerShell). You can force a script explicitly:
+
+```sh
+curl -fsSL https://get.nexcode.live/sh | sh    # always serve install.sh
+irm https://get.nexcode.live/ps | iex          # always serve install.ps1
+```
+
+After installing, open a new terminal and run:
 
 ```sh
 elai
@@ -182,6 +194,53 @@ level = "partial"
 [permissions]
 mode = "workspace-write"
 ```
+
+---
+
+## Releasing
+
+Maintainers publish a new version with a single command:
+
+```bash
+./scripts/release.sh 0.7.2     # next patch — pass the new version number
+```
+
+Pré-requisitos:
+
+- estar na branch `main`,
+- working tree limpo (sem mudanças não commitadas),
+- a tag `v<versão>` ainda não existir no repositório.
+
+O script automatiza tudo o que precisa entrar na release:
+
+1. bumpa `version` em `rust/Cargo.toml`,
+2. recompila para atualizar `rust/Cargo.lock`,
+3. gera changelog a partir dos commits desde a última tag (filtra `chore: bump version`, `Merge`, `docs: atualiza README`),
+4. atualiza a seção "What's New" do README,
+5. cria commit `chore: bump version to v<versão>`,
+6. cria a tag anotada `v<versão>`,
+7. faz `git push --follow-tags`.
+
+O push da tag dispara o workflow [`Release`](.github/workflows/release.yml), que builda os binários para os 5 alvos (macOS arm64/x86_64, Linux musl x86_64/arm64, Windows x86_64) e publica em [Releases](https://github.com/nextlw/elai-code/releases) com `checksums.txt`.
+
+Acompanhe o build:
+
+```bash
+gh run list --workflow=release.yml --limit 1
+gh run watch <run-id> --exit-status
+```
+
+Se algum job falhar, **não** retague a versão — corrija o problema, commite o fix em `main`, e publique uma nova patch (`0.7.2 → 0.7.3`). Retag em massa quebra clones já existentes.
+
+### Cloudflare Worker (instalador)
+
+O endpoint `https://get.nexcode.live` é provisionado uma única vez por:
+
+```bash
+./scripts/setup-cf-installer.sh
+```
+
+Ele lê credenciais do arquivo `.env` na raiz do repo (chaves `CLOUD_FLARE_EMAIL`, `CLOUD_FLARE_API_KEY`, `CLOUD_FLARE_ACCOUNT_ID`, `CLOUD_FLARE_ZONE_ID`, `CLOUD_FLARE_ZONE_DOMAIN`), faz upload do Worker `elai-installer` e amarra o domínio custom. Como o Worker apenas proxia para `scripts/install.sh` / `scripts/install.ps1` no `main` do GitHub, ele não precisa ser re-deployado a cada release — só quando os scripts de instalação mudarem.
 
 ---
 
