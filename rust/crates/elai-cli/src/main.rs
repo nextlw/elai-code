@@ -866,11 +866,31 @@ fn perform_uninstall() -> String {
             Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
         }
 
-        // 2. Diretório ~/.elai/
+        // 2. Diretório ~/.elai/ (inclui ~/.elai/fastembed_cache, ~/.elai/tasks/, etc.)
         if let Some(dir) = &elai_dir {
             match std::fs::remove_dir_all(dir) {
                 Ok(_) => log.push(format!("✅ Removido: {}", dir.display())),
                 Err(e) => errors.push(format!("⚠ {}: {e}", dir.display())),
+            }
+        }
+
+        // 2b. Caches legados do fastembed (criados antes da centralização em
+        // ~/.elai/fastembed_cache). Best-effort — silencioso se ausente.
+        let mut legacy_caches: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let home = std::path::PathBuf::from(home);
+            legacy_caches.push(home.join(".cache").join(".fastembed_cache"));
+            legacy_caches.push(home.join(".fastembed_cache"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            legacy_caches.push(cwd.join(".fastembed_cache"));
+        }
+        for path in legacy_caches {
+            if path.is_dir() {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(_) => log.push(format!("✅ Cache fastembed legado removido: {}", path.display())),
+                    Err(e) => errors.push(format!("⚠ {}: {e}", path.display())),
+                }
             }
         }
     }

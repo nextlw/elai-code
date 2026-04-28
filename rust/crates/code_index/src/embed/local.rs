@@ -3,11 +3,25 @@
 //! Usa fastembed v5 com backend ONNX Runtime. O modelo é baixado automaticamente
 //! para o cache do `HuggingFace` (~80 MB na primeira execução).
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 
 use super::{EmbedError, Embedder};
+
+/// Diretório onde fastembed armazena modelos ONNX. Centralizamos em `~/.elai/`
+/// para que `elai uninstall` (que limpa `~/.elai/`) também leve o cache.
+/// Override via `ELAI_FASTEMBED_CACHE_DIR`.
+fn fastembed_cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("ELAI_FASTEMBED_CACHE_DIR") {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    home.join(".elai").join("fastembed_cache")
+}
 
 /// Modelo padrão (~80MB ONNX, 384-dim).
 pub const DEFAULT_MODEL: EmbeddingModel = EmbeddingModel::BGESmallENV15;
@@ -31,7 +45,16 @@ impl LocalFastEmbedder {
         // caller (init.rs) imprime sua própria mensagem antes da chamada.
         // Override com `ELAI_FASTEMBED_PROGRESS=1` para debug fora do TUI.
         let show_progress = std::env::var_os("ELAI_FASTEMBED_PROGRESS").is_some();
-        let init = TextInitOptions::new(model).with_show_download_progress(show_progress);
+        let cache_dir = fastembed_cache_dir();
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            return Err(EmbedError::Backend(format!(
+                "create fastembed cache dir {}: {e}",
+                cache_dir.display()
+            )));
+        }
+        let init = TextInitOptions::new(model)
+            .with_show_download_progress(show_progress)
+            .with_cache_dir(cache_dir);
         let inner =
             TextEmbedding::try_new(init).map_err(|e| EmbedError::Backend(e.to_string()))?;
         // Heurística de dimensão por variante.

@@ -178,13 +178,15 @@ fn run_indexing(
 
 #[cfg(feature = "embed-fastembed")]
 fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
-    // Heurística: cache do fastembed em ~/.cache/.fastembed_cache. Se não existir,
-    // primeira execução vai baixar ~125 MB (model + tokenizer). Avisa o usuário
-    // antes para que o silêncio (TUI sem progress bar) não pareça travamento.
-    let cache_present = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".cache").join(".fastembed_cache"))
+    // Cache do fastembed em ~/.elai/fastembed_cache (centralizado, removido
+    // pelo `elai uninstall`). Se vazio, primeira run baixa ~125 MB.
+    let cache_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|h| std::path::PathBuf::from(h).join(".elai").join("fastembed_cache"));
+    let cache_populated = cache_dir
+        .as_ref()
         .is_some_and(|p| p.is_dir() && p.read_dir().is_ok_and(|mut d| d.next().is_some()));
-    if !cache_present {
+    if !cache_populated {
         eprintln!(
             "  Baixando modelo de embedding (BGE-small, ~125 MB). Apenas na primeira execução."
         );
