@@ -136,7 +136,7 @@ elai logout
 | Git integration (`/diff`, `/branch`, `/worktree`) | ✅ |
 | Markdown terminal rendering (ANSI) | ✅ |
 | Headless / agent mode (`send`, `chat`, `model`, `reply`, `status`) | ✅ |
-| **RAG / code index (`code_index` crate, BGE-small + sqlite-vec)** | ✅ |
+| **RAG / code index (`code_index` crate, BGE-small + SQLite)** | ✅ |
 | **`@file` mention picker in the TUI** | ✅ |
 | **Plugin system (tarball install + `/plugin` command)** | ✅ |
 | **Slash command categories + Ctrl+K palette** | ✅ |
@@ -192,7 +192,7 @@ Commands:
 --reindex                          Drop the existing index and rebuild from scratch
 ```
 
-The default backend uses [`fastembed`](https://github.com/Anush008/fastembed-rs) with the BGE-small model and `sqlite-vec` for storage. Targets without a prebuilt `ort` (e.g. `aarch64-unknown-linux-musl`) must be built with `--no-default-features` — the `local` provider is then unavailable, but `ollama`/`http` providers still work.
+The default backend uses [`fastembed`](https://github.com/Anush008/fastembed-rs) with the BGE-small model and SQLite storage. Embeddings are persisted as BLOBs and KNN is computed in Rust, avoiding extra native vector-extension builds on release targets. Targets without a prebuilt `ort` (e.g. `aarch64-unknown-linux-musl`) must be built with `--no-default-features` — the `local` provider is then unavailable, but `ollama`/`http` providers still work.
 
 ## Slash Commands (REPL)
 
@@ -279,7 +279,7 @@ User-defined `.md` commands placed under `.elai/commands/` are auto-discovered a
 
 ## RAG / Code Index
 
-`crates/code_index/` provides retrieval-augmented context. After `elai init`, the project is walked, chunked (tree-sitter for Rust / TS / JS / Python / Go / Markdown / generic), embedded (BGE-small via `fastembed` by default), and stored in a `sqlite-vec` (or Qdrant) index under `.elai/index.db`.
+`crates/code_index/` provides retrieval-augmented context. After `elai init`, the project is walked, chunked (tree-sitter for Rust / TS / JS / Python / Go / Markdown / generic), embedded (BGE-small via `fastembed` by default), and stored in a SQLite (or Qdrant) index under `.elai/index.db`.
 
 - A background watcher reindexes changed files (disable with `--no-watcher`).
 - Use `@<path>` inside the TUI to mention a specific file — the matched files are appended to the system prompt as `## Mentioned files`.
@@ -406,7 +406,7 @@ rust/
 │   └── progress-pattern.md # TUI-safe progress reporting convention
 └── crates/
     ├── api/                # HTTP client, SSE stream parser, request/response types
-    ├── code_index/         # 🆕 RAG: walker + tree-sitter chunkers + embedders + sqlite-vec / Qdrant
+    ├── code_index/         # 🆕 RAG: walker + tree-sitter chunkers + embedders + SQLite / Qdrant
     ├── commands/           # Slash command registry, categories, providers, user commands
     ├── compat-harness/     # Extracts tool/prompt manifests from upstream TS source
     ├── elai-cli/           # Main CLI binary — TUI, REPL, args, SWD, init, verify, dream
