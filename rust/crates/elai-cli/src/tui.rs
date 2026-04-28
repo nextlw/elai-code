@@ -75,6 +75,20 @@ pub enum TuiMsg {
     },
     #[allow(dead_code)]
     SystemNote(String),
+    /// Update da "linha viva" de uma task. O TUI substitui in-place a entry
+    /// existente com mesmo `task_id` (scan reverso ≤ 8 entries) ou faz push.
+    TaskProgress {
+        task_id: String,
+        label: String,
+        msg: String,
+    },
+    /// Sinaliza fim da task. Marca a entry como `finished` e armazena o status.
+    TaskProgressEnd {
+        task_id: String,
+        label: String,
+        status: runtime::TaskStatus,
+        summary: Option<String>,
+    },
 }
 
 /// A permission request sent from the runtime thread; the reply channel is
@@ -110,6 +124,14 @@ pub enum ChatEntry {
     SwdDiffEntry {
         path: String,
         hunks: Vec<crate::diff::DiffHunk>,
+    },
+    /// Linha viva de uma task. Mutável até `finished = true`; depois congela.
+    TaskProgress {
+        task_id: String,
+        label: String,
+        msg: String,
+        finished: bool,
+        status: Option<runtime::TaskStatus>,
     },
 }
 
@@ -277,6 +299,22 @@ pub enum WizardStep {
     Done,
 }
 
+// ─── Helpers para in-place update de progresso de tasks ─────────────────────
+
+/// Casa apenas com `ChatEntry::TaskProgress` que ainda não foi finalizada e
+/// pertence à task com `task_id` informado. Usado pelo scan reverso do
+/// `apply_tui_msg` ao receber `TuiMsg::TaskProgress{,End}`.
+fn matches_task_progress(entry: &ChatEntry, task_id: &str) -> bool {
+    matches!(
+        entry,
+        ChatEntry::TaskProgress {
+            task_id: tid,
+            finished: false,
+            ..
+        } if tid == task_id
+    )
+}
+
 // ─── Application state ────────────────────────────────────────────────────────
 
 pub struct UiApp {
@@ -441,6 +479,61 @@ impl UiApp {
             }
             TuiMsg::SystemNote(note) => {
                 self.push_chat(ChatEntry::SystemNote(note));
+            }
+            TuiMsg::TaskProgress { task_id, label, msg } => {
+                // Scan reverso curto (≤ 8 entries) — cobre o caso comum onde
+                // tool calls / assistant text se intercalam com updates.
+                let found = self
+                    .chat
+                    .iter_mut()
+                    .rev()
+                    .take(8)
+                    .find(|e| matches_task_progress(e, &task_id));
+                match found {
+                    Some(ChatEntry::TaskProgress {
+                        msg: m, label: l, ..
+                    }) => {
+                        *m = msg;
+                        *l = label;
+                    }
+                    _ => self.push_chat(ChatEntry::TaskProgress {
+                        task_id,
+                        label,
+                        msg,
+                        finished: false,
+                        status: None,
+                    }),
+                }
+                self.scroll_to_bottom();
+            }
+            TuiMsg::TaskProgressEnd {
+                task_id,
+                label,
+                status,
+                summary,
+            } => {
+                if let Some(ChatEntry::TaskProgress {
+                    msg,
+                    label: l,
+                    finished,
+                    status: s,
+                    ..
+                }) = self
+                    .chat
+                    .iter_mut()
+                    .rev()
+                    .take(8)
+                    .find(|e| matches_task_progress(e, &task_id))
+                {
+                    if let Some(sum) = summary {
+                        *msg = sum;
+                    }
+                    *l = label;
+                    *finished = true;
+                    *s = Some(status);
+                    self.scroll_to_bottom();
+                }
+                // Se nada casou, a task encerrou sem ter emitido — ignora.
             }
         }
     }
@@ -743,6 +836,22 @@ fn slash_palette_items() -> Vec<(SlashCategory, String, String)> {
     ]);
 
     items
+}
+
+/// Comandos cuja implementação no modo TUI ainda é placeholder ("em breve").
+/// A paleta os exibe em cor mais apagada e com sufixo "(em breve)" para
+/// sinalizar visualmente que dispará-los só emite uma mensagem informativa.
+fn is_command_coming_soon(name: &str) -> bool {
+    matches!(
+        name,
+        "bughunter"
+            | "ultraplan"
+            | "teleport"
+            | "commit"
+            | "commit-push-pr"
+            | "pr"
+            | "issue"
+    )
 }
 
 /// Rótulo PT-BR + emoji para o cabeçalho da seção na paleta Ctrl+K.
@@ -3061,6 +3170,42 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 }
                 result.push(Line::from(""));
             }
+            ChatEntry::TaskProgress {
+                label,
+                msg,
+                finished,
+                status,
+                ..
+            } => {
+                let (prefix, color) = if *finished {
+                    match status {
+                        Some(runtime::TaskStatus::Completed) => ("\u{2713}", Color::Green), // ✓
+                        Some(runtime::TaskStatus::Failed) => ("\u{2717}", Color::Red),       // ✗
+                        Some(runtime::TaskStatus::Killed) => ("\u{2298}", Color::Yellow),    // ⊘
+                        _ => ("\u{2713}", Color::Green),
+                    }
+                } else {
+                    let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                    (frame, Color::Cyan)
+                };
+                result.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {prefix} "),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        label.clone(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" \u{00b7} "),
+                    Span::styled(msg.clone(), Style::default().fg(Color::DarkGray)),
+                ]));
+                if *finished {
+                    result.push(Line::from(""));
+                }
+            }
         }
     }
 
@@ -3520,10 +3665,16 @@ fn draw_slash_palette_grouped(
                     .add_modifier(Modifier::BOLD),
             ),
             PaletteRow::Command { cmd, desc } => {
-                let body = format!("/{cmd:<12} {desc}");
+                let coming_soon = is_command_coming_soon(cmd);
+                let suffix = if coming_soon { "  (em breve)" } else { "" };
+                let body = format!("/{cmd:<12} {desc}{suffix}");
                 if i == selected {
                     ListItem::new(format!("▶ {body}"))
                         .style(Style::default().fg(Color::Black).bg(Color::Indexed(215)))
+                } else if coming_soon {
+                    // Cinza apagado — ainda selecionável mas visualmente "off".
+                    ListItem::new(format!("  {body}"))
+                        .style(Style::default().fg(Color::Indexed(243)))
                 } else {
                     ListItem::new(format!("  {body}")).style(Style::default().fg(Color::White))
                 }
@@ -5051,6 +5202,30 @@ mod tests {
         assert_eq!(after_up, first);
         // Up no topo é idempotente.
         assert_eq!(prev_selectable_row(&rows, first), first);
+    }
+
+    #[test]
+    fn coming_soon_set_matches_dispatcher_stub() {
+        // Lista deve casar exatamente com a alternância no dispatcher TUI
+        // (handle_tui_slash_command em main.rs). Se um destes for migrado para
+        // implementação real no TUI, remova-o de ambos os lugares.
+        for cmd in [
+            "bughunter",
+            "ultraplan",
+            "teleport",
+            "commit",
+            "commit-push-pr",
+            "pr",
+            "issue",
+        ] {
+            assert!(
+                is_command_coming_soon(cmd),
+                "/{cmd} deveria estar marcado como em breve"
+            );
+        }
+        assert!(!is_command_coming_soon("help"));
+        assert!(!is_command_coming_soon("branch"));
+        assert!(!is_command_coming_soon("update"));
     }
 
     #[test]

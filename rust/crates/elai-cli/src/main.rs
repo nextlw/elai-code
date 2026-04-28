@@ -7,6 +7,7 @@ mod input;
 mod render;
 mod swd;
 mod tui;
+mod tui_sink;
 mod updater;
 mod verify;
 
@@ -36,14 +37,14 @@ use commands::{
     SlashCommand, UserCommandRegistry,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
-use init::{initialize_repo, initialize_repo_with};
+use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
     check_rate_limit, generate_cache_key, load_budget_config, load_system_prompt, now_millis,
     save_budget_config, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
     BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, EprintlnReporter, McpServerManager,
+    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
     MessageRole, PermissionMode, PermissionPolicy, ProjectContext, ResponseCache,
     RuntimeError, Session, TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker,
     TokenUsage, ToolError, ToolExecutor, UsageTracker,
@@ -1737,6 +1738,12 @@ fn run_tui_repl(
     let (msg_tx, msg_rx) = mpsc::channel::<tui::TuiMsg>();
     let (perm_tx, perm_rx) = mpsc::channel::<tui::PermRequest>();
 
+    // Substitui o sink default global do `runtime` por um que envia
+    // `TuiMsg::TaskProgress` no canal acima. Qualquer `with_task_default(...)`
+    // disparado por dentro do TUI passa a renderizar como `ChatEntry::TaskProgress`
+    // in-place (uma só linha viva por task).
+    runtime::set_default_sink(Arc::new(tui_sink::ChannelSink::new(msg_tx.clone())));
+
     // Load recent sessions for the side panel.
     let recent_sessions: Vec<(String, usize)> = list_managed_sessions()
         .unwrap_or_default()
@@ -2276,21 +2283,19 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "init" => {
             // Spawn em thread para não bloquear o TUI durante a indexação.
-            // Progresso vai para o chat via TuiMsg::SystemNote.
+            // O progresso vai pro chat via `TuiMsg::TaskProgress` (linha viva
+            // única) — o sink default global já foi configurado no startup do
+            // TUI pra mandar nesse canal. O `report.render()` final volta como
+            // `SystemNote` porque é texto multilinha de resumo, não progresso.
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let args = crate::args::InitArgs::default();
-            std::thread::spawn(move || {
-                let send_note = |s: &str| {
-                    let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string()));
-                };
-                match initialize_repo_with(&cwd, &args, &send_note) {
-                    Ok(report) => {
-                        let _ = tx.send(tui::TuiMsg::SystemNote(format!("✅ {}", report.render())));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(tui::TuiMsg::Error(format!("init: {e}")));
-                    }
+            std::thread::spawn(move || match initialize_repo(&cwd, &args) {
+                Ok(report) => {
+                    let _ = tx.send(tui::TuiMsg::SystemNote(report.render()));
+                }
+                Err(e) => {
+                    let _ = tx.send(tui::TuiMsg::Error(format!("init: {e}")));
                 }
             });
             app.push_chat(tui::ChatEntry::SystemNote(
@@ -2301,10 +2306,14 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_default();
             std::thread::spawn(move || {
-                let send_note = |s: &str| {
-                    let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string()));
-                };
-                match verify::run_verify_inner(&cwd, &send_note) {
+                let outcome = runtime::with_task_default(
+                    runtime::TaskType::LocalWorkflow,
+                    format!("elai verify {}", cwd.display()),
+                    "Verify",
+                    None,
+                    |reporter| verify::run_verify_inner(&cwd, reporter),
+                );
+                match outcome {
                     Ok((report, _)) => {
                         let _ = tx.send(tui::TuiMsg::SystemNote(verify::render_verify_report_tui(&report)));
                     }
@@ -2523,6 +2532,143 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     }
                 },
             }
+        }
+        "update" => {
+            let tx = msg_tx.clone();
+            std::thread::spawn(move || {
+                let msg = match crate::updater::check_available() {
+                    Some(info) => format!(
+                        "🆙 Nova versão disponível: v{} (atual: v{}).\n   Para instalar, execute `elai update` no shell — `apply` está bloqueado dentro do TUI por segurança.",
+                        info.latest, info.current
+                    ),
+                    None => format!(
+                        "✓ Você já está na versão mais recente (v{}).",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                };
+                let _ = tx.send(tui::TuiMsg::SystemNote(msg));
+            });
+            app.push_chat(tui::ChatEntry::SystemNote(
+                "Verificando atualizações em background...".to_string(),
+            ));
+        }
+        "config" => {
+            let section = arg.map(str::to_owned);
+            let tx = msg_tx.clone();
+            std::thread::spawn(move || match render_config_report(section.as_deref()) {
+                Ok(out) => {
+                    let _ = tx.send(tui::TuiMsg::SystemNote(out));
+                }
+                Err(e) => {
+                    let _ = tx.send(tui::TuiMsg::Error(format!("config: {e}")));
+                }
+            });
+        }
+        "tools" => {
+            let out = handle_tools_slash_command(arg);
+            app.push_chat(tui::ChatEntry::SystemNote(out));
+        }
+        "cache" => {
+            let action = arg.map_or("stats", str::trim);
+            let cache_path = dirs_home()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".elai")
+                .join("cache.json");
+            let mut cache = ResponseCache::new(cache_path, ResponseCache::DEFAULT_TTL_MS);
+            let note = if action == "clear" {
+                cache.clear();
+                match cache.flush() {
+                    Ok(()) => "✅ Cache limpo.".to_string(),
+                    Err(e) => format!("❌ Falha ao gravar cache: {e}"),
+                }
+            } else {
+                let s = cache.stats();
+                let oldest_age = s.oldest_entry_ms.map(|ms| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+                    let age_secs = now.saturating_sub(ms) / 1000;
+                    format!("{age_secs}s atrás")
+                });
+                format!(
+                    "Cache\n  Entradas         {}\n  Total hits       {}\n  Mais antiga      {}",
+                    s.total_entries,
+                    s.total_hits,
+                    oldest_age.as_deref().unwrap_or("—"),
+                )
+            };
+            app.push_chat(tui::ChatEntry::SystemNote(note));
+        }
+        "debug-tool-call" => {
+            let session_arc = session.clone();
+            let tx = msg_tx.clone();
+            std::thread::spawn(move || {
+                let session = session_arc.lock().unwrap().clone();
+                match render_last_tool_debug_report(&session) {
+                    Ok(out) => {
+                        let _ = tx.send(tui::TuiMsg::SystemNote(out));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("debug-tool-call: {e}")));
+                    }
+                }
+            });
+        }
+        "resume" => {
+            // No modo TUI, /resume reusa o picker de sessões.
+            app.open_session_picker();
+        }
+        "branch" => {
+            let tx = msg_tx.clone();
+            let cwd = env::current_dir().unwrap_or_default();
+            std::thread::spawn(move || {
+                let out = std::process::Command::new("git")
+                    .args(["branch", "-a"])
+                    .current_dir(&cwd)
+                    .output();
+                let note = match out {
+                    Ok(o) if o.status.success() => format!(
+                        "🌿 Branches:\n{}",
+                        String::from_utf8_lossy(&o.stdout)
+                    ),
+                    Ok(o) => format!(
+                        "git branch falhou:\n{}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                    Err(e) => format!("Erro ao executar git: {e}"),
+                };
+                let _ = tx.send(tui::TuiMsg::SystemNote(note));
+            });
+        }
+        "worktree" => {
+            let tx = msg_tx.clone();
+            let cwd = env::current_dir().unwrap_or_default();
+            std::thread::spawn(move || {
+                let out = std::process::Command::new("git")
+                    .args(["worktree", "list"])
+                    .current_dir(&cwd)
+                    .output();
+                let note = match out {
+                    Ok(o) if o.status.success() => format!(
+                        "🌳 Worktrees:\n{}",
+                        String::from_utf8_lossy(&o.stdout)
+                    ),
+                    Ok(o) => format!(
+                        "git worktree falhou:\n{}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                    Err(e) => format!("Erro ao executar git: {e}"),
+                };
+                let _ = tx.send(tui::TuiMsg::SystemNote(note));
+            });
+        }
+        // Comandos AI-driven que ainda não foram migrados para o loop de turnos
+        // do TUI. Disponíveis via `elai prompt /<cmd>` no shell por enquanto.
+        "bughunter" | "ultraplan" | "teleport" | "commit" | "commit-push-pr"
+        | "pr" | "issue" => {
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "🚧 /{base} em breve no modo TUI — por enquanto execute `elai prompt /{base}` no shell."
+            )));
         }
         "exit" | "quit" => {
             app.should_quit = true;
@@ -3006,8 +3152,14 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     branch_name_hint: String::new(),
                 };
 
-                let reporter = EprintlnReporter::new();
-                match handle_commit_push_pr_slash_command(&request, &cwd, &reporter) {
+                let outcome = runtime::with_task_default(
+                    runtime::TaskType::LocalWorkflow,
+                    "elai commit-push-pr",
+                    "Commit/Push/PR",
+                    None,
+                    |reporter| handle_commit_push_pr_slash_command(&request, &cwd, reporter),
+                );
+                match outcome {
                     Ok(report) => println!("{report}"),
                     Err(e) => eprintln!("commit-push-pr: {e}"),
                 }
@@ -3608,11 +3760,16 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
     fn run_dream(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
-        let reporter = EprintlnReporter::new();
         let model_call = |prompt: &str| self.run_internal_prompt_text(prompt, false);
-        match dream::execute_dream(&cwd, force, &model_call, &reporter)? {
-            Some(result) => println!("{}", dream::format_dream_output(&result)),
-            None => {}
+        let outcome = runtime::with_task_default(
+            runtime::TaskType::Dream,
+            "elai dream",
+            "Dream",
+            None,
+            |reporter| dream::execute_dream(&cwd, force, &model_call, reporter),
+        )?;
+        if let Some(result) = outcome {
+            println!("{}", dream::format_dream_output(&result));
         }
         Ok(())
     }

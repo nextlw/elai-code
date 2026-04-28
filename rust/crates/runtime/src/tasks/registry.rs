@@ -86,6 +86,16 @@ impl TaskRegistry {
             .collect()
     }
 
+    pub fn list_children(&self, parent_id: &str) -> Vec<TaskState> {
+        self.tasks
+            .read()
+            .unwrap()
+            .values()
+            .filter(|e| e.state.parent_id.as_deref() == Some(parent_id))
+            .map(|e| e.state.clone())
+            .collect()
+    }
+
     pub fn update_status(
         &self,
         task_id: &str,

@@ -399,10 +399,20 @@ pub fn run_verify_inner(
     Ok((report, rendered))
 }
 
-/// Orchestrates the full verify flow and returns the terminal-formatted report.
+/// Orchestrates the full verify flow within a registered task. O reporter
+/// resolvido via `default_sink()` decide o destino do progresso (CLI in-place
+/// stderr, TUI ChatEntry, etc.).
 pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let (_, rendered) = run_verify_inner(cwd, &runtime::EprintlnReporter::new())?;
-    Ok(rendered)
+    runtime::with_task_default(
+        runtime::TaskType::LocalWorkflow,
+        format!("elai verify {}", cwd.display()),
+        "Verify",
+        None,
+        |reporter| {
+            let (_, rendered) = run_verify_inner(cwd, reporter)?;
+            Ok(rendered)
+        },
+    )
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

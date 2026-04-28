@@ -5,10 +5,18 @@
 //! buffer em arquivo, e mecanismo de abort/cleanup.
 
 pub mod output;
+pub mod progress;
 pub mod registry;
+pub mod sinks;
 
 pub use output::{task_output_path, TaskOutputWriter};
+pub use progress::{
+    default_sink, set_default_sink, with_task, with_task_default, TaskProgressReporter,
+};
 pub use registry::{TaskRegistry, TaskRegistryError};
+pub use sinks::{
+    CollectedEvent, CollectingSink, LiveStderrSink, NoopSink, PlainStderrSink, ProgressSink,
+};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -79,6 +87,11 @@ pub struct TaskState {
     pub status: TaskStatus,
     pub description: String,
     pub tool_use_id: Option<String>,
+    /// Sub-task aponta pra task pai (`None` = raiz). Permite que ferramentas
+    /// listem a árvore de progresso (ex: download de modelo embaixo de
+    /// indexação) sem inventar mecanismos paralelos.
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub start_time_ms: u64,
     pub end_time_ms: Option<u64>,
     pub total_paused_ms: u64,
@@ -95,6 +108,17 @@ impl TaskState {
         description: String,
         tool_use_id: Option<String>,
     ) -> Self {
+        Self::new_with_parent(id, task_type, description, tool_use_id, None)
+    }
+
+    #[must_use]
+    pub fn new_with_parent(
+        id: String,
+        task_type: TaskType,
+        description: String,
+        tool_use_id: Option<String>,
+        parent_id: Option<String>,
+    ) -> Self {
         let output_file = task_output_path(&id);
         Self {
             id,
@@ -102,6 +126,7 @@ impl TaskState {
             status: TaskStatus::Pending,
             description,
             tool_use_id,
+            parent_id,
             start_time_ms: now_ms(),
             end_time_ms: None,
             total_paused_ms: 0,

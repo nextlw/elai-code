@@ -1,7 +1,8 @@
-//! NOTE: progress reporting follows the TUI-safe pattern documented at
-//! `rust/docs/progress-pattern.md`. Use `runtime::ProgressReporter` (or any
-//! `Fn(&str) + Send + Sync` closure via blanket impl) instead of `eprintln!`
-//! to avoid corrupting the ratatui alternate screen.
+//! Progresso é reportado obrigatoriamente via `runtime::with_task_default`:
+//! cada operação longa registra uma `Task` na `TaskRegistry` e usa um
+//! `TaskProgressReporter` (que implementa `runtime::ProgressReporter`) — assim
+//! a "linha viva" funciona tanto no CLI (overwrite via `\r`+ANSI) quanto no
+//! TUI (substituição in-place de `ChatEntry::TaskProgress`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,9 @@ use crate::args::{EmbedProviderArg, IndexBackend, InitArgs};
 use code_index::{
     collect_facts, DefaultChunker, Embedder, Indexer, IndexerStats, SqliteVecStore, VectorStore,
 };
-use runtime::render_static_elai_md;
+use runtime::{
+    render_static_elai_md, with_task_default, ProgressReporter, TaskProgressReporter, TaskType,
+};
 
 const STARTER_ELAI_JSON: &str = concat!(
     "{\n",
@@ -83,13 +86,19 @@ pub(crate) fn initialize_repo(
     cwd: &Path,
     args: &InitArgs,
 ) -> Result<InitReport, Box<dyn std::error::Error>> {
-    initialize_repo_with(cwd, args, &|s: &str| eprintln!("  {s}"))
+    with_task_default(
+        TaskType::LocalWorkflow,
+        format!("elai init {}", cwd.display()),
+        "Init",
+        None,
+        |reporter| run_init(cwd, args, reporter),
+    )
 }
 
-pub(crate) fn initialize_repo_with(
+fn run_init(
     cwd: &Path,
     args: &InitArgs,
-    progress: &dyn Fn(&str),
+    reporter: &TaskProgressReporter,
 ) -> Result<InitReport, Box<dyn std::error::Error>> {
     let mut artifacts = Vec::new();
 
@@ -126,14 +135,14 @@ pub(crate) fn initialize_repo_with(
     }
 
     // 2. Collect project facts (always, even with --no-index, for the static template)
-    progress("Analisando projeto...");
+    reporter.report("Analisando projeto…");
     let facts = collect_facts(cwd).map_err(|e| format!("collect_facts: {e}"))?;
     let facts_json = serde_json::to_string_pretty(&facts)?;
 
     // 3. Indexing (unless --no-index)
     let mut index_stats: Option<IndexerStats> = None;
     if !args.no_index {
-        index_stats = Some(run_indexing_with_progress(cwd, &index_dir, args, progress)?);
+        index_stats = Some(run_indexing_with_progress(cwd, &index_dir, args, reporter)?);
     }
 
     // 4. Generate ELAI.md
@@ -170,9 +179,9 @@ fn run_indexing_with_progress(
     cwd: &Path,
     index_dir: &Path,
     args: &InitArgs,
-    progress: &dyn Fn(&str),
+    reporter: &TaskProgressReporter,
 ) -> Result<IndexerStats, Box<dyn std::error::Error>> {
-    let embedder: Arc<dyn Embedder> = build_embedder_with_progress(args, progress)?;
+    let embedder: Arc<dyn Embedder> = build_embedder_with_progress(args, reporter)?;
     let store: Arc<dyn VectorStore> = build_store(index_dir, args, embedder.dim())?;
 
     if args.reindex {
@@ -181,50 +190,64 @@ fn run_indexing_with_progress(
 
     let chunker = DefaultChunker::new();
     let indexer = Indexer::new(cwd, embedder, store, chunker);
-    progress("Indexando código (isso pode demorar)...");
-    let stats = indexer.index_full_with(|p| {
-        match p.phase {
-            code_index::IndexPhase::Walking => progress("Walking project files..."),
-            code_index::IndexPhase::Chunking => progress(&format!(
-                "Chunking files: {} encontrado(s)",
-                p.total
-            )),
-            code_index::IndexPhase::Embedding => {
-                let bar = code_index::progress_bar_labeled("Embedding", p.current, p.total, 20);
-                progress(&bar);
-            }
-            code_index::IndexPhase::Done => {}
+    reporter.report("Indexando código…");
+    let stats = indexer.index_full_with(|p| match p.phase {
+        code_index::IndexPhase::Walking => reporter.report("Walking project files…"),
+        code_index::IndexPhase::Chunking => {
+            reporter.report(&format!("Chunking files: {} encontrado(s)", p.total));
         }
+        code_index::IndexPhase::Embedding => {
+            let bar = code_index::progress_bar_labeled("Embedding", p.current, p.total, 20);
+            reporter.report(&bar);
+        }
+        code_index::IndexPhase::Done => {}
     })?;
-    progress(&format!(
-        "✓ Indexação concluída: {} arquivos, {} chunks em {} ms",
+    reporter.report(&format!(
+        "Indexação: {} arquivos, {} chunks em {} ms",
         stats.files_indexed, stats.chunks_indexed, stats.elapsed_ms,
     ));
     Ok(stats)
 }
 
 #[cfg(feature = "embed-fastembed")]
-fn build_local_embedder_with_progress(
-    progress: &dyn Fn(&str),
+fn build_local_embedder(
+    parent_id: &str,
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     // Cache do fastembed em ~/.elai/fastembed_cache (centralizado, removido
-    // pelo `elai uninstall`). Se vazio, primeira run baixa ~125 MB.
+    // pelo `elai uninstall`). Se vazio, primeira run baixa ~125 MB — vira
+    // sub-task irmã da Init pra aparecer com sua própria linha viva.
     let cache_dir = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|h| std::path::PathBuf::from(h).join(".elai").join("fastembed_cache"));
     let cache_populated = cache_dir
         .as_ref()
         .is_some_and(|p| p.is_dir() && p.read_dir().is_ok_and(|mut d| d.next().is_some()));
-    if !cache_populated {
-        progress("Baixando modelo de embedding (BGE-small, ~125 MB) — primeira execução.");
+
+    if cache_populated {
+        // Cache pronto: instanciar é rápido, não justifica registrar sub-task.
+        let e = code_index::LocalFastEmbedder::new()?;
+        return Ok(Arc::new(e));
     }
-    let e = code_index::LocalFastEmbedder::new()?;
-    Ok(Arc::new(e))
+
+    // Sub-task com `parent_id = init.task_id` — aparece como linha viva
+    // separada (TUI: ChatEntry própria; CLI: handover de owner com newline).
+    with_task_default(
+        TaskType::LocalWorkflow,
+        "BGE-small download",
+        "BGE Download",
+        Some(parent_id.to_string()),
+        |sub_reporter| -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+            sub_reporter.report("Baixando modelo BGE-small (~125 MB) — primeira execução…");
+            let e = code_index::LocalFastEmbedder::new()?;
+            sub_reporter.report("Modelo baixado.");
+            Ok(Arc::new(e))
+        },
+    )
 }
 
 #[cfg(not(feature = "embed-fastembed"))]
-fn build_local_embedder_with_progress(
-    _progress: &dyn Fn(&str),
+fn build_local_embedder(
+    _parent_id: &str,
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     Err("embed-provider 'local' não está disponível neste binário (compilado sem \
          embed-fastembed). Use --embed-provider ollama ou um endpoint HTTP."
@@ -233,10 +256,10 @@ fn build_local_embedder_with_progress(
 
 fn build_embedder_with_progress(
     args: &InitArgs,
-    progress: &dyn Fn(&str),
+    reporter: &TaskProgressReporter,
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     match args.embed_provider {
-        EmbedProviderArg::Local => build_local_embedder_with_progress(progress),
+        EmbedProviderArg::Local => build_local_embedder(reporter.task_id()),
         EmbedProviderArg::Ollama => {
             let url = args
                 .ollama_url

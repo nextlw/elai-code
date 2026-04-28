@@ -2005,7 +2005,9 @@ fn materialize_tarball(
                 let downloaded = buf.len() as u64;
                 if downloaded - last_report >= 65536 {
                     last_report = downloaded;
-                    reporter.report(&code_index::progress_bar_labeled("Downloading", downloaded as usize, total as usize, 20));
+                    let dl = usize::try_from(downloaded).unwrap_or(usize::MAX);
+                    let tot = usize::try_from(total).unwrap_or(usize::MAX);
+                    reporter.report(&code_index::progress_bar_labeled("Downloading", dl, tot, 20));
                 }
             } else if buf.len() % (256 * 1024) == 0 {
                 reporter.report(&format!("Downloading... {} KB", buf.len() / 1024));

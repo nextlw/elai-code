@@ -17,6 +17,7 @@ pub use lock::{
 };
 pub use prompt::build_consolidation_prompt;
 
+use crate::progress::ProgressReporter;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -142,13 +143,25 @@ fn current_ms() -> u64 {
 
 /// Execute consolidation after gates have passed.
 /// Currently a stub — full implementation deferred to v0.8.0.
+///
+/// Roda dentro de uma `Task` registrada (`TaskType::Dream`) — quando a
+/// implementação real chegar, o reporter passa progresso via "linha viva"
+/// pro CLI/TUI sem alterar a API.
 pub fn execute_consolidation(
     _root: &Path,
     _session_ids: &[String],
-    reporter: &dyn crate::ProgressReporter,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    reporter.report("[auto-dream] consolidation stub — implementation deferred to v0.8.0");
-    Ok(())
+    crate::with_task_default(
+        crate::TaskType::Dream,
+        "auto-dream consolidation",
+        "Auto-dream",
+        None,
+        |reporter| {
+            reporter
+                .report("[auto-dream] consolidation stub — implementation deferred to v0.8.0");
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
