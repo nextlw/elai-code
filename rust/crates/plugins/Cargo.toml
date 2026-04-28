@@ -9,7 +9,7 @@ publish.workspace = true
 code_index = { path = "../code_index", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 tar = "0.4"
 flate2 = "1.0"
 zip = "2"

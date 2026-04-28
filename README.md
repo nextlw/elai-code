@@ -20,6 +20,7 @@
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.sh | sh
+curl -fsSL https://get.nexcode.live | sh
 ```
 
 **Windows** (PowerShell)
@@ -192,7 +193,6 @@ level = "partial"
 [permissions]
 mode = "workspace-write"
 ```
-
 
 ---
 
