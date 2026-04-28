@@ -11,36 +11,470 @@ use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 
+const DEFAULT_TEXT_SECONDARY_INTENSITY: u8 = 244;
+const SECONDARY_INTENSITY_MIN: u8 = 232;
+const SECONDARY_INTENSITY_MAX: u8 = 255;
+
+// ─── Paleta única (fonte de verdade) ────────────────────────────────────────
+//
+// MANUTENÇÃO: cada campo de `ColorTheme` documenta os sites que o consomem. Se
+// você alterar a cor, atualize o rustdoc. Se introduzir um literal `Color::Xxx`
+// novo em qualquer lugar do crate, isso é um bug — registre-o como token aqui
+// antes de fazer merge. A TUI ratatui consome via `ColorTheme::for_tui()`
+// (retorna `RatatuiTheme`); ver `crossterm_to_ratatui` para a tabela de
+// equivalência ANSI entre as duas crates.
+
+/// Paleta única do Elai CLI/TUI, definida em `crossterm::style::Color`.
+///
+/// **Brilho ANSI**: os defaults usam variantes `Dark*` (ANSI 0–7) porque a TUI
+/// ratatui histórica do projeto usa as cores escuras. Como `ratatui::Color::Cyan`
+/// já é o ciano escuro (ANSI 6), `crossterm::Color::DarkCyan` aqui mantém paridade
+/// visual quando o tema é convertido para a camada da TUI.
+///
+/// **Para a TUI**: use [`ColorTheme::for_tui`] para obter um [`RatatuiTheme`]
+/// com os mesmos tokens já convertidos para `ratatui::style::Color`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorTheme {
-    heading: Color,
-    emphasis: Color,
-    strong: Color,
-    inline_code: Color,
-    link: Color,
-    quote: Color,
-    table_border: Color,
-    code_block_border: Color,
-    spinner_active: Color,
-    spinner_done: Color,
-    spinner_failed: Color,
+    /// Acento primário (laranja). **Default**: `AnsiValue(215)`. **Sites**:
+    /// prompt `>`, bordas ativas de overlays, fundo de items selecionados.
+    pub primary_accent: Color,
+
+    /// Foreground sobre fundo `primary_accent` (alto contraste). **Default**:
+    /// `Black`. **Sites**: texto de items selecionados em pickers.
+    pub accent_on_primary_bg: Color,
+
+    /// Texto primário do conteúdo. **Default**: `White`. **Sites**: corpo de
+    /// mensagens, labels principais, headings nível 2 markdown.
+    pub text_primary: Color,
+
+    /// Texto secundário/meta (hints, paths, blockquote, estados "em breve").
+    /// **Default**: `AnsiValue(248)`. **Sites**: labels auxiliares, hints de
+    /// teclado, blockquote markdown, headings nível 4+, estados desabilitados.
+    pub text_secondary: Color,
+
+    /// Borda de painel/overlay ativo. **Default**: `AnsiValue(215)` (=
+    /// `primary_accent`). **Sites**: `Block::default().border_style` em overlays.
+    pub border_active: Color,
+
+    /// Borda de painel/overlay inativo. **Default**: `AnsiValue(239)`.
+    /// **Sites**: bordas neutras de subpainéis na TUI.
+    pub border_inactive: Color,
+
+    /// Borda de tabelas markdown. **Default**: `DarkCyan`. **Sites**:
+    /// `render_table`, `render_table_row`.
+    pub border_table: Color,
+
+    /// Borda de fenced code blocks markdown. **Default**: `Grey`. **Sites**:
+    /// `start_code_block`, `finish_code_block`.
+    pub border_code_block: Color,
+
+    /// Cor "informativa": tool calls, headings nível 1. **Default**: `DarkCyan`.
+    /// **Sites**: `⚙ tool:` na TUI, `# Heading` no markdown CLI, header de hunk diff.
+    pub info: Color,
+
+    /// Sucesso (✓ tasks, OK em tool results, spinner OK). **Default**:
+    /// `DarkGreen`. **Sites**: `Spinner::finish`, `TaskStatus::Completed`, SWD `Verified`.
+    pub success: Color,
+
+    /// Aviso (system notes, retry, drift). **Default**: `DarkYellow`. **Sites**:
+    /// `SystemNote`, `CorrectionRetryEntry`, SWD `Drift/Noop`, modo de permissão.
+    pub warn: Color,
+
+    /// Erro (✗ tasks, falhas, spinner com falha). **Default**: `DarkRed`.
+    /// **Sites**: `Spinner::fail`, `TaskStatus::Failed`, SWD `Failed/RolledBack`.
+    pub error: Color,
+
+    /// "Pensando" / spinner ativo. **Default**: `DarkBlue`. **Sites**:
+    /// `Spinner::tick`, indicador "Thinking…", spinner de TaskProgress em execução.
+    pub thinking: Color,
+
+    /// Hyperlinks markdown e headings nível 3. **Default**: `DarkBlue`. **Sites**:
+    /// `Tag::Link`, `Tag::Image`, heading nível 3.
+    pub link: Color,
+
+    /// `inline code` markdown (texto monoespaçado curto). **Default**:
+    /// `AnsiValue(156)` (verde claro). **Sites**: `Event::Code`, code spans na TUI.
+    pub inline_code: Color,
+
+    /// Linhas de contexto em hunks de diff (`@@ … @@`) e ênfase italic.
+    /// **Default**: `DarkMagenta`. **Sites**: `SwdDiffEntry`, italics markdown.
+    pub diff_context: Color,
+
+    /// Sub-tema isolado para a animação "dream" (easter egg). Mantido em
+    /// namespace separado porque são cores muito específicas da animação,
+    /// não fazem parte do design system geral.
+    pub easter_egg: EasterEggTheme,
+}
+
+/// Sub-tema do easter egg "dream" (animação).
+///
+/// Cores são RGB exatos (não passam por ANSI). Wrapper para que o consumo
+/// continue passando pelo tema único — nunca usar literais `Color::Rgb(…)`
+/// fora deste sub-tema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EasterEggTheme {
+    /// Corpo claro (areia). **Default**: `Rgb { r: 242, g: 222, b: 206 }`.
+    pub body: Color,
+    /// Tom quente (laranja queimado), bordas e olhos. **Default**: `Rgb { r: 201, g: 123, b: 74 }`.
+    pub warm: Color,
+    /// Tom escuro (terra), pupilas/detalhes. **Default**: `Rgb { r: 110, g: 65, b: 28 }`.
+    pub dark: Color,
+}
+
+impl Default for EasterEggTheme {
+    fn default() -> Self {
+        Self {
+            body: Color::Rgb { r: 242, g: 222, b: 206 },
+            warm: Color::Rgb { r: 201, g: 123, b: 74 },
+            dark: Color::Rgb { r: 110, g: 65, b: 28 },
+        }
+    }
 }
 
 impl Default for ColorTheme {
     fn default() -> Self {
         Self {
-            heading: Color::Cyan,
-            emphasis: Color::Magenta,
-            strong: Color::Yellow,
-            inline_code: Color::Green,
-            link: Color::Blue,
-            quote: Color::DarkGrey,
-            table_border: Color::DarkCyan,
-            code_block_border: Color::DarkGrey,
-            spinner_active: Color::Blue,
-            spinner_done: Color::Green,
-            spinner_failed: Color::Red,
+            primary_accent: Color::AnsiValue(215),
+            accent_on_primary_bg: Color::Black,
+            text_primary: Color::White,
+            text_secondary: Color::AnsiValue(DEFAULT_TEXT_SECONDARY_INTENSITY),
+            border_active: Color::AnsiValue(215),
+            border_inactive: Color::AnsiValue(239),
+            border_table: Color::DarkCyan,
+            border_code_block: Color::Grey,
+            info: Color::DarkCyan,
+            success: Color::DarkGreen,
+            warn: Color::DarkYellow,
+            error: Color::DarkRed,
+            thinking: Color::DarkBlue,
+            link: Color::DarkBlue,
+            inline_code: Color::AnsiValue(156),
+            diff_context: Color::DarkMagenta,
+            easter_egg: EasterEggTheme::default(),
         }
+    }
+}
+
+impl ColorTheme {
+    #[must_use]
+    pub fn resolved() -> Self {
+        let mut theme = Self::default();
+        let config = runtime::load_global_config().ok();
+        let overrides = config.as_ref().map(|cfg| &cfg.theme);
+
+        theme.primary_accent = resolve_color(
+            theme.primary_accent,
+            "ELAI_THEME_PRIMARY_ACCENT",
+            overrides.and_then(|o| o.primary_accent.as_deref()),
+        );
+        theme.accent_on_primary_bg = resolve_color(
+            theme.accent_on_primary_bg,
+            "ELAI_THEME_ACCENT_ON_PRIMARY_BG",
+            overrides.and_then(|o| o.accent_on_primary_bg.as_deref()),
+        );
+        theme.text_primary = resolve_color(
+            theme.text_primary,
+            "ELAI_THEME_TEXT_PRIMARY",
+            overrides.and_then(|o| o.text_primary.as_deref()),
+        );
+        theme.text_secondary = resolve_text_secondary(
+            theme.text_secondary,
+            "ELAI_THEME_TEXT_SECONDARY",
+            overrides.and_then(|o| o.text_secondary.as_deref()),
+            "ELAI_TEXT_SECONDARY_INTENSITY",
+            overrides.and_then(|o| o.text_secondary_intensity),
+        );
+        theme.border_active = resolve_color(
+            theme.border_active,
+            "ELAI_THEME_BORDER_ACTIVE",
+            overrides.and_then(|o| o.border_active.as_deref()),
+        );
+        theme.border_inactive = resolve_color(
+            theme.border_inactive,
+            "ELAI_THEME_BORDER_INACTIVE",
+            overrides.and_then(|o| o.border_inactive.as_deref()),
+        );
+        theme.border_table = resolve_color(
+            theme.border_table,
+            "ELAI_THEME_BORDER_TABLE",
+            overrides.and_then(|o| o.border_table.as_deref()),
+        );
+        theme.border_code_block = resolve_color(
+            theme.border_code_block,
+            "ELAI_THEME_BORDER_CODE_BLOCK",
+            overrides.and_then(|o| o.border_code_block.as_deref()),
+        );
+        theme.info = resolve_color(
+            theme.info,
+            "ELAI_THEME_INFO",
+            overrides.and_then(|o| o.info.as_deref()),
+        );
+        theme.success = resolve_color(
+            theme.success,
+            "ELAI_THEME_SUCCESS",
+            overrides.and_then(|o| o.success.as_deref()),
+        );
+        theme.warn = resolve_color(
+            theme.warn,
+            "ELAI_THEME_WARN",
+            overrides.and_then(|o| o.warn.as_deref()),
+        );
+        theme.error = resolve_color(
+            theme.error,
+            "ELAI_THEME_ERROR",
+            overrides.and_then(|o| o.error.as_deref()),
+        );
+        theme.thinking = resolve_color(
+            theme.thinking,
+            "ELAI_THEME_THINKING",
+            overrides.and_then(|o| o.thinking.as_deref()),
+        );
+        theme.link = resolve_color(
+            theme.link,
+            "ELAI_THEME_LINK",
+            overrides.and_then(|o| o.link.as_deref()),
+        );
+        theme.inline_code = resolve_color(
+            theme.inline_code,
+            "ELAI_THEME_INLINE_CODE",
+            overrides.and_then(|o| o.inline_code.as_deref()),
+        );
+        theme.diff_context = resolve_color(
+            theme.diff_context,
+            "ELAI_THEME_DIFF_CONTEXT",
+            overrides.and_then(|o| o.diff_context.as_deref()),
+        );
+        theme.easter_egg.body = resolve_color(
+            theme.easter_egg.body,
+            "ELAI_THEME_EASTER_EGG_BODY",
+            overrides.and_then(|o| o.easter_egg_body.as_deref()),
+        );
+        theme.easter_egg.warm = resolve_color(
+            theme.easter_egg.warm,
+            "ELAI_THEME_EASTER_EGG_WARM",
+            overrides.and_then(|o| o.easter_egg_warm.as_deref()),
+        );
+        theme.easter_egg.dark = resolve_color(
+            theme.easter_egg.dark,
+            "ELAI_THEME_EASTER_EGG_DARK",
+            overrides.and_then(|o| o.easter_egg_dark.as_deref()),
+        );
+
+        theme
+    }
+
+    /// Converte este tema para a representação `ratatui::style::Color` consumida
+    /// pela TUI. Wrapper read-only — a fonte de verdade continua sendo o
+    /// `ColorTheme` em `crossterm::Color`. Ver [`crossterm_to_ratatui`] para
+    /// a tabela de equivalência ANSI entre as duas crates.
+    #[must_use]
+    pub fn for_tui(&self) -> RatatuiTheme {
+        RatatuiTheme {
+            primary_accent: crossterm_to_ratatui(self.primary_accent),
+            accent_on_primary_bg: crossterm_to_ratatui(self.accent_on_primary_bg),
+            text_primary: crossterm_to_ratatui(self.text_primary),
+            text_secondary: crossterm_to_ratatui(self.text_secondary),
+            border_active: crossterm_to_ratatui(self.border_active),
+            border_inactive: crossterm_to_ratatui(self.border_inactive),
+            border_table: crossterm_to_ratatui(self.border_table),
+            border_code_block: crossterm_to_ratatui(self.border_code_block),
+            info: crossterm_to_ratatui(self.info),
+            success: crossterm_to_ratatui(self.success),
+            warn: crossterm_to_ratatui(self.warn),
+            error: crossterm_to_ratatui(self.error),
+            thinking: crossterm_to_ratatui(self.thinking),
+            link: crossterm_to_ratatui(self.link),
+            inline_code: crossterm_to_ratatui(self.inline_code),
+            diff_context: crossterm_to_ratatui(self.diff_context),
+            easter_egg: RatatuiEasterEggTheme {
+                body: crossterm_to_ratatui(self.easter_egg.body),
+                warm: crossterm_to_ratatui(self.easter_egg.warm),
+                dark: crossterm_to_ratatui(self.easter_egg.dark),
+            },
+        }
+    }
+}
+
+/// View do [`ColorTheme`] em `ratatui::style::Color`, gerada por [`ColorTheme::for_tui`].
+///
+/// Existe porque `ratatui` e `crossterm` usam enums diferentes para representar
+/// cores ANSI e divergem na convenção de brilho (ver [`crossterm_to_ratatui`]).
+/// Esta struct é apenas uma projeção do tema único — não tenha um `Default` próprio
+/// nem mexa nesses valores diretamente; sempre derive de `ColorTheme`.
+///
+/// **Espelhamento**: mantém todos os campos de [`ColorTheme`] mesmo quando a TUI
+/// ratatui não usa alguns hoje (`border_table`, `border_code_block` são exclusivos
+/// do renderer markdown CLI). Mantemos espelho 1-para-1 para que adicionar um
+/// novo widget na TUI nunca exija expandir tipos — o token já existe.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct RatatuiTheme {
+    pub primary_accent: ratatui::style::Color,
+    pub accent_on_primary_bg: ratatui::style::Color,
+    pub text_primary: ratatui::style::Color,
+    pub text_secondary: ratatui::style::Color,
+    pub border_active: ratatui::style::Color,
+    pub border_inactive: ratatui::style::Color,
+    pub border_table: ratatui::style::Color,
+    pub border_code_block: ratatui::style::Color,
+    pub info: ratatui::style::Color,
+    pub success: ratatui::style::Color,
+    pub warn: ratatui::style::Color,
+    pub error: ratatui::style::Color,
+    pub thinking: ratatui::style::Color,
+    pub link: ratatui::style::Color,
+    pub inline_code: ratatui::style::Color,
+    pub diff_context: ratatui::style::Color,
+    pub easter_egg: RatatuiEasterEggTheme,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RatatuiEasterEggTheme {
+    pub body: ratatui::style::Color,
+    pub warm: ratatui::style::Color,
+    pub dark: ratatui::style::Color,
+}
+
+fn resolve_color(default: Color, env_key: &str, config_value: Option<&str>) -> Color {
+    if let Some(raw) = std::env::var_os(env_key).and_then(|raw| raw.into_string().ok()) {
+        return parse_color(&raw).unwrap_or(default);
+    }
+    if let Some(raw) = config_value {
+        return parse_color(raw).unwrap_or(default);
+    }
+    default
+}
+
+fn resolve_text_secondary(
+    default: Color,
+    env_color_key: &str,
+    config_color_value: Option<&str>,
+    env_intensity_key: &str,
+    config_intensity_value: Option<u8>,
+) -> Color {
+    if let Some(raw) = std::env::var_os(env_color_key).and_then(|raw| raw.into_string().ok()) {
+        return parse_color(&raw).unwrap_or(default);
+    }
+    if let Some(raw) = std::env::var_os(env_intensity_key).and_then(|raw| raw.into_string().ok()) {
+        return parse_text_secondary_intensity(&raw).unwrap_or(default);
+    }
+    if let Some(raw) = config_color_value {
+        return parse_color(raw).unwrap_or(default);
+    }
+    if let Some(intensity) = config_intensity_value {
+        return validated_text_secondary_intensity(intensity).unwrap_or(default);
+    }
+    default
+}
+
+fn parse_text_secondary_intensity(raw: &str) -> Option<Color> {
+    raw.parse::<u8>()
+        .ok()
+        .and_then(validated_text_secondary_intensity)
+}
+
+fn validated_text_secondary_intensity(value: u8) -> Option<Color> {
+    if (SECONDARY_INTENSITY_MIN..=SECONDARY_INTENSITY_MAX).contains(&value) {
+        Some(Color::AnsiValue(value))
+    } else {
+        None
+    }
+}
+
+#[must_use]
+pub fn parse_color(raw: &str) -> Option<Color> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(hex) = trimmed.strip_prefix('#') {
+        if hex.len() == 6 {
+            let parsed = u32::from_str_radix(hex, 16).ok()?;
+            let r = ((parsed >> 16) & 0xff) as u8;
+            let g = ((parsed >> 8) & 0xff) as u8;
+            let b = (parsed & 0xff) as u8;
+            return Some(Color::Rgb { r, g, b });
+        }
+        return None;
+    }
+
+    if let Ok(index) = trimmed.parse::<u8>() {
+        return Some(Color::AnsiValue(index));
+    }
+
+    let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "reset" => Some(Color::Reset),
+        "black" => Some(Color::Black),
+        "dark_red" => Some(Color::DarkRed),
+        "dark_green" => Some(Color::DarkGreen),
+        "dark_yellow" => Some(Color::DarkYellow),
+        "dark_blue" => Some(Color::DarkBlue),
+        "dark_magenta" => Some(Color::DarkMagenta),
+        "dark_cyan" => Some(Color::DarkCyan),
+        "grey" | "gray" => Some(Color::Grey),
+        "dark_grey" | "dark_gray" => Some(Color::DarkGrey),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        _ => None,
+    }
+}
+
+/// Converte `crossterm::style::Color` em `ratatui::style::Color` mantendo o
+/// índice ANSI (e portanto o brilho real no terminal).
+///
+/// **Atenção à divergência de nomes** entre as duas crates:
+///
+/// | ANSI | crossterm    | ratatui     |
+/// |-----:|:-------------|:------------|
+/// |    1 | `DarkRed`    | `Red`       |
+/// |    2 | `DarkGreen`  | `Green`     |
+/// |    3 | `DarkYellow` | `Yellow`    |
+/// |    4 | `DarkBlue`   | `Blue`      |
+/// |    5 | `DarkMagenta`| `Magenta`   |
+/// |    6 | `DarkCyan`   | `Cyan`      |
+/// |    7 | `Grey`       | `Gray`      |
+/// |    8 | `DarkGrey`   | `DarkGray`  |
+/// |    9 | `Red`        | `LightRed`  |
+/// |   10 | `Green`      | `LightGreen`|
+/// |   11 | `Yellow`     | `LightYellow`|
+/// |   12 | `Blue`       | `LightBlue` |
+/// |   13 | `Magenta`    | `LightMagenta`|
+/// |   14 | `Cyan`       | `LightCyan` |
+/// |   15 | `White`      | `White`     |
+///
+/// `crossterm` segue convenção britânica e `Red` sem prefixo é o **brilhante**
+/// (ANSI 9). `ratatui` segue convenção americana e `Red` sem prefixo é o
+/// **escuro** (ANSI 1). O mapeamento abaixo respeita o índice, não o nome.
+#[must_use]
+pub fn crossterm_to_ratatui(color: Color) -> ratatui::style::Color {
+    use ratatui::style::Color as Rt;
+    match color {
+        Color::Reset => Rt::Reset,
+        Color::Black => Rt::Black,
+        Color::DarkRed => Rt::Red,
+        Color::DarkGreen => Rt::Green,
+        Color::DarkYellow => Rt::Yellow,
+        Color::DarkBlue => Rt::Blue,
+        Color::DarkMagenta => Rt::Magenta,
+        Color::DarkCyan => Rt::Cyan,
+        Color::Grey => Rt::Gray,
+        Color::DarkGrey => Rt::Gray,
+        Color::Red => Rt::LightRed,
+        Color::Green => Rt::LightGreen,
+        Color::Yellow => Rt::LightYellow,
+        Color::Blue => Rt::LightBlue,
+        Color::Magenta => Rt::LightMagenta,
+        Color::Cyan => Rt::LightCyan,
+        Color::White => Rt::White,
+        Color::AnsiValue(n) => Rt::Indexed(n),
+        Color::Rgb { r, g, b } => Rt::Rgb(r, g, b),
     }
 }
 
@@ -70,7 +504,7 @@ impl Spinner {
             SavePosition,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
-            SetForegroundColor(theme.spinner_active),
+            SetForegroundColor(theme.thinking),
             Print(format!("{frame} {label}")),
             ResetColor,
             RestorePosition
@@ -89,7 +523,7 @@ impl Spinner {
             out,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
-            SetForegroundColor(theme.spinner_done),
+            SetForegroundColor(theme.success),
             Print(format!("✔ {label}\n")),
             ResetColor
         )?;
@@ -107,7 +541,7 @@ impl Spinner {
             out,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
-            SetForegroundColor(theme.spinner_failed),
+            SetForegroundColor(theme.error),
             Print(format!("✘ {label}\n")),
             ResetColor
         )?;
@@ -180,19 +614,19 @@ impl RenderState {
 
         if let Some(level) = self.heading_level {
             style = match level {
-                1 => style.with(theme.heading),
-                2 => style.white(),
-                3 => style.with(Color::Blue),
-                _ => style.with(Color::Grey),
+                1 => style.with(theme.info),
+                2 => style.with(theme.text_primary),
+                3 => style.with(theme.link),
+                _ => style.with(theme.text_secondary),
             };
         } else if self.strong > 0 {
-            style = style.with(theme.strong);
+            style = style.with(theme.warn);
         } else if self.emphasis > 0 {
-            style = style.with(theme.emphasis);
+            style = style.with(theme.diff_context);
         }
 
         if self.quote > 0 {
-            style = style.with(theme.quote);
+            style = style.with(theme.text_secondary);
         }
 
         format!("{style}")
@@ -231,7 +665,7 @@ impl Default for TerminalRenderer {
         Self {
             syntax_set,
             syntax_theme,
-            color_theme: ColorTheme::default(),
+            color_theme: ColorTheme::resolved(),
         }
     }
 }
@@ -436,7 +870,7 @@ impl TerminalRenderer {
 
     fn start_quote(&self, state: &mut RenderState, output: &mut String) {
         state.quote += 1;
-        let _ = write!(output, "{}", "│ ".with(self.color_theme.quote));
+        let _ = write!(output, "{}", "│ ".with(self.color_theme.text_secondary));
     }
 
     fn start_item(state: &mut RenderState, output: &mut String) {
@@ -465,7 +899,7 @@ impl TerminalRenderer {
             "{}",
             format!("╭─ {label}")
                 .bold()
-                .with(self.color_theme.code_block_border)
+                .with(self.color_theme.border_code_block)
         );
     }
 
@@ -474,7 +908,7 @@ impl TerminalRenderer {
         let _ = write!(
             output,
             "{}",
-            "╰─".bold().with(self.color_theme.code_block_border)
+            "╰─".bold().with(self.color_theme.border_code_block)
         );
         output.push_str("\n\n");
     }
@@ -516,12 +950,12 @@ impl TerminalRenderer {
             })
             .collect::<Vec<_>>();
 
-        let border = format!("{}", "│".with(self.color_theme.table_border));
+        let border = format!("{}", "│".with(self.color_theme.border_table));
         let separator = widths
             .iter()
             .map(|width| "─".repeat(*width + 2))
             .collect::<Vec<_>>()
-            .join(&format!("{}", "┼".with(self.color_theme.table_border)));
+            .join(&format!("{}", "┼".with(self.color_theme.border_table)));
         let separator = format!("{border}{separator}{border}");
 
         let mut output = String::new();
@@ -545,7 +979,7 @@ impl TerminalRenderer {
     }
 
     fn render_table_row(&self, row: &[String], widths: &[usize], is_header: bool) -> String {
-        let border = format!("{}", "│".with(self.color_theme.table_border));
+        let border = format!("{}", "│".with(self.color_theme.border_table));
         let mut line = String::new();
         line.push_str(&border);
 
@@ -553,7 +987,7 @@ impl TerminalRenderer {
             let cell = row.get(index).map_or("", String::as_str);
             line.push(' ');
             if is_header {
-                let _ = write!(line, "{}", cell.bold().with(self.color_theme.heading));
+                let _ = write!(line, "{}", cell.bold().with(self.color_theme.info));
             } else {
                 line.push_str(cell);
             }
@@ -693,7 +1127,37 @@ fn strip_ansi(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_ansi, MarkdownStreamState, Spinner, TerminalRenderer};
+    use super::{parse_color, strip_ansi, ColorTheme, MarkdownStreamState, Spinner, TerminalRenderer};
+    use crossterm::style::Color;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvRestore {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(p) => std::env::set_var(self.key, p),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn with_home(td: &TempDir, f: impl FnOnce()) {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore = EnvRestore {
+            key: "HOME",
+            prev: std::env::var_os("HOME"),
+        };
+        std::env::set_var("HOME", td.path());
+        f();
+    }
 
     #[test]
     fn renders_markdown_with_styling_and_lists() {
@@ -793,5 +1257,64 @@ mod tests {
 
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("Working"));
+    }
+
+    #[test]
+    fn parse_color_accepts_named_index_and_hex() {
+        assert_eq!(parse_color("dark_blue"), Some(Color::DarkBlue));
+        assert_eq!(parse_color("240"), Some(Color::AnsiValue(240)));
+        assert_eq!(
+            parse_color("#A8A8A8"),
+            Some(Color::Rgb {
+                r: 0xA8,
+                g: 0xA8,
+                b: 0xA8,
+            })
+        );
+    }
+
+    #[test]
+    fn resolved_theme_prefers_env_over_config() {
+        let td = TempDir::new().unwrap();
+        with_home(&td, || {
+            let mut cfg = runtime::GlobalConfig::default();
+            cfg.theme.info = Some("dark_red".to_string());
+            cfg.theme.text_secondary_intensity = Some(240);
+            runtime::save_global_config(&cfg).unwrap();
+
+            let _restore_info = EnvRestore {
+                key: "ELAI_THEME_INFO",
+                prev: std::env::var_os("ELAI_THEME_INFO"),
+            };
+            let _restore_gray = EnvRestore {
+                key: "ELAI_TEXT_SECONDARY_INTENSITY",
+                prev: std::env::var_os("ELAI_TEXT_SECONDARY_INTENSITY"),
+            };
+            std::env::set_var("ELAI_THEME_INFO", "dark_green");
+            std::env::set_var("ELAI_TEXT_SECONDARY_INTENSITY", "244");
+
+            let resolved = ColorTheme::resolved();
+            assert_eq!(resolved.info, Color::DarkGreen);
+            assert_eq!(resolved.text_secondary, Color::AnsiValue(244));
+        });
+    }
+
+    #[test]
+    fn invalid_gray_intensity_falls_back_to_default_248() {
+        let td = TempDir::new().unwrap();
+        with_home(&td, || {
+            let mut cfg = runtime::GlobalConfig::default();
+            cfg.theme.text_secondary_intensity = Some(200);
+            runtime::save_global_config(&cfg).unwrap();
+
+            let _restore_gray = EnvRestore {
+                key: "ELAI_TEXT_SECONDARY_INTENSITY",
+                prev: std::env::var_os("ELAI_TEXT_SECONDARY_INTENSITY"),
+            };
+            std::env::set_var("ELAI_TEXT_SECONDARY_INTENSITY", "200");
+
+            let resolved = ColorTheme::resolved();
+            assert_eq!(resolved.text_secondary, Color::AnsiValue(248));
+        });
     }
 }

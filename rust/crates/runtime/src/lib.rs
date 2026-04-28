@@ -130,7 +130,7 @@ pub use auto_dream::{
 };
 pub use global_config::{
     config_path as global_config_path, is_setup_complete, load as load_global_config,
-    save as save_global_config, FeatureFlags, GlobalConfig,
+    save as save_global_config, FeatureFlags, GlobalConfig, ThemeOverrides,
 };
 pub use tasks::{
     default_sink, generate_task_id, set_default_sink, task_output_path, task_registry, with_task,

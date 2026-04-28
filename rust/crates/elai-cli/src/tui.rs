@@ -25,7 +25,7 @@ use std::env;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -39,7 +39,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
@@ -48,6 +48,36 @@ use ratatui::widgets::{
 use ratatui::Terminal;
 
 use commands::SlashCategory;
+
+use crate::render::{ColorTheme, RatatuiTheme};
+
+/// Acesso ao tema único da TUI.
+///
+/// **Fonte de verdade**: [`crate::render::ColorTheme`] (em `crossterm::Color`).
+/// Esta função apenas projeta o tema para `ratatui::style::Color` via
+/// [`ColorTheme::for_tui`]. **Não use literais `Color::Xxx` em `tui.rs`** —
+/// se faltar token, adicione-o em `ColorTheme` antes de consumir aqui.
+///
+/// Cacheado em `OnceLock<Mutex<_>>` para evitar ler config/env em todo render.
+/// Use [`refresh_theme_cache`] quando um comando de runtime alterar o tema.
+fn theme_cache() -> &'static Mutex<RatatuiTheme> {
+    static THEME_CACHE: OnceLock<Mutex<RatatuiTheme>> = OnceLock::new();
+    THEME_CACHE.get_or_init(|| Mutex::new(ColorTheme::resolved().for_tui()))
+}
+
+#[inline]
+fn theme() -> RatatuiTheme {
+    *theme_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub fn refresh_theme_cache() {
+    let mut guard = theme_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = ColorTheme::resolved().for_tui();
+}
 
 // ─── Inter-thread message types ──────────────────────────────────────────────
 
@@ -795,6 +825,7 @@ fn slash_command_pt_description(name: &str) -> Option<&'static str> {
         "stats" => "Estatísticas de tokens/custo",
         "providers" => "Painel de uso por provider",
         "verify" => "Verificar codebase vs memória",
+        "theme" => "Ajustar tema (cinza secundário)",
         _ => return None,
     })
 }
@@ -826,6 +857,11 @@ fn slash_palette_items() -> Vec<(SlashCategory, String, String)> {
             SlashCategory::Behavior,
             "keys".into(),
             "Configurar/trocar API keys".into(),
+        ),
+        (
+            SlashCategory::Behavior,
+            "theme".into(),
+            "Ajustar tema: /theme gray <232-255>".into(),
         ),
         (
             SlashCategory::System,
@@ -2333,6 +2369,7 @@ fn handle_first_run_wizard_key(
                     default_model: state.model.clone(),
                     default_permission_mode: state.permission_mode.clone(),
                     features: state.features.clone(),
+                    theme: runtime::ThemeOverrides::default(),
                 };
                 let _ = runtime::save_global_config(&cfg);
                 // Apply to live app state.
@@ -2697,12 +2734,12 @@ const ELAI_ASCII: &str = "\
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     // corpo do mascote e texto ELAI: laranja claro
-    let body_style = Style::default().fg(Color::Rgb(242, 222, 206));
+    let body_style = Style::default().fg(theme().easter_egg.body);
     // olhos (▄ ▀ e █ depois de ▓): laranja saturado
-    let eye_style = Style::default().fg(Color::Rgb(201, 123, 74));
+    let eye_style = Style::default().fg(theme().easter_egg.warm);
     // ▓ células: cavidade dos olhos — marrom escuro visível
-    let dot_style = Style::default().fg(Color::Rgb(110, 65, 28));
-    let dim = Style::default().fg(Color::DarkGray);
+    let dot_style = Style::default().fg(theme().easter_egg.dark);
+    let dim = Style::default().fg(theme().text_secondary);
 
     let username = whoami_user();
     let cwd = env::current_dir()
@@ -2765,14 +2802,14 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
         Span::raw("  "),
         Span::styled(
             format!("v{}", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(Color::Rgb(201, 123, 74)),
+            Style::default().fg(theme().easter_egg.warm),
         ),
     ]));
     lines.push(Line::from(Span::styled(format!("  {cwd}"), dim)));
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(201, 123, 74)))
+        .border_style(Style::default().fg(theme().easter_egg.warm))
         .padding(Padding::new(2, 0, 0, 0));
 
     let paragraph = Paragraph::new(lines).block(block);
@@ -2780,14 +2817,12 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 }
 
 fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
-    // Cinza ~30% mais claro que Color::DarkGray (≈ #808080) para melhorar
-    // legibilidade do painel lateral. Indexed 248 ≈ #A8A8A8.
-    let muted = Style::default().fg(Color::Indexed(248));
+    let muted = Style::default().fg(theme().text_secondary);
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             "Tips for getting started",
             Style::default()
-                .fg(Color::Indexed(215))
+                .fg(theme().primary_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled("  Run /init to create a ELAI.md", muted)),
@@ -2797,7 +2832,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         Line::from(Span::styled(
             "Recent activity",
             Style::default()
-                .fg(Color::Indexed(215))
+                .fg(theme().primary_accent)
                 .add_modifier(Modifier::BOLD),
         )),
     ];
@@ -2821,7 +2856,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
@@ -2832,7 +2867,7 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
-        .border_style(Style::default().fg(Color::Indexed(239)));
+        .border_style(Style::default().fg(theme().border_inactive));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2884,12 +2919,12 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
             s = s.add_modifier(Modifier::ITALIC);
         }
         s.fg(match heading {
-            Some(1) => Color::Cyan,
-            Some(2) => Color::White,
-            Some(3) => Color::Blue,
-            Some(_) => Color::Gray,
-            None if bold => Color::Yellow,
-            _ => Color::Indexed(252),
+            Some(1) => theme().info,
+            Some(2) => theme().text_primary,
+            Some(3) => theme().link,
+            Some(_) => theme().text_secondary,
+            None if bold => theme().warn,
+            _ => theme().text_secondary,
         })
     };
 
@@ -2920,7 +2955,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
                 spans.push(Span::styled(
                     format!("{indent}• "),
-                    Style::default().fg(Color::Indexed(215)),
+                    Style::default().fg(theme().primary_accent),
                 ));
             }
             MdEvent::End(TagEnd::Item) => flush(&mut lines, &mut spans),
@@ -2933,7 +2968,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 };
                 lines.push(Line::from(Span::styled(
                     format!("  ╭─{lang}─"),
-                    Style::default().fg(Color::Indexed(239)),
+                    Style::default().fg(theme().border_inactive),
                 )));
             }
             MdEvent::End(TagEnd::CodeBlock) => {
@@ -2941,7 +2976,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 flush(&mut lines, &mut spans);
                 lines.push(Line::from(Span::styled(
                     "  ╰──────",
-                    Style::default().fg(Color::Indexed(239)),
+                    Style::default().fg(theme().border_inactive),
                 )));
                 lines.push(Line::from(""));
             }
@@ -2952,7 +2987,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                         flush(&mut lines, &mut spans);
                         lines.push(Line::from(Span::styled(
                             format!("  │ {l}"),
-                            Style::default().fg(Color::Indexed(156)),
+                            Style::default().fg(theme().inline_code),
                         )));
                     }
                 } else {
@@ -2972,7 +3007,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
             MdEvent::Code(t) => {
                 spans.push(Span::styled(
                     t.into_string(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme().success),
                 ));
             }
             MdEvent::SoftBreak => spans.push(Span::raw(" ")),
@@ -2985,7 +3020,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 flush(&mut lines, &mut spans);
                 lines.push(Line::from(Span::styled(
                     "─".repeat(wrap_width.min(60)),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme().text_secondary),
                 )));
                 lines.push(Line::from(""));
             }
@@ -3015,13 +3050,13 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 result.push(Line::from(Span::styled(
                     "> ".to_string(),
                     Style::default()
-                        .fg(Color::Indexed(215))
+                        .fg(theme().primary_accent)
                         .add_modifier(Modifier::BOLD),
                 )));
                 for line in wrap_text(msg, wrap_width) {
                     result.push(Line::from(Span::styled(
                         format!("  {line}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme().text_primary),
                     )));
                 }
                 result.push(Line::from(""));
@@ -3038,21 +3073,21 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
             ChatEntry::ToolCallEntry { name, input } => {
                 let summary = input.chars().take(60).collect::<String>();
                 result.push(Line::from(vec![
-                    Span::styled("  ⚙ tool: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("  ⚙ tool: ", Style::default().fg(theme().info)),
                     Span::styled(
                         name.clone(),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme().info)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!("({summary}…)"), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("({summary}…)"), Style::default().fg(theme().text_secondary)),
                 ]));
             }
             ChatEntry::ToolResultEntry { ok, summary } => {
                 let (icon, style) = if *ok {
-                    ("↳ ok", Style::default().fg(Color::Green))
+                    ("↳ ok", Style::default().fg(theme().success))
                 } else {
-                    ("↳ err", Style::default().fg(Color::Red))
+                    ("↳ err", Style::default().fg(theme().error))
                 };
                 let short = summary.chars().take(70).collect::<String>();
                 result.push(Line::from(Span::styled(
@@ -3064,7 +3099,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 for line in note.lines() {
                     result.push(Line::from(Span::styled(
                         format!("  {line}"),
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme().warn),
                     )));
                 }
                 result.push(Line::from(""));
@@ -3078,16 +3113,16 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                         transactions.len()
                     ),
                     Style::default()
-                        .fg(Color::Indexed(215))
+                        .fg(theme().primary_accent)
                         .add_modifier(Modifier::BOLD),
                 )));
                 for tx in transactions {
                     let (icon, color) = match &tx.outcome {
-                        SwdOutcome::Verified => ("✓", Color::Green),
-                        SwdOutcome::Noop => ("·", Color::Yellow),
-                        SwdOutcome::Drift { .. } => ("~", Color::Yellow),
-                        SwdOutcome::Failed { .. } => ("✗", Color::Red),
-                        SwdOutcome::RolledBack => ("↩", Color::Red),
+                        SwdOutcome::Verified => ("✓", theme().success),
+                        SwdOutcome::Noop => ("·", theme().warn),
+                        SwdOutcome::Drift { .. } => ("~", theme().warn),
+                        SwdOutcome::Failed { .. } => ("✗", theme().error),
+                        SwdOutcome::RolledBack => ("↩", theme().error),
                     };
                     let short_path: String = if tx.path.len() > 45 {
                         format!("…{}", &tx.path[tx.path.len() - 44..])
@@ -3096,10 +3131,10 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                     };
                     result.push(Line::from(vec![
                         Span::styled(format!("    {icon} "), Style::default().fg(color)),
-                        Span::styled(short_path, Style::default().fg(Color::White)),
+                        Span::styled(short_path, Style::default().fg(theme().text_primary)),
                         Span::styled(
                             format!("  [{}]", tx.tool_name),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme().text_secondary),
                         ),
                     ]));
                 }
@@ -3109,7 +3144,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 result.push(Line::from(Span::styled(
                     format!("  \u{21a9} SWD retry {attempt}/{max_attempts}"),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme().warn)
                         .add_modifier(Modifier::BOLD),
                 )));
                 result.push(Line::from(""));
@@ -3118,12 +3153,12 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 use crate::diff::DiffTag;
                 result.push(Line::from(Span::styled(
                     format!("  --- {path}"),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().info).add_modifier(Modifier::BOLD),
                 )));
                 if hunks.is_empty() {
                     result.push(Line::from(Span::styled(
                         "  (Nenhuma alteração detectada)",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme().text_secondary),
                     )));
                 } else {
                     for hunk in hunks {
@@ -3138,21 +3173,21 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                                 "  @@ -{},{} +{},{} @@",
                                 hunk.old_start, old_count, hunk.new_start, new_count
                             ),
-                            Style::default().fg(Color::Magenta),
+                            Style::default().fg(theme().diff_context),
                         )));
                         for line in &hunk.lines {
                             let (marker, style) = match line.tag {
                                 DiffTag::Keep => (
                                     " ",
-                                    Style::default().fg(Color::DarkGray),
+                                    Style::default().fg(theme().text_secondary),
                                 ),
                                 DiffTag::Remove => (
                                     "-",
-                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
                                 ),
                                 DiffTag::Add => (
                                     "+",
-                                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                                 ),
                             };
                             let lineno = match line.tag {
@@ -3179,14 +3214,14 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
             } => {
                 let (prefix, color) = if *finished {
                     match status {
-                        Some(runtime::TaskStatus::Completed) => ("\u{2713}", Color::Green), // ✓
-                        Some(runtime::TaskStatus::Failed) => ("\u{2717}", Color::Red),       // ✗
-                        Some(runtime::TaskStatus::Killed) => ("\u{2298}", Color::Yellow),    // ⊘
-                        _ => ("\u{2713}", Color::Green),
+                        Some(runtime::TaskStatus::Completed) => ("\u{2713}", theme().success), // ✓
+                        Some(runtime::TaskStatus::Failed) => ("\u{2717}", theme().error),       // ✗
+                        Some(runtime::TaskStatus::Killed) => ("\u{2298}", theme().warn),    // ⊘
+                        _ => ("\u{2713}", theme().success),
                     }
                 } else {
                     let frame = SPINNER[app.spinner_frame % SPINNER.len()];
-                    (frame, Color::Cyan)
+                    (frame, theme().info)
                 };
                 result.push(Line::from(vec![
                     Span::styled(
@@ -3196,11 +3231,11 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                     Span::styled(
                         label.clone(),
                         Style::default()
-                            .fg(Color::White)
+                            .fg(theme().text_primary)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" \u{00b7} "),
-                    Span::styled(msg.clone(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(msg.clone(), Style::default().fg(theme().text_secondary)),
                 ]));
                 if *finished {
                     result.push(Line::from(""));
@@ -3214,7 +3249,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
         result.push(Line::from(Span::styled(
             format!("  {frame} Thinking…"),
             Style::default()
-                .fg(Color::Blue)
+                .fg(theme().thinking)
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -3276,11 +3311,11 @@ fn budget_bar(pct: f32) -> (String, ratatui::style::Color) {
     let filled = filled.min(8);
     let empty = 8usize.saturating_sub(filled);
     let color = if pct >= 90.0 {
-        ratatui::style::Color::Red
+        theme().error
     } else if pct >= 80.0 {
-        ratatui::style::Color::Yellow
+        theme().warn
     } else {
-        ratatui::style::Color::Green
+        theme().success
     };
     (format!("[{}{}]", "|".repeat(filled), " ".repeat(empty)), color)
 }
@@ -3314,11 +3349,11 @@ fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         short_session_id(&app.session_id),
     );
     let style = if app.read_mode {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(theme().warn)
     } else if app.thinking {
-        Style::default().fg(Color::Blue)
+        Style::default().fg(theme().thinking)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme().text_secondary)
     };
     let paragraph = Paragraph::new(text).style(style);
     frame.render_widget(paragraph, area);
@@ -3349,7 +3384,7 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     if app.read_mode {
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(theme().warn));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let layout = Layout::default()
@@ -3359,13 +3394,13 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "  MODO LEITURA — selecione e copie o texto livremente",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().warn).add_modifier(Modifier::BOLD),
             )),
             layout[0],
         );
         frame.render_widget(
             Paragraph::new("  Pressione qualquer tecla para retomar o modo TUI")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(theme().text_secondary)),
             layout[1],
         );
         return;
@@ -3373,7 +3408,7 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -3396,22 +3431,22 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let after_cursor: String = app.input.chars().skip(app.cursor_col + 1).collect();
 
     let input_spans = vec![
-        Span::styled("> ", Style::default().fg(Color::Indexed(215))),
-        Span::styled(before_cursor, Style::default().fg(Color::White)),
+        Span::styled("> ", Style::default().fg(theme().primary_accent)),
+        Span::styled(before_cursor, Style::default().fg(theme().text_primary)),
         Span::styled(
             cursor_char,
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Indexed(215))
+                .fg(theme().accent_on_primary_bg)
+                .bg(theme().primary_accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(after_cursor, Style::default().fg(Color::White)),
+        Span::styled(after_cursor, Style::default().fg(theme().text_primary)),
     ];
     frame.render_widget(Paragraph::new(Line::from(input_spans)), layout[0]);
 
     // Hint line.
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(theme().text_secondary)),
         layout[1],
     );
 }
@@ -3554,7 +3589,7 @@ fn draw_picker(
     let block = Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3581,10 +3616,10 @@ fn draw_picker(
         .map(|(i, item)| {
             if i == selected {
                 ListItem::new(format!("▶ {item}"))
-                    .style(Style::default().fg(Color::Black).bg(Color::Indexed(215)))
+                    .style(Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent))
             } else {
                 ListItem::new(format!("  {item}"))
-                    .style(Style::default().fg(Color::White))
+                    .style(Style::default().fg(theme().text_primary))
             }
         })
         .collect();
@@ -3598,7 +3633,7 @@ fn draw_picker(
         let filter_area = layout[1];
         frame.render_widget(
             Paragraph::new(format!("  filtro: {f}_"))
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(theme().text_secondary)),
             filter_area,
         );
     }
@@ -3610,7 +3645,7 @@ fn draw_picker(
         format!("  ↑/↓ navegar · Enter aplicar · Esc cancelar  ({note})")
     };
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(theme().text_secondary)),
         hint_area,
     );
 }
@@ -3637,7 +3672,7 @@ fn draw_slash_palette_grouped(
     let block = Block::default()
         .title(" Slash Commands (Ctrl+K) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3661,7 +3696,7 @@ fn draw_slash_palette_grouped(
         .map(|(i, row)| match row {
             PaletteRow::Header(label) => ListItem::new(format!("  {label}")).style(
                 Style::default()
-                    .fg(Color::Indexed(215))
+                    .fg(theme().primary_accent)
                     .add_modifier(Modifier::BOLD),
             ),
             PaletteRow::Command { cmd, desc } => {
@@ -3670,13 +3705,13 @@ fn draw_slash_palette_grouped(
                 let body = format!("/{cmd:<12} {desc}{suffix}");
                 if i == selected {
                     ListItem::new(format!("▶ {body}"))
-                        .style(Style::default().fg(Color::Black).bg(Color::Indexed(215)))
+                        .style(Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent))
                 } else if coming_soon {
                     // Cinza apagado — ainda selecionável mas visualmente "off".
                     ListItem::new(format!("  {body}"))
-                        .style(Style::default().fg(Color::Indexed(243)))
+                        .style(Style::default().fg(theme().text_secondary))
                 } else {
-                    ListItem::new(format!("  {body}")).style(Style::default().fg(Color::White))
+                    ListItem::new(format!("  {body}")).style(Style::default().fg(theme().text_primary))
                 }
             }
         })
@@ -3688,12 +3723,12 @@ fn draw_slash_palette_grouped(
 
     frame.render_widget(
         Paragraph::new(format!("  filtro: {filter}_"))
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().fg(theme().text_secondary)),
         filter_area,
     );
     frame.render_widget(
         Paragraph::new("  ↑/↓ navegar · Enter aplicar · Esc cancelar")
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().fg(theme().text_secondary)),
         hint_area,
     );
 }
@@ -3716,45 +3751,45 @@ fn draw_tool_approval(
     let block = Block::default()
         .title(" ⚠  Aprovar tool? ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme().warn));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     let lines = vec![
         Line::from(vec![
-            Span::styled("  Tool        ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Tool        ", Style::default().fg(theme().text_secondary)),
             Span::styled(
                 tool_name.to_string(),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme().info)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("  Required    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(required_mode.to_string(), Style::default().fg(Color::Yellow)),
+            Span::styled("  Required    ", Style::default().fg(theme().text_secondary)),
+            Span::styled(required_mode.to_string(), Style::default().fg(theme().warn)),
         ]),
         Line::from(vec![
-            Span::styled("  Input       ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Input       ", Style::default().fg(theme().text_secondary)),
             Span::styled(
                 input_preview.chars().take(60).collect::<String>(),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme().text_primary),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  [ Y ] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("Sim, uma vez   ", Style::default().fg(Color::Green)),
-            Span::styled("[ A ] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled("Sempre   ", Style::default().fg(Color::Cyan)),
-            Span::styled("[ N ] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled("Não", Style::default().fg(Color::Red)),
+            Span::styled("  [ Y ] ", Style::default().fg(theme().success).add_modifier(Modifier::BOLD)),
+            Span::styled("Sim, uma vez   ", Style::default().fg(theme().success)),
+            Span::styled("[ A ] ", Style::default().fg(theme().info).add_modifier(Modifier::BOLD)),
+            Span::styled("Sempre   ", Style::default().fg(theme().info)),
+            Span::styled("[ N ] ", Style::default().fg(theme().error).add_modifier(Modifier::BOLD)),
+            Span::styled("Não", Style::default().fg(theme().error)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "  Enter=Sim · A=Sempre · N/Esc=Não",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().text_secondary),
         )),
     ];
 
@@ -3773,7 +3808,7 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
     let block = Block::default()
         .title(format!(" \u{26a8} SWD: Aplicar {action_count} arquivo(s)? "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3783,19 +3818,19 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
         Line::from(vec![
             Span::styled(
                 "  [A] ",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Aceitar    ", Style::default().fg(Color::White)),
+            Span::styled("Aceitar    ", Style::default().fg(theme().text_primary)),
             Span::styled(
                 "[R] ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Rejeitar", Style::default().fg(Color::White)),
+            Span::styled("Rejeitar", Style::default().fg(theme().text_primary)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "  A/Enter = Aceitar  ·  R/Esc = Rejeitar",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().text_secondary),
         )),
     ];
 
@@ -3814,7 +3849,7 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
     let block = Block::default()
         .title(" ⚠  Desinstalar Elai Code ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
+        .border_style(Style::default().fg(theme().error));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3826,30 +3861,30 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "  Serão removidos:",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             format!("  • {install_dir}/elai"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme().error),
         )),
         Line::from(Span::styled(
             format!("  • {home}/.elai/"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme().error),
         )),
         Line::from(Span::styled(
             "  • Linhas elai-code no arquivo shell RC",
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme().error),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "  Esta ação é irreversível.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme().warn),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "  Enter confirmar  ·  Esc cancelar",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().text_secondary),
         )),
     ];
 
@@ -3874,7 +3909,7 @@ fn draw_setup_wizard(
     let block = Block::default()
         .title(" Configurar API Key ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3889,7 +3924,7 @@ fn draw_setup_wizard(
             Line::from(""),
             Line::from(Span::styled(
                 "  Escolha seu provedor de IA:",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
         ];
@@ -3901,18 +3936,18 @@ fn draw_setup_wizard(
                 format!("{prefix}{label}"),
                 if selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Indexed(215))
+                        .fg(theme().accent_on_primary_bg)
+                        .bg(theme().primary_accent)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme().text_primary)
                 },
             )));
         }
         v.push(Line::from(""));
         v.push(Line::from(Span::styled(
             "  \u{2191}/\u{2193} navegar \u{00b7} Enter confirmar",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().text_secondary),
         )));
         v
     } else {
@@ -3926,16 +3961,16 @@ fn draw_setup_wizard(
         let display = format!("  > {masked}");
         vec![
             Line::from(""),
-            Line::from(Span::styled(field_label, Style::default().fg(Color::White))),
+            Line::from(Span::styled(field_label, Style::default().fg(theme().text_primary))),
             Line::from(""),
             Line::from(Span::styled(
                 display,
-                Style::default().fg(Color::Indexed(215)),
+                Style::default().fg(theme().primary_accent),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Enter confirmar \u{00b7} Esc cancelar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )),
         ]
     };
@@ -3968,7 +4003,7 @@ fn draw_first_run_wizard(
     let block = Block::default()
         .title(format!(" Setup  [{step_label}/{total_steps}] "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -3978,34 +4013,34 @@ fn draw_first_run_wizard(
             Line::from(""),
             Line::from(Span::styled(
                 "  Bem-vindo ao Elai Code!",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Este assistente vai configurar:",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )),
             Line::from(Span::styled(
                 "   • Modelo de IA padrão",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
                 "   • Modo de permissões",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
                 "   • Preferências opcionais",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Se ainda não tem auth, use `elai login` após o setup.",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().warn),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Enter para começar  ·  Esc para cancelar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )),
         ],
 
@@ -4014,7 +4049,7 @@ fn draw_first_run_wizard(
                 Line::from(""),
                 Line::from(Span::styled(
                     "  Escolha o modelo padrão:",
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
@@ -4029,21 +4064,21 @@ fn draw_first_run_wizard(
                     lines.push(Line::from(Span::styled(
                         format!("  ▶ {label}"),
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Indexed(215))
+                            .fg(theme().accent_on_primary_bg)
+                            .bg(theme().primary_accent)
                             .add_modifier(Modifier::BOLD),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!("    {label}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme().text_primary),
                     )));
                 }
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )));
             lines
         }
@@ -4053,7 +4088,7 @@ fn draw_first_run_wizard(
                 Line::from(""),
                 Line::from(Span::styled(
                     "  Modo de permissões:",
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
@@ -4067,21 +4102,21 @@ fn draw_first_run_wizard(
                     lines.push(Line::from(Span::styled(
                         format!("  ▶ {mode:<22} {desc}"),
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Indexed(215))
+                            .fg(theme().accent_on_primary_bg)
+                            .bg(theme().primary_accent)
                             .add_modifier(Modifier::BOLD),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!("    {mode:<22} {desc}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme().text_primary),
                     )));
                 }
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )));
             lines
         }
@@ -4096,20 +4131,20 @@ fn draw_first_run_wizard(
                 Line::from(""),
                 Line::from(Span::styled(
                     "  Preferências opcionais:",
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
             for (i, (label, enabled)) in toggles.iter().enumerate() {
                 let check = if *enabled { "[x]" } else { "[ ]" };
-                let check_color = if *enabled { Color::Green } else { Color::DarkGray };
+                let check_color = if *enabled { theme().success } else { theme().text_secondary };
                 let is_focused = i == *focused;
                 let prefix = if is_focused { "  ▶ " } else { "    " };
                 if is_focused {
                     lines.push(Line::from(vec![
                         Span::styled(
                             prefix,
-                            Style::default().fg(Color::Indexed(215)),
+                            Style::default().fg(theme().primary_accent),
                         ),
                         Span::styled(
                             check,
@@ -4117,16 +4152,16 @@ fn draw_first_run_wizard(
                         ),
                         Span::styled(
                             format!("  {label}"),
-                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(prefix, Style::default().fg(theme().text_secondary)),
                         Span::styled(check, Style::default().fg(check_color)),
                         Span::styled(
                             format!("  {label}"),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme().text_secondary),
                         ),
                     ]));
                 }
@@ -4134,7 +4169,7 @@ fn draw_first_run_wizard(
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  Tab/↑↓ navegar  ·  Space alternar  ·  Enter próximo  ·  Esc voltar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )));
             lines
         }
@@ -4143,45 +4178,45 @@ fn draw_first_run_wizard(
             Line::from(""),
             Line::from(Span::styled(
                 "  Configuração concluída!",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled("  Modelo       ", Style::default().fg(Color::DarkGray)),
-                Span::styled(state.model.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled("  Modelo       ", Style::default().fg(theme().text_secondary)),
+                Span::styled(state.model.clone(), Style::default().fg(theme().info)),
             ]),
             Line::from(vec![
-                Span::styled("  Permissões   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  Permissões   ", Style::default().fg(theme().text_secondary)),
                 Span::styled(
                     state.permission_mode.clone(),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme().warn),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("  Auto-update  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  Auto-update  ", Style::default().fg(theme().text_secondary)),
                 Span::styled(
                     if state.features.auto_update { "on" } else { "off" },
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme().text_primary),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("  Telemetry    ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  Telemetry    ", Style::default().fg(theme().text_secondary)),
                 Span::styled(
                     if state.features.telemetry { "on" } else { "off" },
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme().text_primary),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("  Indexing     ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  Indexing     ", Style::default().fg(theme().text_secondary)),
                 Span::styled(
                     if state.features.indexing { "on" } else { "off" },
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme().text_primary),
                 ),
             ]),
             Line::from(""),
             Line::from(Span::styled(
                 "  Enter para fechar e iniciar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )),
         ],
     };
@@ -4201,7 +4236,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
     let block = Block::default()
         .title(" Authentication ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Indexed(215)));
+        .border_style(Style::default().fg(theme().border_active));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -4214,7 +4249,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             if *claude_code_detected {
                 lines.push(Line::from(Span::styled(
                     "  Detected Claude Code credentials — press Enter on 'Import' to use them",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
             }
@@ -4224,12 +4259,12 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 if sel {
                     lines.push(Line::from(Span::styled(
                         format!("  {:>2}. {}", i + 1, label),
-                        Style::default().fg(Color::Black).bg(Color::Indexed(215)).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent).add_modifier(Modifier::BOLD),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!("     {}. {}", i + 1, label),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme().text_primary),
                     )));
                 }
             }
@@ -4237,7 +4272,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  Up/Down navegar · Enter selecionar · Esc cancelar",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().text_secondary),
             )));
 
             frame.render_widget(Paragraph::new(lines), inner);
@@ -4249,16 +4284,16 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let after: String = input.chars().skip(*cursor + 1).collect();
             let lines = vec![
                 Line::from(""),
-                Line::from(Span::styled("  E-mail para SSO (ou Enter para pular):", Style::default().fg(Color::White))),
+                Line::from(Span::styled("  E-mail para SSO (ou Enter para pular):", Style::default().fg(theme().text_primary))),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("  > ", Style::default().fg(Color::Indexed(215))),
+                    Span::styled("  > ", Style::default().fg(theme().primary_accent)),
                     Span::raw(before),
-                    Span::styled(cur, Style::default().fg(Color::Black).bg(Color::Indexed(215))),
+                    Span::styled(cur, Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent)),
                     Span::raw(after),
                 ]),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4275,14 +4310,14 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             };
             let lines = vec![
                 Line::from(""),
-                Line::from(Span::styled(format!("  {label}"), Style::default().fg(Color::White))),
+                Line::from(Span::styled(format!("  {label}"), Style::default().fg(theme().text_primary))),
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  > {display}"),
-                    Style::default().fg(Color::Indexed(215)),
+                    Style::default().fg(theme().primary_accent),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4296,13 +4331,13 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  {spin} Aguardando callback OAuth na porta {port}..."),
-                    Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().thinking).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  URL (abra manualmente se o browser nao abrir):", Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled(short_url, Style::default().fg(Color::Cyan))),
+                Line::from(Span::styled("  URL (abra manualmente se o browser nao abrir):", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(short_url, Style::default().fg(theme().info))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc cancelar", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("  Esc cancelar", Style::default().fg(theme().text_secondary))),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4312,21 +4347,21 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  Salvar metodo 3P e definir {env_var}=1?"),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  Apos confirmar, adicione ao shell RC:"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme().text_secondary),
                 )),
                 Line::from(Span::styled(
                     format!("    export {env_var}=1"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme().warn),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "  Y/Enter confirmar · N/Esc voltar",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme().text_secondary),
                 )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
@@ -4337,10 +4372,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  \u{2713} {label}"),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para fechar", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("  Esc/Enter para fechar", Style::default().fg(theme().text_secondary))),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4351,12 +4386,12 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "  \u{2717} Erro na autenticacao",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(short, Style::default().fg(Color::Yellow))),
+                Line::from(Span::styled(short, Style::default().fg(theme().warn))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para voltar", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("  Esc/Enter para voltar", Style::default().fg(theme().text_secondary))),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -5099,8 +5134,8 @@ mod tests {
             .iter()
             .filter(|s| !s.hidden && (s.is_enabled)())
             .count();
-        // 4 comandos REPL-local: swd, keys, uninstall, exit.
-        assert_eq!(items.len(), visible_spec_count + 4);
+        // 5 comandos REPL-local: swd, keys, theme, uninstall, exit.
+        assert_eq!(items.len(), visible_spec_count + 5);
 
         for (cat, name, _desc) in &items {
             if let Some(spec) = specs.iter().find(|s| s.name == name.as_str()) {

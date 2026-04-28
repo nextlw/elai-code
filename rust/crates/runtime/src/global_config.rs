@@ -30,6 +30,50 @@ impl Default for FeatureFlags {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ThemeOverrides {
+    #[serde(default)]
+    pub text_secondary_intensity: Option<u8>,
+    #[serde(default)]
+    pub primary_accent: Option<String>,
+    #[serde(default)]
+    pub accent_on_primary_bg: Option<String>,
+    #[serde(default)]
+    pub text_primary: Option<String>,
+    #[serde(default)]
+    pub text_secondary: Option<String>,
+    #[serde(default)]
+    pub border_active: Option<String>,
+    #[serde(default)]
+    pub border_inactive: Option<String>,
+    #[serde(default)]
+    pub border_table: Option<String>,
+    #[serde(default)]
+    pub border_code_block: Option<String>,
+    #[serde(default)]
+    pub info: Option<String>,
+    #[serde(default)]
+    pub success: Option<String>,
+    #[serde(default)]
+    pub warn: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub link: Option<String>,
+    #[serde(default)]
+    pub inline_code: Option<String>,
+    #[serde(default)]
+    pub diff_context: Option<String>,
+    #[serde(default)]
+    pub easter_egg_body: Option<String>,
+    #[serde(default)]
+    pub easter_egg_warm: Option<String>,
+    #[serde(default)]
+    pub easter_egg_dark: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GlobalConfig {
     #[serde(default)]
@@ -40,6 +84,8 @@ pub struct GlobalConfig {
     pub default_permission_mode: String,
     #[serde(default)]
     pub features: FeatureFlags,
+    #[serde(default)]
+    pub theme: ThemeOverrides,
 }
 
 impl Default for GlobalConfig {
@@ -49,6 +95,7 @@ impl Default for GlobalConfig {
             default_model: default_model(),
             default_permission_mode: default_perm_mode(),
             features: FeatureFlags::default(),
+            theme: ThemeOverrides::default(),
         }
     }
 }

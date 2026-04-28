@@ -2129,6 +2129,7 @@ Comandos disponíveis:\n\
   /dream         Comprimir entradas antigas da memória (AI summary)\n\
   /init          Inicializar ELAI.md no projeto\n\
   /verify        Verificar codebase vs memória (ELAI.md)\n\
+  /theme gray <n> Ajustar cinza secundário (232-255)\n\
   /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
   /keys          Configurar/trocar API keys\n\
   /uninstall     Desinstalar Elai Code\n\
@@ -2531,6 +2532,49 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                         }
                     }
                 },
+            }
+        }
+        "theme" => {
+            let Some(raw_arg) = arg else {
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "Uso: /theme gray <232-255>".to_string(),
+                ));
+                return;
+            };
+            let parts: Vec<&str> = raw_arg.split_whitespace().collect();
+            if parts.len() != 2 || parts[0] != "gray" {
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "Uso: /theme gray <232-255>".to_string(),
+                ));
+                return;
+            }
+            let Ok(intensity) = parts[1].parse::<u8>() else {
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "❌ Intensidade inválida. Use um número entre 232 e 255.".to_string(),
+                ));
+                return;
+            };
+            if !(232..=255).contains(&intensity) {
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "❌ Intensidade fora da faixa válida (232..=255).".to_string(),
+                ));
+                return;
+            }
+            let mut cfg = runtime::load_global_config().unwrap_or_default();
+            cfg.theme.text_secondary_intensity = Some(intensity);
+            cfg.theme.text_secondary = None;
+            match runtime::save_global_config(&cfg) {
+                Ok(()) => {
+                    tui::refresh_theme_cache();
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "✅ Tema atualizado: text_secondary = ANSI {intensity}."
+                    )));
+                }
+                Err(e) => {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "❌ Falha ao salvar ~/.elai/config.json: {e}"
+                    )));
+                }
             }
         }
         "update" => {
