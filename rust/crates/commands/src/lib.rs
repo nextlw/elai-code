@@ -16,6 +16,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use plugins::{PluginError, PluginManager, PluginSummary};
 use runtime::{compact_session, CompactionConfig, Session, ProgressReporter};
 
+// Carrega os arquivos de locale do workspace (`rust/locales/{en,pt-BR}.json`).
+// Fonte única do catálogo i18n: outros crates só fazem `rust_i18n::set_locale()`.
+// Fallback automático para `en` quando uma chave não existe no idioma ativo.
+rust_i18n::i18n!("../../locales", fallback = "en");
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
     pub name: String,
@@ -107,8 +112,12 @@ pub const fn always_enabled() -> bool {
 pub struct SlashCommandSpec {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
-    pub summary: &'static str,
-    pub argument_hint: Option<&'static str>,
+    /// Chave i18n da descrição do comando (ex.: `"commands.help.summary"`).
+    /// Use [`SlashCommandSpec::summary`] para resolver no locale ativo.
+    pub summary_key: &'static str,
+    /// Chave i18n da dica de argumento (ex.: `"commands.model.argument_hint"`).
+    /// Use [`SlashCommandSpec::argument_hint`] para resolver no locale ativo.
+    pub argument_hint_key: Option<&'static str>,
     pub resume_supported: bool,
     /// Categoria para agrupamento no /help.
     pub category: SlashCategory,
@@ -120,12 +129,28 @@ pub struct SlashCommandSpec {
     pub user_facing_name: Option<&'static str>,
 }
 
+impl SlashCommandSpec {
+    /// Resolve a descrição do comando no locale ativo via `rust-i18n`.
+    /// Fallback automático para `en` se a chave não existir no locale atual.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        rust_i18n::t!(self.summary_key).to_string()
+    }
+
+    /// Resolve a dica de argumento no locale ativo, se existir.
+    #[must_use]
+    pub fn argument_hint(&self) -> Option<String> {
+        self.argument_hint_key
+            .map(|key| rust_i18n::t!(key).to_string())
+    }
+}
+
 impl PartialEq for SlashCommandSpec {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.aliases == other.aliases
-            && self.summary == other.summary
-            && self.argument_hint == other.argument_hint
+            && self.summary_key == other.summary_key
+            && self.argument_hint_key == other.argument_hint_key
             && self.resume_supported == other.resume_supported
             && self.category == other.category
             && self.hidden == other.hidden
@@ -140,8 +165,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "help",
         aliases: &[],
-        summary: "Show available slash commands",
-        argument_hint: None,
+        summary_key: "commands.help.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -151,8 +176,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "status",
         aliases: &[],
-        summary: "Show current session status",
-        argument_hint: None,
+        summary_key: "commands.status.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -162,8 +187,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "compact",
         aliases: &[],
-        summary: "Compact local session history",
-        argument_hint: None,
+        summary_key: "commands.compact.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -173,8 +198,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "model",
         aliases: &[],
-        summary: "Show or switch the active model",
-        argument_hint: Some("[model]"),
+        summary_key: "commands.model.summary",
+        argument_hint_key: Some("commands.model.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -184,8 +209,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "permissions",
         aliases: &[],
-        summary: "Show or switch the active permission mode",
-        argument_hint: Some("[read-only|workspace-write|danger-full-access]"),
+        summary_key: "commands.permissions.summary",
+        argument_hint_key: Some("commands.permissions.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -195,8 +220,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "clear",
         aliases: &[],
-        summary: "Start a fresh local session",
-        argument_hint: Some("[--confirm]"),
+        summary_key: "commands.clear.summary",
+        argument_hint_key: Some("commands.clear.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -206,8 +231,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "cost",
         aliases: &[],
-        summary: "Show cumulative token usage for this session",
-        argument_hint: None,
+        summary_key: "commands.cost.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -217,8 +242,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "resume",
         aliases: &[],
-        summary: "Load a saved session into the REPL",
-        argument_hint: Some("<session-path>"),
+        summary_key: "commands.resume.summary",
+        argument_hint_key: Some("commands.resume.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -228,8 +253,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "config",
         aliases: &[],
-        summary: "Inspect Elai config files or merged sections",
-        argument_hint: Some("[env|hooks|model|plugins]"),
+        summary_key: "commands.config.summary",
+        argument_hint_key: Some("commands.config.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Project,
         is_enabled: always_enabled,
@@ -239,8 +264,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "memory",
         aliases: &[],
-        summary: "Inspect loaded Elai instruction memory files",
-        argument_hint: None,
+        summary_key: "commands.memory.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Project,
         is_enabled: always_enabled,
@@ -250,8 +275,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "init",
         aliases: &[],
-        summary: "Create a starter ELAI.md for this repo",
-        argument_hint: None,
+        summary_key: "commands.init.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Project,
         is_enabled: always_enabled,
@@ -261,8 +286,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "diff",
         aliases: &[],
-        summary: "Show git diff for current workspace changes",
-        argument_hint: None,
+        summary_key: "commands.diff.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -272,8 +297,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "version",
         aliases: &[],
-        summary: "Show CLI version and build information",
-        argument_hint: None,
+        summary_key: "commands.version.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::System,
         is_enabled: always_enabled,
@@ -283,8 +308,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "update",
         aliases: &[],
-        summary: "Check for and install the latest Elai Code release",
-        argument_hint: None,
+        summary_key: "commands.update.summary",
+        argument_hint_key: None,
         resume_supported: false,
         category: SlashCategory::System,
         is_enabled: always_enabled,
@@ -294,8 +319,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "bughunter",
         aliases: &[],
-        summary: "Inspect the codebase for likely bugs",
-        argument_hint: Some("[scope]"),
+        summary_key: "commands.bughunter.summary",
+        argument_hint_key: Some("commands.bughunter.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Analysis,
         is_enabled: always_enabled,
@@ -305,8 +330,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "branch",
         aliases: &[],
-        summary: "List, create, or switch git branches",
-        argument_hint: Some("[list|create <name>|switch <name>]"),
+        summary_key: "commands.branch.summary",
+        argument_hint_key: Some("commands.branch.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -316,8 +341,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "worktree",
         aliases: &[],
-        summary: "List, add, remove, or prune git worktrees",
-        argument_hint: Some("[list|add <path> [branch]|remove <path>|prune]"),
+        summary_key: "commands.worktree.summary",
+        argument_hint_key: Some("commands.worktree.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -327,8 +352,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "commit",
         aliases: &[],
-        summary: "Generate a commit message and create a git commit",
-        argument_hint: None,
+        summary_key: "commands.commit.summary",
+        argument_hint_key: None,
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -338,8 +363,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "commit-push-pr",
         aliases: &[],
-        summary: "Commit workspace changes, push the branch, and open a PR",
-        argument_hint: Some("[context]"),
+        summary_key: "commands.commit-push-pr.summary",
+        argument_hint_key: Some("commands.commit-push-pr.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -349,8 +374,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "pr",
         aliases: &[],
-        summary: "Draft or create a pull request from the conversation",
-        argument_hint: Some("[context]"),
+        summary_key: "commands.pr.summary",
+        argument_hint_key: Some("commands.pr.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -360,8 +385,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "issue",
         aliases: &[],
-        summary: "Draft or create a GitHub issue from the conversation",
-        argument_hint: Some("[context]"),
+        summary_key: "commands.issue.summary",
+        argument_hint_key: Some("commands.issue.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Git,
         is_enabled: always_enabled,
@@ -371,8 +396,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "ultraplan",
         aliases: &[],
-        summary: "Run a deep planning prompt with multi-step reasoning",
-        argument_hint: Some("[task]"),
+        summary_key: "commands.ultraplan.summary",
+        argument_hint_key: Some("commands.ultraplan.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Analysis,
         is_enabled: always_enabled,
@@ -382,8 +407,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "teleport",
         aliases: &[],
-        summary: "Jump to a file or symbol by searching the workspace",
-        argument_hint: Some("<symbol-or-path>"),
+        summary_key: "commands.teleport.summary",
+        argument_hint_key: Some("commands.teleport.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Analysis,
         is_enabled: always_enabled,
@@ -393,8 +418,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "debug-tool-call",
         aliases: &[],
-        summary: "Replay the last tool call with debug details",
-        argument_hint: None,
+        summary_key: "commands.debug-tool-call.summary",
+        argument_hint_key: None,
         resume_supported: false,
         category: SlashCategory::Analysis,
         is_enabled: always_enabled,
@@ -404,8 +429,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "export",
         aliases: &[],
-        summary: "Export the current conversation to a file",
-        argument_hint: Some("[file]"),
+        summary_key: "commands.export.summary",
+        argument_hint_key: Some("commands.export.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Session,
         is_enabled: always_enabled,
@@ -415,8 +440,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "session",
         aliases: &[],
-        summary: "List or switch managed local sessions",
-        argument_hint: Some("[list|switch <session-id>]"),
+        summary_key: "commands.session.summary",
+        argument_hint_key: Some("commands.session.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -426,10 +451,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "plugin",
         aliases: &["plugins", "marketplace"],
-        summary: "Manage Elai Code plugins",
-        argument_hint: Some(
-            "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
-        ),
+        summary_key: "commands.plugin.summary",
+        argument_hint_key: Some("commands.plugin.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -439,8 +462,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "agents",
         aliases: &[],
-        summary: "List configured agents",
-        argument_hint: None,
+        summary_key: "commands.agents.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -450,8 +473,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "skills",
         aliases: &[],
-        summary: "List available skills",
-        argument_hint: None,
+        summary_key: "commands.skills.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -461,8 +484,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "budget",
         aliases: &[],
-        summary: "Budget limiter (tokens/cost USD)",
-        argument_hint: Some("[tokens] [usd] | off"),
+        summary_key: "commands.budget.summary",
+        argument_hint_key: Some("commands.budget.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -472,8 +495,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "tools",
         aliases: &[],
-        summary: "Inspect tool selection for the current session",
-        argument_hint: Some("[why]"),
+        summary_key: "commands.tools.summary",
+        argument_hint_key: Some("commands.tools.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -483,8 +506,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "cache",
         aliases: &[],
-        summary: "Manage the response cache",
-        argument_hint: Some("[clear|stats]"),
+        summary_key: "commands.cache.summary",
+        argument_hint_key: Some("commands.cache.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -494,8 +517,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "dream",
         aliases: &[],
-        summary: "Compress old memory entries into a summary",
-        argument_hint: Some("[--force]"),
+        summary_key: "commands.dream.summary",
+        argument_hint_key: Some("commands.dream.argument_hint"),
         resume_supported: false,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -505,8 +528,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "stats",
         aliases: &[],
-        summary: "Show token usage and cost statistics",
-        argument_hint: Some("[--days N] [--by-model] [--by-project]"),
+        summary_key: "commands.stats.summary",
+        argument_hint_key: Some("commands.stats.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Plugins,
         is_enabled: always_enabled,
@@ -516,8 +539,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "providers",
         aliases: &[],
-        summary: "Show provider usage dashboard",
-        argument_hint: Some("[--verbose]"),
+        summary_key: "commands.providers.summary",
+        argument_hint_key: Some("commands.providers.argument_hint"),
         resume_supported: true,
         category: SlashCategory::Behavior,
         is_enabled: always_enabled,
@@ -527,10 +550,21 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "verify",
         aliases: &[],
-        summary: "Verify codebase files against memory entries",
-        argument_hint: None,
+        summary_key: "commands.verify.summary",
+        argument_hint_key: None,
         resume_supported: true,
         category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
+    },
+    SlashCommandSpec {
+        name: "locale",
+        aliases: &[],
+        summary_key: "commands.locale.summary",
+        argument_hint_key: Some("commands.locale.argument_hint"),
+        resume_supported: true,
+        category: SlashCategory::Behavior,
         is_enabled: always_enabled,
         hidden: false,
         user_facing_name: None,
@@ -628,6 +662,9 @@ pub enum SlashCommand {
         verbose: bool,
     },
     Verify,
+    Locale {
+        lang: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -744,6 +781,9 @@ impl SlashCommand {
                 verbose: trimmed.contains("--verbose"),
             },
             "verify" => Self::Verify,
+            "locale" => Self::Locale {
+                lang: parts.next().map(ToOwned::to_owned),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -778,7 +818,7 @@ pub fn render_slash_command_help() -> String {
         "  [resume] means the command also works with --resume SESSION.json".to_string(),
     ];
     for spec in slash_command_specs() {
-        let name = match spec.argument_hint {
+        let name = match spec.argument_hint() {
             Some(argument_hint) => format!("/{} {}", spec.name, argument_hint),
             None => format!("/{}", spec.name),
         };
@@ -801,7 +841,7 @@ pub fn render_slash_command_help() -> String {
         };
         lines.push(format!(
             "  {name:<20} {}{alias_suffix}{resume}",
-            spec.summary
+            spec.summary()
         ));
     }
     lines.join("\n")
@@ -836,7 +876,7 @@ pub fn render_help_grouped_with(
         for spec in specs {
             let display = spec.user_facing_name.unwrap_or(spec.name);
             let resume = if spec.resume_supported { " [resume]" } else { "" };
-            out.push_str(&format!("  /{display:<18} {}{resume}\n", spec.summary));
+            out.push_str(&format!("  /{display:<18} {}{resume}\n", spec.summary()));
         }
     }
     if let Some(reg) = user_commands {
@@ -2178,6 +2218,7 @@ pub fn handle_slash_command(
         | SlashCommand::Stats { .. }
         | SlashCommand::Providers { .. }
         | SlashCommand::Verify
+        | SlashCommand::Locale { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -2544,6 +2585,12 @@ mod tests {
 
     #[test]
     fn renders_help_from_shared_specs() {
+        // Fixa locale=en para os asserts contra `argument_hint` em inglês continuarem
+        // estáveis. Locale é global por processo no rust-i18n, portanto se outro
+        // teste paralelo trocar o locale pode haver flake — mover para mutex global
+        // se isso ocorrer.
+        rust_i18n::set_locale("en");
+
         let help = render_slash_command_help();
         assert!(help.contains("works with --resume SESSION.json"));
         assert!(help.contains("/help"));
@@ -2577,8 +2624,9 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 36);
-        assert_eq!(resume_supported_slash_commands().len(), 18);
+        assert!(help.contains("/locale [pt-BR|en]"));
+        assert_eq!(slash_command_specs().len(), 37);
+        assert_eq!(resume_supported_slash_commands().len(), 19);
     }
 
     #[test]

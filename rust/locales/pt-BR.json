@@ -1,0 +1,144 @@
+{
+  "commands": {
+    "help": {
+      "summary": "Lista os slash commands disponíveis"
+    },
+    "status": {
+      "summary": "Mostra o status da sessão atual"
+    },
+    "compact": {
+      "summary": "Compacta o histórico local da sessão"
+    },
+    "model": {
+      "summary": "Mostra ou troca o modelo ativo",
+      "argument_hint": "[modelo]"
+    },
+    "permissions": {
+      "summary": "Mostra ou troca o modo de permissão ativo",
+      "argument_hint": "[somente-leitura|workspace-write|acesso-total]"
+    },
+    "clear": {
+      "summary": "Inicia uma nova sessão local",
+      "argument_hint": "[--confirm]"
+    },
+    "cost": {
+      "summary": "Mostra o uso cumulativo de tokens desta sessão"
+    },
+    "resume": {
+      "summary": "Carrega uma sessão salva no REPL",
+      "argument_hint": "<caminho-da-sessão>"
+    },
+    "config": {
+      "summary": "Inspeciona arquivos de config do Elai ou seções mescladas",
+      "argument_hint": "[env|hooks|model|plugins]"
+    },
+    "memory": {
+      "summary": "Inspeciona arquivos de memória do Elai carregados"
+    },
+    "init": {
+      "summary": "Cria um ELAI.md inicial para este repositório"
+    },
+    "diff": {
+      "summary": "Mostra o git diff das alterações atuais do workspace"
+    },
+    "version": {
+      "summary": "Mostra a versão do CLI e informações de build"
+    },
+    "update": {
+      "summary": "Verifica e instala a última release do Elai Code"
+    },
+    "bughunter": {
+      "summary": "Inspeciona o código em busca de bugs prováveis",
+      "argument_hint": "[escopo]"
+    },
+    "branch": {
+      "summary": "Lista, cria ou troca branches do git",
+      "argument_hint": "[list|create <nome>|switch <nome>]"
+    },
+    "worktree": {
+      "summary": "Lista, adiciona, remove ou limpa worktrees do git",
+      "argument_hint": "[list|add <caminho> [branch]|remove <caminho>|prune]"
+    },
+    "commit": {
+      "summary": "Gera uma mensagem de commit e cria um commit git"
+    },
+    "commit-push-pr": {
+      "summary": "Faz commit, push da branch e abre um PR",
+      "argument_hint": "[contexto]"
+    },
+    "pr": {
+      "summary": "Esboça ou cria um pull request a partir da conversa",
+      "argument_hint": "[contexto]"
+    },
+    "issue": {
+      "summary": "Esboça ou cria uma issue no GitHub a partir da conversa",
+      "argument_hint": "[contexto]"
+    },
+    "ultraplan": {
+      "summary": "Roda um plano profundo com raciocínio multi-etapas",
+      "argument_hint": "[tarefa]"
+    },
+    "teleport": {
+      "summary": "Salta para um arquivo ou símbolo pesquisando o workspace",
+      "argument_hint": "<símbolo-ou-caminho>"
+    },
+    "debug-tool-call": {
+      "summary": "Reexecuta a última chamada de tool com detalhes de debug"
+    },
+    "export": {
+      "summary": "Exporta a conversa atual para um arquivo",
+      "argument_hint": "[arquivo]"
+    },
+    "session": {
+      "summary": "Lista ou troca sessões locais gerenciadas",
+      "argument_hint": "[list|switch <id-da-sessão>]"
+    },
+    "plugin": {
+      "summary": "Gerencia plugins do Elai Code",
+      "argument_hint": "[list|install <caminho>|enable <nome>|disable <nome>|uninstall <id>|update <id>]"
+    },
+    "agents": {
+      "summary": "Lista os agents configurados"
+    },
+    "skills": {
+      "summary": "Lista as skills disponíveis"
+    },
+    "budget": {
+      "summary": "Limitador de orçamento (tokens/custo em USD)",
+      "argument_hint": "[tokens] [usd] | off"
+    },
+    "tools": {
+      "summary": "Inspeciona a seleção de tools da sessão atual",
+      "argument_hint": "[why]"
+    },
+    "cache": {
+      "summary": "Gerencia o cache de respostas",
+      "argument_hint": "[clear|stats]"
+    },
+    "dream": {
+      "summary": "Comprime entradas antigas de memória em um resumo",
+      "argument_hint": "[--force]"
+    },
+    "stats": {
+      "summary": "Mostra estatísticas de uso de tokens e custo",
+      "argument_hint": "[--days N] [--by-model] [--by-project]"
+    },
+    "providers": {
+      "summary": "Mostra o painel de uso dos provedores",
+      "argument_hint": "[--verbose]"
+    },
+    "verify": {
+      "summary": "Verifica arquivos do código contra entradas de memória"
+    },
+    "locale": {
+      "summary": "Mostra ou troca o idioma da interface",
+      "argument_hint": "[pt-BR|en]"
+    }
+  },
+  "locale": {
+    "current": "Idioma atual: %{lang}",
+    "changed": "Idioma alterado para %{lang}",
+    "invalid": "Idioma inválido. Disponíveis: pt-BR, en",
+    "available_header": "Idiomas disponíveis:"
+  }
+}

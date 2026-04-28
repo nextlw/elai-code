@@ -86,7 +86,7 @@ pub fn refresh_theme_cache() {
 pub enum TuiMsg {
     TextChunk(String),
     ToolCall { name: String, input: String },
-    ToolResult { ok: bool, summary: String },
+    ToolResult { ok: bool },
     Usage { input_tokens: u32, output_tokens: u32 },
     Done,
     Error(String),
@@ -139,12 +139,33 @@ pub enum PermDecision {
 
 // ─── Chat model ──────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolItemStatus {
+    Running,
+    Ok,
+    Err,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolBatchItem {
+    pub name: String,
+    pub input_summary: String,
+    pub status: ToolItemStatus,
+}
+
 #[derive(Debug, Clone)]
 pub enum ChatEntry {
     UserMessage(String),
     AssistantText(String),
-    ToolCallEntry { name: String, input: String },
-    ToolResultEntry { ok: bool, summary: String },
+    /// Bloco agrupado de tool calls executadas em sequência, no padrão visual de
+    /// `TaskProgress`. Itens recém-chegados são `Running` (spinner) e migram para
+    /// `Ok`/`Err` quando o resultado correspondente chega. Qualquer texto do
+    /// assistente, mensagem do usuário ou nota de sistema fecha o bloco — o
+    /// próximo `TuiMsg::ToolCall` então abre um bloco novo.
+    ToolBatchEntry {
+        items: Vec<ToolBatchItem>,
+        closed: bool,
+    },
     SystemNote(String),
     SwdLogEntry {
         transactions: Vec<crate::swd::SwdTransaction>,
@@ -476,8 +497,20 @@ impl UiApp {
         if matches!(entry, ChatEntry::UserMessage(_)) {
             self.show_tips = false;
         }
+        // Qualquer entry que não seja um item de tool batch fecha o batch
+        // aberto na cauda do chat — o próximo tool call iniciará um novo bloco.
+        if !matches!(entry, ChatEntry::ToolBatchEntry { .. }) {
+            self.close_open_tool_batch();
+        }
         self.chat.push(entry);
         self.scroll_to_bottom();
+    }
+
+    /// Marca o último `ToolBatchEntry` ainda aberto como `closed = true`. Idempotente.
+    fn close_open_tool_batch(&mut self) {
+        if let Some(ChatEntry::ToolBatchEntry { closed, .. }) = self.chat.last_mut() {
+            *closed = true;
+        }
     }
 
     fn scroll_to_bottom(&mut self) {
@@ -493,15 +526,46 @@ impl UiApp {
                 if let Some(ChatEntry::AssistantText(ref mut buf)) = self.chat.last_mut() {
                     buf.push_str(&text);
                 } else {
+                    // Texto do assistente após uma cadeia de tools fecha o batch
+                    // antes de criar a entry de texto.
+                    self.close_open_tool_batch();
                     self.chat.push(ChatEntry::AssistantText(text));
                 }
                 self.scroll_to_bottom();
             }
             TuiMsg::ToolCall { name, input } => {
-                self.push_chat(ChatEntry::ToolCallEntry { name, input });
+                let input_summary = input.chars().take(60).collect::<String>();
+                let item = ToolBatchItem {
+                    name,
+                    input_summary,
+                    status: ToolItemStatus::Running,
+                };
+                if let Some(ChatEntry::ToolBatchEntry { items, closed: false }) =
+                    self.chat.last_mut()
+                {
+                    items.push(item);
+                } else {
+                    self.chat.push(ChatEntry::ToolBatchEntry {
+                        items: vec![item],
+                        closed: false,
+                    });
+                }
+                self.scroll_to_bottom();
             }
-            TuiMsg::ToolResult { ok, summary } => {
-                self.push_chat(ChatEntry::ToolResultEntry { ok, summary });
+            TuiMsg::ToolResult { ok } => {
+                // Localiza o último item `Running` do último batch aberto e
+                // atualiza seu status. O `summary` do output é descartado por
+                // design — o bloco mostra apenas ✓/✗ por item.
+                if let Some(ChatEntry::ToolBatchEntry { items, .. }) = self.chat.last_mut() {
+                    if let Some(item) = items
+                        .iter_mut()
+                        .rev()
+                        .find(|it| it.status == ToolItemStatus::Running)
+                    {
+                        item.status = if ok { ToolItemStatus::Ok } else { ToolItemStatus::Err };
+                    }
+                }
+                self.scroll_to_bottom();
             }
             TuiMsg::Usage {
                 input_tokens,
@@ -898,8 +962,7 @@ fn slash_palette_items() -> Vec<(SlashCategory, String, String)> {
         .map(|spec| {
             let display = spec.user_facing_name.unwrap_or(spec.name);
             let desc = slash_command_pt_description(spec.name)
-                .unwrap_or(spec.summary)
-                .to_string();
+                .map_or_else(|| spec.summary(), str::to_string);
             (spec.category, display.to_string(), desc)
         })
         .collect();
@@ -2436,7 +2499,7 @@ fn handle_first_run_wizard_key(
                     default_model: state.model.clone(),
                     default_permission_mode: state.permission_mode.clone(),
                     features: state.features.clone(),
-                    theme: runtime::ThemeOverrides::default(),
+                    ..runtime::GlobalConfig::default()
                 };
                 let _ = runtime::save_global_config(&cfg);
                 // Apply to live app state.
@@ -3290,30 +3353,51 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 }
                 result.push(Line::from(""));
             }
-            ChatEntry::ToolCallEntry { name, input } => {
-                let summary = input.chars().take(60).collect::<String>();
+            ChatEntry::ToolBatchEntry { items, closed } => {
+                // Header: `  ⚙ Tools (N)`
                 result.push(Line::from(vec![
-                    Span::styled("  ⚙ tool: ", Style::default().fg(theme().info)),
                     Span::styled(
-                        name.clone(),
+                        "  ⚙ ".to_string(),
+                        Style::default().fg(theme().info),
+                    ),
+                    Span::styled(
+                        format!("Tools ({})", items.len()),
                         Style::default()
                             .fg(theme().info)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!("({summary}…)"), Style::default().fg(theme().text_secondary)),
                 ]));
-            }
-            ChatEntry::ToolResultEntry { ok, summary } => {
-                let (icon, style) = if *ok {
-                    ("↳ ok", Style::default().fg(theme().success))
-                } else {
-                    ("↳ err", Style::default().fg(theme().error))
-                };
-                let short = summary.chars().take(70).collect::<String>();
-                result.push(Line::from(Span::styled(
-                    format!("    {icon}: {short}"),
-                    style,
-                )));
+                // Itens indentados com ícone de status à esquerda.
+                for item in items {
+                    let (icon, color) = match item.status {
+                        ToolItemStatus::Running => {
+                            let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                            (frame, theme().info)
+                        }
+                        ToolItemStatus::Ok => ("\u{2713}", theme().success), // ✓
+                        ToolItemStatus::Err => ("\u{2717}", theme().error),  // ✗
+                    };
+                    result.push(Line::from(vec![
+                        Span::styled(
+                            format!("    {icon} "),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            item.name.clone(),
+                            Style::default()
+                                .fg(theme().text_primary)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" \u{00b7} "),
+                        Span::styled(
+                            item.input_summary.clone(),
+                            Style::default().fg(theme().text_secondary),
+                        ),
+                    ]));
+                }
+                if *closed {
+                    result.push(Line::from(""));
+                }
             }
             ChatEntry::SystemNote(note) => {
                 for line in note.lines() {
@@ -4747,19 +4831,94 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_and_result_add_separate_chat_entries() {
+    fn tool_calls_in_sequence_form_single_batch() {
+        let mut app = make_app();
+        for cmd in ["ls", "pwd", "whoami"] {
+            app.apply_tui_msg(TuiMsg::ToolCall {
+                name: "bash".to_string(),
+                input: format!(r#"{{"command":"{cmd}"}}"#),
+            });
+            app.apply_tui_msg(TuiMsg::ToolResult { ok: true });
+        }
+        assert_eq!(app.chat.len(), 1);
+        match &app.chat[0] {
+            ChatEntry::ToolBatchEntry { items, closed } => {
+                assert_eq!(items.len(), 3);
+                assert!(items.iter().all(|it| it.status == ToolItemStatus::Ok));
+                assert!(!closed, "batch must remain open until something else interrupts");
+            }
+            other => panic!("expected ToolBatchEntry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_result_marks_last_running_item() {
         let mut app = make_app();
         app.apply_tui_msg(TuiMsg::ToolCall {
-            name: "bash".to_string(),
-            input: r#"{"command":"ls"}"#.to_string(),
+            name: "bash".into(),
+            input: r#"{"command":"ls"}"#.into(),
         });
-        app.apply_tui_msg(TuiMsg::ToolResult {
-            ok: true,
-            summary: "file1 file2".to_string(),
+        app.apply_tui_msg(TuiMsg::ToolCall {
+            name: "read_file".into(),
+            input: r#"{"path":"x"}"#.into(),
         });
-        assert_eq!(app.chat.len(), 2);
-        assert!(matches!(app.chat[0], ChatEntry::ToolCallEntry { .. }));
-        assert!(matches!(app.chat[1], ChatEntry::ToolResultEntry { ok: true, .. }));
+        // Apenas um result chega — deve marcar o ÚLTIMO item Running (read_file).
+        app.apply_tui_msg(TuiMsg::ToolResult { ok: false });
+        match &app.chat[0] {
+            ChatEntry::ToolBatchEntry { items, .. } => {
+                assert_eq!(items[0].status, ToolItemStatus::Running);
+                assert_eq!(items[1].status, ToolItemStatus::Err);
+            }
+            _ => panic!("expected ToolBatchEntry"),
+        }
+    }
+
+    #[test]
+    fn assistant_text_closes_open_batch() {
+        let mut app = make_app();
+        app.apply_tui_msg(TuiMsg::ToolCall {
+            name: "bash".into(),
+            input: r#"{"command":"ls"}"#.into(),
+        });
+        app.apply_tui_msg(TuiMsg::ToolResult { ok: true });
+        app.apply_tui_msg(TuiMsg::TextChunk("ok pronto".into()));
+        // Agora um novo tool call: deve criar um batch novo (não anexar ao primeiro).
+        app.apply_tui_msg(TuiMsg::ToolCall {
+            name: "bash".into(),
+            input: r#"{"command":"pwd"}"#.into(),
+        });
+        assert_eq!(app.chat.len(), 3);
+        match &app.chat[0] {
+            ChatEntry::ToolBatchEntry { items, closed } => {
+                assert_eq!(items.len(), 1);
+                assert!(*closed, "first batch must be closed by the assistant text");
+            }
+            _ => panic!("expected first ToolBatchEntry"),
+        }
+        assert!(matches!(app.chat[1], ChatEntry::AssistantText(_)));
+        match &app.chat[2] {
+            ChatEntry::ToolBatchEntry { items, closed } => {
+                assert_eq!(items.len(), 1);
+                assert!(!closed);
+            }
+            _ => panic!("expected second ToolBatchEntry"),
+        }
+    }
+
+    #[test]
+    fn system_note_closes_open_batch() {
+        let mut app = make_app();
+        app.apply_tui_msg(TuiMsg::ToolCall {
+            name: "bash".into(),
+            input: r#"{"command":"ls"}"#.into(),
+        });
+        app.apply_tui_msg(TuiMsg::SystemNote("aviso".into()));
+        match &app.chat[0] {
+            ChatEntry::ToolBatchEntry { closed, .. } => {
+                assert!(*closed, "batch must be closed by the system note that follows");
+            }
+            _ => panic!("expected ToolBatchEntry"),
+        }
     }
 
     #[test]

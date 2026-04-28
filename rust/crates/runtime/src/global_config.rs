@@ -86,6 +86,10 @@ pub struct GlobalConfig {
     pub features: FeatureFlags,
     #[serde(default)]
     pub theme: ThemeOverrides,
+    /// Idioma da interface. Aceita `pt-BR` ou `en`. Locale inválido cai
+    /// para `pt-BR` no startup. Trocado em runtime via `/locale <idioma>`.
+    #[serde(default = "default_locale")]
+    pub locale: String,
 }
 
 impl Default for GlobalConfig {
@@ -96,10 +100,14 @@ impl Default for GlobalConfig {
             default_permission_mode: default_perm_mode(),
             features: FeatureFlags::default(),
             theme: ThemeOverrides::default(),
+            locale: default_locale(),
         }
     }
 }
 
+fn default_locale() -> String {
+    "pt-BR".to_string()
+}
 fn default_model() -> String {
     "claude-opus-4-7".to_string()
 }

@@ -1,0 +1,144 @@
+{
+  "commands": {
+    "help": {
+      "summary": "Show available slash commands"
+    },
+    "status": {
+      "summary": "Show current session status"
+    },
+    "compact": {
+      "summary": "Compact local session history"
+    },
+    "model": {
+      "summary": "Show or switch the active model",
+      "argument_hint": "[model]"
+    },
+    "permissions": {
+      "summary": "Show or switch the active permission mode",
+      "argument_hint": "[read-only|workspace-write|danger-full-access]"
+    },
+    "clear": {
+      "summary": "Start a fresh local session",
+      "argument_hint": "[--confirm]"
+    },
+    "cost": {
+      "summary": "Show cumulative token usage for this session"
+    },
+    "resume": {
+      "summary": "Load a saved session into the REPL",
+      "argument_hint": "<session-path>"
+    },
+    "config": {
+      "summary": "Inspect Elai config files or merged sections",
+      "argument_hint": "[env|hooks|model|plugins]"
+    },
+    "memory": {
+      "summary": "Inspect loaded Elai instruction memory files"
+    },
+    "init": {
+      "summary": "Create a starter ELAI.md for this repo"
+    },
+    "diff": {
+      "summary": "Show git diff for current workspace changes"
+    },
+    "version": {
+      "summary": "Show CLI version and build information"
+    },
+    "update": {
+      "summary": "Check for and install the latest Elai Code release"
+    },
+    "bughunter": {
+      "summary": "Inspect the codebase for likely bugs",
+      "argument_hint": "[scope]"
+    },
+    "branch": {
+      "summary": "List, create, or switch git branches",
+      "argument_hint": "[list|create <name>|switch <name>]"
+    },
+    "worktree": {
+      "summary": "List, add, remove, or prune git worktrees",
+      "argument_hint": "[list|add <path> [branch]|remove <path>|prune]"
+    },
+    "commit": {
+      "summary": "Generate a commit message and create a git commit"
+    },
+    "commit-push-pr": {
+      "summary": "Commit workspace changes, push the branch, and open a PR",
+      "argument_hint": "[context]"
+    },
+    "pr": {
+      "summary": "Draft or create a pull request from the conversation",
+      "argument_hint": "[context]"
+    },
+    "issue": {
+      "summary": "Draft or create a GitHub issue from the conversation",
+      "argument_hint": "[context]"
+    },
+    "ultraplan": {
+      "summary": "Run a deep planning prompt with multi-step reasoning",
+      "argument_hint": "[task]"
+    },
+    "teleport": {
+      "summary": "Jump to a file or symbol by searching the workspace",
+      "argument_hint": "<symbol-or-path>"
+    },
+    "debug-tool-call": {
+      "summary": "Replay the last tool call with debug details"
+    },
+    "export": {
+      "summary": "Export the current conversation to a file",
+      "argument_hint": "[file]"
+    },
+    "session": {
+      "summary": "List or switch managed local sessions",
+      "argument_hint": "[list|switch <session-id>]"
+    },
+    "plugin": {
+      "summary": "Manage Elai Code plugins",
+      "argument_hint": "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]"
+    },
+    "agents": {
+      "summary": "List configured agents"
+    },
+    "skills": {
+      "summary": "List available skills"
+    },
+    "budget": {
+      "summary": "Budget limiter (tokens/cost USD)",
+      "argument_hint": "[tokens] [usd] | off"
+    },
+    "tools": {
+      "summary": "Inspect tool selection for the current session",
+      "argument_hint": "[why]"
+    },
+    "cache": {
+      "summary": "Manage the response cache",
+      "argument_hint": "[clear|stats]"
+    },
+    "dream": {
+      "summary": "Compress old memory entries into a summary",
+      "argument_hint": "[--force]"
+    },
+    "stats": {
+      "summary": "Show token usage and cost statistics",
+      "argument_hint": "[--days N] [--by-model] [--by-project]"
+    },
+    "providers": {
+      "summary": "Show provider usage dashboard",
+      "argument_hint": "[--verbose]"
+    },
+    "verify": {
+      "summary": "Verify codebase files against memory entries"
+    },
+    "locale": {
+      "summary": "Show or switch the interface language",
+      "argument_hint": "[pt-BR|en]"
+    }
+  },
+  "locale": {
+    "current": "Current language: %{lang}",
+    "changed": "Language changed to %{lang}",
+    "invalid": "Invalid language. Available: pt-BR, en",
+    "available_header": "Available languages:"
+  }
+}

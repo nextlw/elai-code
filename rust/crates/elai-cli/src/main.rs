@@ -12,6 +12,11 @@ mod tui_sink;
 mod updater;
 mod verify;
 
+// Reaponta o `t!()` deste crate para o mesmo catálogo usado por `commands`.
+// `rust-i18n` exige `i18n!()` em cada crate que invoca a macro `t!()`; o
+// catálogo é compartilhado (mesmo locale global).
+rust_i18n::i18n!("../../locales", fallback = "en");
+
 use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
@@ -75,6 +80,7 @@ Run `elai --help` for usage."
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     load_workspace_dotenv();
+    init_locale();
     let args: Vec<String> = env::args().skip(1).collect();
     let action = parse_args(&args)?;
     // Skip automatic update enforcement for Repl — TUI mode shows a non-blocking
@@ -179,6 +185,63 @@ fn dirs_home() -> Option<std::path::PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
+}
+
+/// Idiomas suportados pelo Elai. Mantém em sincronia com `rust/locales/*.json`.
+const SUPPORTED_LOCALES: &[&str] = &["pt-BR", "en"];
+
+/// Carrega o locale do `~/.elai/config.json` e configura o `rust-i18n`.
+///
+/// Idiomas válidos: ver [`SUPPORTED_LOCALES`]. Locale ausente ou inválido cai
+/// em `pt-BR` silenciosamente (sem panic). Não consulta `LANG`/`LC_*` por
+/// decisão de design — locale é controlado apenas via config + slash command
+/// `/locale`.
+fn init_locale() {
+    let cfg = runtime::global_config::load().unwrap_or_default();
+    let locale = if SUPPORTED_LOCALES.contains(&cfg.locale.as_str()) {
+        cfg.locale.as_str()
+    } else {
+        "pt-BR"
+    };
+    rust_i18n::set_locale(locale);
+}
+
+/// Handler do slash command `/locale [<idioma>]`.
+///
+/// - Sem argumento: imprime locale atual + lista de idiomas disponíveis.
+/// - Com argumento válido: troca locale em runtime via `rust_i18n::set_locale`,
+///   persiste em `~/.elai/config.json`, e confirma na nova língua.
+/// - Com argumento inválido: mensagem de erro listando idiomas válidos. Sem
+///   alteração de estado.
+fn handle_locale_command(lang: Option<&str>) {
+    match lang {
+        None => {
+            let current = rust_i18n::locale().to_string();
+            println!("{}", rust_i18n::t!("locale.current", lang = current));
+            println!("{}", rust_i18n::t!("locale.available_header"));
+            for locale in SUPPORTED_LOCALES {
+                println!("  - {locale}");
+            }
+        }
+        Some(lang) if SUPPORTED_LOCALES.contains(&lang) => {
+            rust_i18n::set_locale(lang);
+            match runtime::global_config::load() {
+                Ok(mut cfg) => {
+                    cfg.locale = lang.to_string();
+                    if let Err(e) = runtime::global_config::save(&cfg) {
+                        eprintln!("warning: failed to persist locale: {e}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to load config to persist locale: {e}");
+                }
+            }
+            println!("{}", rust_i18n::t!("locale.changed", lang = lang.to_string()));
+        }
+        Some(_) => {
+            eprintln!("{}", rust_i18n::t!("locale.invalid"));
+        }
+    }
 }
 
 fn has_any_auth() -> bool {
@@ -1652,6 +1715,7 @@ fn run_resume_command(
         | SlashCommand::Providers { .. }
         | SlashCommand::Cache { .. }
         | SlashCommand::Verify
+        | SlashCommand::Locale { .. }
         | SlashCommand::Update
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
@@ -3265,6 +3329,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     Ok(output) => { println!("{output}"); }
                     Err(e) => eprintln!("error running verify: {e}"),
                 }
+                false
+            }
+            SlashCommand::Locale { lang } => {
+                handle_locale_command(lang.as_deref());
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5349,8 +5417,16 @@ impl ApiClient for DefaultRuntimeClient {
                             if let Some(ref tx) = tui_sender {
                                 let _ = tx.send(tui::TuiMsg::ToolCall { name: name.clone(), input: input.clone() });
                             } else {
-                                // Display tool call now that input is fully accumulated
-                                writeln!(out, "\n{}", format_tool_call_start(&name, &input))
+                                // Display tool call now that input is fully accumulated.
+                                // Modo compacto por padrão (uma linha por call); modo verboso
+                                // legacy só quando `ELAI_VERBOSE_TOOLS=1`, preservando o
+                                // output rico para scripts/tests que dependam dele.
+                                let rendered = if cli_tools_verbose() {
+                                    format!("\n{}", format_tool_call_start(&name, &input))
+                                } else {
+                                    format_tool_call_compact(&name, &input)
+                                };
+                                writeln!(out, "{rendered}")
                                     .and_then(|()| out.flush())
                                     .map_err(|error| RuntimeError::new(error.to_string()))?;
                             }
@@ -5630,6 +5706,70 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
     format!(
         "\x1b[38;5;245m╭─ \x1b[1;36m{name}\x1b[0;38;5;245m ─╮\x1b[0m\n\x1b[38;5;245m│\x1b[0m {detail}\n\x1b[38;5;245m╰{border}╯\x1b[0m"
     )
+}
+
+/// Resumo de uma linha (≤ 60 chars) do input de um tool, no formato exibido
+/// pelo modo compacto do CLI não-TUI. Para `bash`/`Bash` extrai o comando; para
+/// tools de arquivo extrai o path; para o resto faz truncação genérica do JSON.
+fn tool_input_one_line(name: &str, input: &str) -> String {
+    let parsed: serde_json::Value =
+        serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
+    let raw = match name {
+        "bash" | "Bash" => parsed
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "read_file" | "Read" | "write_file" | "Write" | "edit_file" | "Edit" => {
+            extract_tool_path(&parsed)
+        }
+        "glob_search" | "Glob" | "grep_search" | "Grep" => parsed
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "web_search" | "WebSearch" => parsed
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => summarize_tool_payload(input),
+    };
+    // Achata quebras de linha e colapsa whitespace para uma única linha visual.
+    let flat = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    flat.chars().take(60).collect::<String>()
+}
+
+/// Formato compacto de tool call para o CLI não-TUI: uma única linha no padrão
+/// `  ⚙ name · input`. Substitui o bloco com bordas ASCII (que ocupava 3 linhas
+/// por chamada) por uma representação enxuta consistente com o `ToolBatchEntry`
+/// da TUI.
+fn format_tool_call_compact(name: &str, input: &str) -> String {
+    let summary = tool_input_one_line(name, input);
+    format!(
+        "  \x1b[38;5;245m\u{2699}\x1b[0m \x1b[1;36m{name}\x1b[0m \x1b[38;5;245m\u{00b7}\x1b[0m \x1b[38;5;250m{summary}\x1b[0m"
+    )
+}
+
+/// Formato compacto do resultado: `    ✓` (sucesso) ou `    ✗` (erro), sem
+/// repetir o nome do tool nem mostrar o output. Output completo é exibido pelo
+/// caller quando `ELAI_VERBOSE_TOOLS=1` está setado ou em caso de erro.
+fn format_tool_result_compact(ok: bool) -> &'static str {
+    if ok {
+        "    \x1b[1;32m\u{2713}\x1b[0m"
+    } else {
+        "    \x1b[1;31m\u{2717}\x1b[0m"
+    }
+}
+
+/// Detecta se o usuário pediu output verboso de tools no modo CLI não-TUI.
+fn cli_tools_verbose() -> bool {
+    std::env::var_os("ELAI_VERBOSE_TOOLS")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
@@ -6220,16 +6360,14 @@ impl CliToolExecutor {
 
         // Also send normal ToolResult for UI display.
         match &result {
-            Ok(output) => {
+            Ok(_) => {
                 if let Some(ref tx_sender) = self.tui_sender {
-                    let summary = output.chars().take(80).collect::<String>();
-                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: true, summary });
+                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: true });
                 }
             }
-            Err(err) => {
+            Err(_) => {
                 if let Some(ref tx_sender) = self.tui_sender {
-                    let summary = err.chars().take(80).collect::<String>();
-                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: false, summary });
+                    let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: false });
                 }
             }
         }
@@ -6269,10 +6407,7 @@ impl ToolExecutor for CliToolExecutor {
                     "SWD full mode: '{tool_name}' está bloqueada. Use [FILE_ACTION] blocks no texto."
                 );
                 if let Some(ref tx) = self.tui_sender {
-                    let _ = tx.send(tui::TuiMsg::ToolResult {
-                        ok: false,
-                        summary: msg.clone(),
-                    });
+                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: false });
                 }
                 return Err(ToolError::new(msg));
             }
@@ -6288,25 +6423,50 @@ impl ToolExecutor for CliToolExecutor {
         match self.tool_registry.execute(tool_name, &value) {
             Ok(output) => {
                 if let Some(ref tx) = self.tui_sender {
-                    let summary = output.chars().take(80).collect::<String>();
-                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: true, summary });
+                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: true });
                 } else if self.emit_output {
-                    let markdown = format_tool_result(tool_name, &output, false);
-                    self.renderer
-                        .stream_markdown(&markdown, &mut io::stdout())
-                        .map_err(|error| ToolError::new(error.to_string()))?;
+                    if cli_tools_verbose() {
+                        // Modo verboso: bloco completo com output formatado.
+                        let markdown = format_tool_result(tool_name, &output, false);
+                        self.renderer
+                            .stream_markdown(&markdown, &mut io::stdout())
+                            .map_err(|error| ToolError::new(error.to_string()))?;
+                    } else {
+                        // Modo compacto: apenas a marcação ✓ indentada, sem
+                        // repetir nome ou despejar output.
+                        let mut stdout = io::stdout();
+                        writeln!(stdout, "{}", format_tool_result_compact(true))
+                            .and_then(|()| stdout.flush())
+                            .map_err(|error| ToolError::new(error.to_string()))?;
+                    }
                 }
                 Ok(output)
             }
             Err(error) => {
                 if let Some(ref tx) = self.tui_sender {
-                    let summary = error.chars().take(80).collect::<String>();
-                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: false, summary });
+                    let _ = tx.send(tui::TuiMsg::ToolResult { ok: false });
                 } else if self.emit_output {
-                    let markdown = format_tool_result(tool_name, &error, true);
-                    self.renderer
-                        .stream_markdown(&markdown, &mut io::stdout())
-                        .map_err(|stream_error| ToolError::new(stream_error.to_string()))?;
+                    if cli_tools_verbose() {
+                        let markdown = format_tool_result(tool_name, &error, true);
+                        self.renderer
+                            .stream_markdown(&markdown, &mut io::stdout())
+                            .map_err(|stream_error| ToolError::new(stream_error.to_string()))?;
+                    } else {
+                        // Erros sempre mostram a mensagem abaixo da marcação ✗,
+                        // mesmo no modo compacto — o usuário precisa ver para
+                        // depurar.
+                        let mut stdout = io::stdout();
+                        let trimmed = error.trim();
+                        let body = if trimmed.is_empty() {
+                            String::new()
+                        } else {
+                            let truncated: String = trimmed.chars().take(160).collect();
+                            format!("\n      \x1b[38;5;203m{truncated}\x1b[0m")
+                        };
+                        writeln!(stdout, "{}{}", format_tool_result_compact(false), body)
+                            .and_then(|()| stdout.flush())
+                            .map_err(|stream_error| ToolError::new(stream_error.to_string()))?;
+                    }
                 }
                 Err(ToolError::new(error))
             }
@@ -6428,7 +6588,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out)?;
     let resume_commands = resume_supported_slash_commands()
         .into_iter()
-        .map(|spec| match spec.argument_hint {
+        .map(|spec| match spec.argument_hint() {
             Some(argument_hint) => format!("/{} {}", spec.name, argument_hint),
             None => format!("/{}", spec.name),
         })
@@ -6854,7 +7014,7 @@ mod tests {
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
                 "version", "export", "agents", "skills", "budget", "tools", "stats", "providers",
-                "verify",
+                "verify", "locale",
             ]
         );
     }
