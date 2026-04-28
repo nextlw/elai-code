@@ -17,6 +17,14 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub output_format: OutputFormat,
 
+    /// Assume "yes" to all confirmations (non-interactive / agent mode)
+    #[arg(long, global = true)]
+    pub yes: bool,
+
+    /// Assume "no" to all confirmations (non-interactive / agent mode)
+    #[arg(long, global = true)]
+    pub no: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -37,6 +45,68 @@ pub enum Command {
     Auth {
         #[command(subcommand)]
         cmd: AuthCmd,
+    },
+    /// Send a message directly without opening the TUI
+    Send {
+        /// Message to send. Use "-" or --stdin to read from stdin.
+        message: Vec<String>,
+        /// Wait for the full response before returning (default: streaming)
+        #[arg(long)]
+        wait: bool,
+        /// Output response as JSON
+        #[arg(long)]
+        json: bool,
+        /// Read message from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// View chat history
+    Chat {
+        #[command(subcommand)]
+        cmd: ChatCmd,
+    },
+    /// Manage the active model
+    Model {
+        #[command(subcommand)]
+        cmd: ModelCmd,
+    },
+    /// Reply to a pending question from the model
+    Reply {
+        /// The answer to provide
+        answer: Vec<String>,
+        /// Read answer from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Show current session status
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum ChatCmd {
+    /// Show recent chat history
+    Show {
+        /// Number of messages to show
+        #[arg(long, default_value = "20")]
+        last: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum ModelCmd {
+    /// Show the currently active model
+    Get,
+    /// Set the active model
+    Set {
+        /// Model name or alias (e.g. opus, sonnet, claude-opus-4-6)
+        model: String,
     },
 }
 
@@ -79,6 +149,9 @@ pub struct LoginArgs {
     /// Use the legacy elai.dev OAuth flow (deprecated)
     #[arg(long)]
     pub legacy_elai: bool,
+    /// Import credentials from Claude Code (~/.claude/credentials.json) without interaction
+    #[arg(long, group = "method")]
+    pub import_claude_code: bool,
 }
 
 impl Default for LoginArgs {
@@ -96,6 +169,7 @@ impl Default for LoginArgs {
             no_browser: false,
             stdin: false,
             legacy_elai: false,
+            import_claude_code: false,
         }
     }
 }
@@ -129,7 +203,7 @@ pub enum OutputFormat {
 mod tests {
     use clap::Parser;
 
-    use super::{AuthCmd, Cli, Command, LoginArgs, OutputFormat, PermissionMode};
+    use super::{AuthCmd, ChatCmd, Cli, Command, LoginArgs, ModelCmd, OutputFormat, PermissionMode};
 
     #[test]
     fn parses_requested_flags() {
@@ -147,7 +221,6 @@ mod tests {
             "hello",
             "world",
         ]);
-
         assert_eq!(cli.model, "claude-haiku-4-5-20251001");
         assert_eq!(cli.permission_mode, PermissionMode::ReadOnly);
         assert_eq!(
@@ -201,7 +274,6 @@ mod tests {
 
     #[test]
     fn login_with_email_implies_login_hint_only() {
-        // --email without a method flag is still valid
         let cli = Cli::parse_from(["elai-cli", "login", "--email", "user@example.com"]);
         assert_eq!(
             cli.command,
@@ -219,6 +291,91 @@ mod tests {
             cli.command,
             Some(Command::Auth {
                 cmd: AuthCmd::Status { json: true }
+            })
+        );
+    }
+
+    #[test]
+    fn parses_send_command() {
+        let cli = Cli::parse_from(["elai-cli", "send", "hello", "world"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Send {
+                message: vec!["hello".into(), "world".into()],
+                wait: false,
+                json: false,
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_send_with_json_flag() {
+        let cli = Cli::parse_from(["elai-cli", "send", "--json", "explain this"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Send {
+                message: vec!["explain this".into()],
+                wait: false,
+                json: true,
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_login_import_claude_code() {
+        let cli = Cli::parse_from(["elai-cli", "login", "--import-claude-code"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Login(LoginArgs {
+                import_claude_code: true,
+                ..LoginArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_model_set() {
+        let cli = Cli::parse_from(["elai-cli", "model", "set", "claude-opus-4-6"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Model {
+                cmd: ModelCmd::Set {
+                    model: "claude-opus-4-6".into()
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn parses_model_get() {
+        let cli = Cli::parse_from(["elai-cli", "model", "get"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Model { cmd: ModelCmd::Get })
+        );
+    }
+
+    #[test]
+    fn parses_status_json() {
+        let cli = Cli::parse_from(["elai-cli", "status", "--json"]);
+        assert_eq!(cli.command, Some(Command::Status { json: true }));
+    }
+
+    #[test]
+    fn parses_yes_flag_globally() {
+        let cli = Cli::parse_from(["elai-cli", "--yes", "send", "hello"]);
+        assert!(cli.yes);
+    }
+
+    #[test]
+    fn parses_chat_show() {
+        let cli = Cli::parse_from(["elai-cli", "chat", "show", "--last", "5"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Chat {
+                cmd: ChatCmd::Show { last: 5, json: false }
             })
         );
     }

@@ -133,6 +133,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let report = perform_uninstall();
             println!("{report}");
         }
+        CliAction::Send { message, wait, json } => run_headless_send(&message, wait, json)?,
+        CliAction::ChatShow { last, json } => run_chat_show(last, json)?,
+        CliAction::ModelGet => run_model_get()?,
+        CliAction::ModelSet { model } => run_model_set(&model)?,
+        CliAction::Reply { answer } => run_reply(&answer)?,
+        CliAction::StatusCmd { json } => run_status_cmd(json)?,
     }
     Ok(())
 }
@@ -281,6 +287,28 @@ enum CliAction {
         days: Option<u32>,
         by_model: bool,
         by_project: bool,
+    },
+    // -----------------------------------------------------------------------
+    // Headless / agent-mode commands
+    // -----------------------------------------------------------------------
+    Send {
+        message: String,
+        wait: bool,
+        json: bool,
+    },
+    ChatShow {
+        last: usize,
+        json: bool,
+    },
+    ModelGet,
+    ModelSet {
+        model: String,
+    },
+    Reply {
+        answer: String,
+    },
+    StatusCmd {
+        json: bool,
     },
 }
 
@@ -576,6 +604,17 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode,
             })
         }
+        "send" => parse_send_args(&rest[1..]),
+        "chat" => parse_chat_args(&rest[1..]),
+        "model" => parse_model_args(&rest[1..]),
+        "reply" => {
+            let answer = rest[1..].join(" ");
+            Ok(CliAction::Reply { answer })
+        }
+        "status" => {
+            let json = rest[1..].iter().any(|a| a == "--json");
+            Ok(CliAction::StatusCmd { json })
+        }
         other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
         _other => Ok(CliAction::Prompt {
             prompt: rest.join(" "),
@@ -626,6 +665,9 @@ fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
             "--no-browser" => { login_args.no_browser = true; idx += 1; }
             "--stdin" => { login_args.stdin = true; idx += 1; }
             "--legacy-elai" => { login_args.legacy_elai = true; idx += 1; }
+            "--import-claude-code" => { login_args.import_claude_code = true; idx += 1; }
+            "--yes" => { idx += 1; } // accepted but no-op at this layer (auth.rs uses it)
+            "--no" => { idx += 1; }
             "--email" => {
                 let value = args
                     .get(idx + 1)
@@ -659,6 +701,71 @@ fn parse_auth_args(args: &[String]) -> Result<CliAction, String> {
         }),
         "" => Err("auth requires a subcommand: status, list".to_string()),
         other => Err(format!("unknown auth subcommand: {other}")),
+    }
+}
+
+fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
+    let mut wait = false;
+    let mut json = false;
+    let mut stdin = false;
+    let mut parts: Vec<String> = Vec::new();
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--wait" => { wait = true; idx += 1; }
+            "--json" => { json = true; idx += 1; }
+            "--stdin" | "-" => { stdin = true; idx += 1; }
+            other => { parts.push(other.to_string()); idx += 1; }
+        }
+    }
+    let message = if stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).map_err(|e| e.to_string())?;
+        buf.trim().to_string()
+    } else {
+        parts.join(" ")
+    };
+    if message.is_empty() {
+        return Err("send requires a message; use 'elai send \"text\"' or 'echo text | elai send -'".into());
+    }
+    Ok(CliAction::Send { message, wait, json })
+}
+
+fn parse_chat_args(args: &[String]) -> Result<CliAction, String> {
+    let sub = args.first().map(String::as_str).unwrap_or("show");
+    match sub {
+        "show" | "" => {
+            let mut last = 20usize;
+            let mut json = false;
+            let mut idx = 1;
+            while idx < args.len() {
+                match args[idx].as_str() {
+                    "--json" => { json = true; idx += 1; }
+                    s if s.starts_with("--last=") => { last = s[7..].parse().unwrap_or(last); idx += 1; }
+                    "--last" => {
+                        if let Some(v) = args.get(idx + 1) { last = v.parse().unwrap_or(last); idx += 2; } else { idx += 1; }
+                    }
+                    _ => { idx += 1; }
+                }
+            }
+            Ok(CliAction::ChatShow { last, json })
+        }
+        other => Err(format!("unknown chat subcommand: {other}; expected: show")),
+    }
+}
+
+fn parse_model_args(args: &[String]) -> Result<CliAction, String> {
+    match args.first().map(String::as_str) {
+        Some("get") | None => Ok(CliAction::ModelGet),
+        Some("set") => {
+            let model = args.get(1).cloned().unwrap_or_default();
+            if model.is_empty() {
+                return Err("model set requires a model name".into());
+            }
+            Ok(CliAction::ModelSet { model })
+        }
+        Some(other) => Err(format!("unknown model subcommand: {other}; expected: get, set")),
     }
 }
 
@@ -908,6 +1015,150 @@ fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
         }
     };
     print!("{}", render_stats_report(&entries, by_model, by_project, days));
+}
+
+// ---------------------------------------------------------------------------
+// Headless / agent-mode handlers
+// ---------------------------------------------------------------------------
+
+/// `elai send "message"` — fire a single prompt and print the response to stdout.
+/// With `--wait` it waits for the full response (default); always waits currently.
+/// With `--json` it emits JSON (same structure as CliAction::Prompt with --output-format=json).
+fn run_headless_send(message: &str, _wait: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let model = suggested_default_model();
+    let output_format = if json { CliOutputFormat::Json } else { CliOutputFormat::Text };
+    let allowed_tools = None;
+    let permission_mode = default_permission_mode();
+    LiveCli::new(model, true, allowed_tools, permission_mode, false)?
+        .run_turn_with_output(message, output_format)
+}
+
+/// `elai chat show [--last N] [--json]` — show the last N messages from the most-recent session.
+fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let sessions_path = sessions_dir()?;
+    // Find most-recently-modified session file
+    let mut entries: Vec<_> = fs::read_dir(&sessions_path)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+    entries.reverse();
+    let session_path = match entries.first() {
+        Some(entry) => entry.path(),
+        None => {
+            println!("No sessions found.");
+            return Ok(());
+        }
+    };
+    let session = runtime::Session::load_from_path(&session_path)
+        .map_err(|e| format!("could not load session: {e}"))?;
+    let messages = &session.messages;
+    let start = messages.len().saturating_sub(last);
+    let slice = &messages[start..];
+    if json {
+        let arr: Vec<serde_json::Value> = slice.iter().map(|msg| {
+            let role = format!("{:?}", msg.role).to_lowercase();
+            let text: Vec<String> = msg.blocks.iter().filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            }).collect();
+            serde_json::json!({ "role": role, "text": text.join("\n") })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&arr)?);
+    } else {
+        println!("Session: {}", session_path.display());
+        println!("Messages: {} (showing last {})", messages.len(), slice.len());
+        println!("{}", "─".repeat(60));
+        for msg in slice {
+            let role = format!("{:?}", msg.role);
+            let text: String = msg.blocks.iter().filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            }).collect::<Vec<_>>().join("\n");
+            println!("[{role}] {}", text.lines().take(5).collect::<Vec<_>>().join(" ↵ "));
+        }
+    }
+    Ok(())
+}
+
+/// `elai model get` — print the current resolved default model.
+fn run_model_get() -> Result<(), Box<dyn std::error::Error>> {
+    let model = suggested_default_model();
+    // Check for a persisted override
+    let override_model: Option<String> = std::env::var("ELAI_DEFAULT_OPENAI_MODEL").ok()
+        .filter(|v| !v.trim().is_empty());
+    if let Some(ref ov) = override_model {
+        println!("{ov}");
+    } else {
+        println!("{model}");
+    }
+    Ok(())
+}
+
+/// `elai model set MODEL` — persist the preferred model to `~/.elai/.env`.
+fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "HOME is not set")?;
+    let env_path = home.join(".elai").join(".env");
+    std::fs::create_dir_all(env_path.parent().unwrap())?;
+    // Read existing content, replace or append ELAI_DEFAULT_OPENAI_MODEL
+    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let key = "ELAI_DEFAULT_OPENAI_MODEL";
+    let new_line = format!("{key}={model}");
+    let updated: String = if existing.lines().any(|l| l.starts_with(&format!("{key}="))) {
+        existing.lines()
+            .map(|l| if l.starts_with(&format!("{key}=")) { new_line.as_str() } else { l })
+            .collect::<Vec<_>>()
+            .join("\n") + "\n"
+    } else {
+        if existing.is_empty() || existing.ends_with('\n') {
+            format!("{existing}{new_line}\n")
+        } else {
+            format!("{existing}\n{new_line}\n")
+        }
+    };
+    std::fs::write(&env_path, &updated)?;
+    println!("Model set to: {model}");
+    println!("Saved to: {}", env_path.display());
+    Ok(())
+}
+
+/// `elai reply "answer"` — send a reply in the context of the most recent session.
+/// Implemented as a headless send (the session continuity is handled by LiveCli resumption).
+fn run_reply(answer: &str) -> Result<(), Box<dyn std::error::Error>> {
+    run_headless_send(answer, true, false)
+}
+
+/// `elai status [--json]` — show elai version, current model, auth state, and cwd.
+fn run_status_cmd(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let version = env!("CARGO_PKG_VERSION");
+    let model = suggested_default_model();
+    let auth_info = auth::dispatch_auth_status(false).map_or_else(
+        |_| "unknown".to_string(),
+        |_| String::new(), // dispatch_auth_status prints itself when json=false
+    );
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let _ = auth_info;
+    if json {
+        // Build JSON manually; auth info comes from collect_auth_info via dispatch
+        let has_auth = has_any_auth();
+        println!("{}", serde_json::json!({
+            "version": version,
+            "model": model,
+            "has_auth": has_auth,
+            "cwd": cwd,
+        }));
+    } else {
+        println!("elai {version}");
+        println!("model  : {model}");
+        println!("cwd    : {cwd}");
+        println!("auth   :");
+        let _ = auth::dispatch_auth_status(false);
+    }
+    Ok(())
 }
 
 fn run_verify_command() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,6 +1,19 @@
 #!/usr/bin/env sh
 set -eu
 
+# -- Argument parsing (non-interactive / agent mode) -------------------------
+# Usage: curl -fsSL .../install.sh | sh -s -- --auth=import-claude-code
+#        curl -fsSL .../install.sh | sh -s -- --skip-auth
+_ELAI_AUTH_METHOD=""
+_ELAI_SKIP_AUTH=false
+for _arg in "$@"; do
+  case "$_arg" in
+    --auth=import-claude-code) _ELAI_AUTH_METHOD="import-claude-code" ;;
+    --auth=skip|--skip-auth)   _ELAI_SKIP_AUTH=true ;;
+    --auth=*)                  _ELAI_AUTH_METHOD="${_arg#--auth=}" ;;
+  esac
+done
+
 REPO="nextlw/elai-code"
 BIN_NAME="elai"
 
@@ -204,9 +217,28 @@ printf "    [5] Paste an ANTHROPIC_AUTH_TOKEN\n"
 printf "    [6] AWS Bedrock / Google Vertex / Azure Foundry\n"
 printf "    [7] OpenAI only (no Anthropic) — keys go to ~/.elai/.env\n"
 printf "    [8] Skip — configure later with \`elai login\`\n\n"
-printf "  Choose [1]: "
-read -r AUTH_CHOICE </dev/tty
-AUTH_CHOICE="${AUTH_CHOICE:-1}"
+
+if [ "$_ELAI_SKIP_AUTH" = true ]; then
+  printf "  (auth pulado -- configure com: elai login)\n"
+  AUTH_CHOICE=8
+elif [ "$_ELAI_AUTH_METHOD" = "import-claude-code" ]; then
+  printf "  Importando credenciais do Claude Code...\n"
+  if "$ELAI_BIN" login --import-claude-code --yes 2>/dev/null; then
+    ok "Autenticado via Claude Code"
+    AUTH_CHOICE=done
+  else
+    printf "  Credenciais nao encontradas. Use: elai login\n"
+    AUTH_CHOICE=8
+  fi
+elif [ -t 0 ] && [ -t 1 ]; then
+  printf "  Choose [1]: "
+  read -r AUTH_CHOICE </dev/tty
+  AUTH_CHOICE="${AUTH_CHOICE:-1}"
+else
+  printf "  (shell nao-interativo -- autentique com: elai login)\n"
+  printf "  Dica: reinstale com: curl -fsSL .../install.sh | sh -s -- --auth=import-claude-code\n"
+  AUTH_CHOICE=8
+fi
 
 case "$AUTH_CHOICE" in
   1)
