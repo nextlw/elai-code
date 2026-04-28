@@ -3601,6 +3601,7 @@ dependencies = [
 name = "runtime"
 version = "0.6.5"
 dependencies = [
+ "code_index",
  "dirs 6.0.0",
  "filetime",
  "glob",

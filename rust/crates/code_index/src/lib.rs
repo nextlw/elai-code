@@ -2,6 +2,7 @@ pub mod chunker;
 pub mod embed;
 pub mod facts;
 pub mod indexer;
+pub mod progress;
 pub mod store;
 pub mod walker;
 
@@ -14,7 +15,8 @@ pub use embed::LocalFastEmbedder;
 #[cfg(feature = "embed-http")]
 pub use embed::OllamaEmbedder;
 pub use facts::{collect_facts, DirSummary, ProjectFacts, TopSymbol};
-pub use indexer::{IndexError, Indexer};
+pub use indexer::{IndexError, IndexPhase, IndexProgress, Indexer};
+pub use progress::{progress_bar, progress_bar_labeled};
 pub use store::{Filter, Hit, IndexPoint, MemoryStore, StoreError, VectorStore};
 #[cfg(feature = "vec-sqlite")]
 pub use store::SqliteVecStore;

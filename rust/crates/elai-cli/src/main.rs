@@ -35,7 +35,7 @@ use commands::{
     slash_command_specs, try_user_command, SlashCommand, UserCommandRegistry,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
-use init::initialize_repo;
+use init::{initialize_repo, initialize_repo_with};
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
@@ -1989,7 +1989,7 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::SlashCommand(cmd) => {
-                    handle_tui_slash_command(cmd, &mut app, &session, &budget_tracker);
+                    handle_tui_slash_command(cmd, &mut app, &session, &budget_tracker, &msg_tx);
                 }
                 tui::TuiAction::EnterReadMode => {
                     app.read_mode = true;
@@ -2086,6 +2086,7 @@ fn handle_tui_slash_command(
     app: &mut tui::UiApp,
     session: &Arc<std::sync::Mutex<Session>>,
     budget_tracker: &std::sync::Arc<std::sync::Mutex<BudgetTracker>>,
+    msg_tx: &mpsc::Sender<tui::TuiMsg>,
 ) {
     // Remove the thinking flag since slash commands don't call the runtime.
     app.thinking = false;
@@ -2273,15 +2274,27 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             }
         }
         "init" => {
-            let cwd = env::current_dir().unwrap_or_default();
-            match initialize_repo(&cwd, &crate::args::InitArgs::default()) {
-                Ok(report) => app.push_chat(tui::ChatEntry::SystemNote(
-                    format!("✅ {}", report.render()),
-                )),
-                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "❌ Erro no /init: {e}"
-                ))),
-            }
+            // Spawn em thread para não bloquear o TUI durante a indexação.
+            // Progresso vai para o chat via TuiMsg::SystemNote.
+            let tx = msg_tx.clone();
+            let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let args = crate::args::InitArgs::default();
+            std::thread::spawn(move || {
+                let send_note = |s: &str| {
+                    let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string()));
+                };
+                match initialize_repo_with(&cwd, &args, &send_note) {
+                    Ok(report) => {
+                        let _ = tx.send(tui::TuiMsg::SystemNote(format!("✅ {}", report.render())));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("init: {e}")));
+                    }
+                }
+            });
+            app.push_chat(tui::ChatEntry::SystemNote(
+                "Iniciando /init em background...".to_string(),
+            ));
         }
         "verify" => {
             let cwd = env::current_dir().unwrap_or_default();

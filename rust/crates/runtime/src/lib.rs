@@ -1,6 +1,7 @@
 mod bash;
 mod bootstrap;
 pub mod global_config;
+pub mod progress;
 pub mod auto_dream;
 pub mod tasks;
 mod response_cache;
@@ -139,6 +140,10 @@ pub use tasks::{
 pub use telemetry::{
     default_telemetry_path, load_entries, now_iso8601, now_millis, TelemetryEntry, TelemetryEvent,
     TelemetryHandle, TelemetryShutdown, TelemetryWorker, TelemetryWriter,
+};
+pub use progress::{
+    progress_bar, progress_bar_labeled, CollectingReporter, EprintlnReporter, NoopReporter,
+    ProgressReporter,
 };
 
 #[cfg(test)]

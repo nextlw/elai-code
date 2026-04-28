@@ -61,6 +61,26 @@ impl From<StoreError> for IndexError {
     }
 }
 
+// ─── IndexProgress ────────────────────────────────────────────────────────────
+
+/// Phase reported by [`Indexer::index_full_with`] during progress callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexPhase {
+    Walking,
+    Chunking,
+    Embedding,
+    Done,
+}
+
+/// Progress snapshot emitted to the callback in [`Indexer::index_full_with`].
+#[derive(Debug, Clone)]
+pub struct IndexProgress {
+    pub phase: IndexPhase,
+    pub current: usize,
+    pub total: usize,
+    pub message: Option<String>,
+}
+
 // ─── Indexer ──────────────────────────────────────────────────────────────────
 
 /// Orchestrates walk → read → chunk → embed → upsert for a project root.
@@ -91,12 +111,41 @@ impl<C: Chunker> Indexer<C> {
 
     /// Full walk + reindex. Returns stats about what was indexed.
     pub fn index_full(&self) -> Result<IndexerStats, IndexError> {
+        self.index_full_with(|_| {})
+    }
+
+    /// Full walk + reindex with a progress callback.
+    ///
+    /// The callback receives an [`IndexProgress`] at key phases:
+    /// - `Walking` before the directory walk starts.
+    /// - `Chunking` after the walk (with `total` = number of files found).
+    /// - `Embedding` after each batch is flushed (`current`/`total` in chunks).
+    /// - `Done` after all chunks are stored.
+    pub fn index_full_with<F: Fn(IndexProgress)>(
+        &self,
+        progress: F,
+    ) -> Result<IndexerStats, IndexError> {
         let start = Instant::now();
+
+        progress(IndexProgress {
+            phase: IndexPhase::Walking,
+            current: 0,
+            total: 0,
+            message: None,
+        });
+
         let opts = WalkOptions {
             max_file_bytes: MAX_FILE_BYTES,
             follow_symlinks: false,
         };
         let files = walk_project_with(&self.root, &opts);
+
+        progress(IndexProgress {
+            phase: IndexPhase::Chunking,
+            current: 0,
+            total: files.len(),
+            message: None,
+        });
 
         let mut stats = IndexerStats::default();
         let mut all_chunks: Vec<(Chunk, u32)> = Vec::new();
@@ -132,16 +181,40 @@ impl<C: Chunker> Indexer<C> {
 
         // Embed in batches
         let total_chunks = all_chunks.len();
+        let mut chunks_done: usize = 0;
         let mut buffer: Vec<(Chunk, u32)> = Vec::with_capacity(self.batch_size);
         for entry in all_chunks {
             buffer.push(entry);
             if buffer.len() >= self.batch_size {
+                let batch_len = buffer.len();
                 self.flush_batch(&mut buffer)?;
+                chunks_done += batch_len;
+                progress(IndexProgress {
+                    phase: IndexPhase::Embedding,
+                    current: chunks_done,
+                    total: total_chunks,
+                    message: None,
+                });
             }
         }
         if !buffer.is_empty() {
+            let batch_len = buffer.len();
             self.flush_batch(&mut buffer)?;
+            chunks_done += batch_len;
+            progress(IndexProgress {
+                phase: IndexPhase::Embedding,
+                current: chunks_done,
+                total: total_chunks,
+                message: None,
+            });
         }
+
+        progress(IndexProgress {
+            phase: IndexPhase::Done,
+            current: total_chunks,
+            total: total_chunks,
+            message: None,
+        });
 
         stats.chunks_indexed = total_chunks;
         stats.elapsed_ms = start.elapsed().as_millis();

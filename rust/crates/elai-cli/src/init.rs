@@ -1,3 +1,8 @@
+//! NOTE: progress reporting follows the TUI-safe pattern documented at
+//! `rust/docs/progress-pattern.md`. Use `runtime::ProgressReporter` (or any
+//! `Fn(&str) + Send + Sync` closure via blanket impl) instead of `eprintln!`
+//! to avoid corrupting the ratatui alternate screen.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -78,6 +83,14 @@ pub(crate) fn initialize_repo(
     cwd: &Path,
     args: &InitArgs,
 ) -> Result<InitReport, Box<dyn std::error::Error>> {
+    initialize_repo_with(cwd, args, &|s: &str| eprintln!("  {s}"))
+}
+
+pub(crate) fn initialize_repo_with(
+    cwd: &Path,
+    args: &InitArgs,
+    progress: &dyn Fn(&str),
+) -> Result<InitReport, Box<dyn std::error::Error>> {
     let mut artifacts = Vec::new();
 
     // 1. Basic structure
@@ -113,14 +126,14 @@ pub(crate) fn initialize_repo(
     }
 
     // 2. Collect project facts (always, even with --no-index, for the static template)
-    eprintln!("  Analisando projeto...");
+    progress("Analisando projeto...");
     let facts = collect_facts(cwd).map_err(|e| format!("collect_facts: {e}"))?;
     let facts_json = serde_json::to_string_pretty(&facts)?;
 
     // 3. Indexing (unless --no-index)
     let mut index_stats: Option<IndexerStats> = None;
     if !args.no_index {
-        index_stats = Some(run_indexing(cwd, &index_dir, args)?);
+        index_stats = Some(run_indexing_with_progress(cwd, &index_dir, args, progress)?);
     }
 
     // 4. Generate ELAI.md
@@ -153,12 +166,13 @@ pub(crate) fn initialize_repo(
     })
 }
 
-fn run_indexing(
+fn run_indexing_with_progress(
     cwd: &Path,
     index_dir: &Path,
     args: &InitArgs,
+    progress: &dyn Fn(&str),
 ) -> Result<IndexerStats, Box<dyn std::error::Error>> {
-    let embedder: Arc<dyn Embedder> = build_embedder(args)?;
+    let embedder: Arc<dyn Embedder> = build_embedder_with_progress(args, progress)?;
     let store: Arc<dyn VectorStore> = build_store(index_dir, args, embedder.dim())?;
 
     if args.reindex {
@@ -167,17 +181,32 @@ fn run_indexing(
 
     let chunker = DefaultChunker::new();
     let indexer = Indexer::new(cwd, embedder, store, chunker);
-    eprintln!("  Indexando código (isso pode demorar)...");
-    let stats = indexer.index_full()?;
-    eprintln!(
-        "  Indexacao concluida: {} arquivos, {} chunks em {} ms",
+    progress("Indexando código (isso pode demorar)...");
+    let stats = indexer.index_full_with(|p| {
+        match p.phase {
+            code_index::IndexPhase::Walking => progress("Walking project files..."),
+            code_index::IndexPhase::Chunking => progress(&format!(
+                "Chunking files: {} encontrado(s)",
+                p.total
+            )),
+            code_index::IndexPhase::Embedding => {
+                let bar = code_index::progress_bar_labeled("Embedding", p.current, p.total, 20);
+                progress(&bar);
+            }
+            code_index::IndexPhase::Done => {}
+        }
+    })?;
+    progress(&format!(
+        "✓ Indexação concluída: {} arquivos, {} chunks em {} ms",
         stats.files_indexed, stats.chunks_indexed, stats.elapsed_ms,
-    );
+    ));
     Ok(stats)
 }
 
 #[cfg(feature = "embed-fastembed")]
-fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+fn build_local_embedder_with_progress(
+    progress: &dyn Fn(&str),
+) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     // Cache do fastembed em ~/.elai/fastembed_cache (centralizado, removido
     // pelo `elai uninstall`). Se vazio, primeira run baixa ~125 MB.
     let cache_dir = std::env::var_os("HOME")
@@ -187,27 +216,27 @@ fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error
         .as_ref()
         .is_some_and(|p| p.is_dir() && p.read_dir().is_ok_and(|mut d| d.next().is_some()));
     if !cache_populated {
-        eprintln!(
-            "  Baixando modelo de embedding (BGE-small, ~125 MB). Apenas na primeira execução."
-        );
-        eprintln!("  (Defina ELAI_FASTEMBED_PROGRESS=1 para ver progresso fora do TUI.)");
+        progress("Baixando modelo de embedding (BGE-small, ~125 MB) — primeira execução.");
     }
     let e = code_index::LocalFastEmbedder::new()?;
     Ok(Arc::new(e))
 }
 
 #[cfg(not(feature = "embed-fastembed"))]
-fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+fn build_local_embedder_with_progress(
+    _progress: &dyn Fn(&str),
+) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     Err("embed-provider 'local' não está disponível neste binário (compilado sem \
          embed-fastembed). Use --embed-provider ollama ou um endpoint HTTP."
         .into())
 }
 
-fn build_embedder(
+fn build_embedder_with_progress(
     args: &InitArgs,
+    progress: &dyn Fn(&str),
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     match args.embed_provider {
-        EmbedProviderArg::Local => build_local_embedder(),
+        EmbedProviderArg::Local => build_local_embedder_with_progress(progress),
         EmbedProviderArg::Ollama => {
             let url = args
                 .ollama_url
