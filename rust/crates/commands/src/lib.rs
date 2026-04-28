@@ -1,5 +1,9 @@
 pub mod providers;
 pub mod stats;
+pub mod user_commands;
+pub use user_commands::{
+    expand_template, parse_user_command, UserCommand, UserCommandRegistry, UserCommandScope,
+};
 
 use std::collections::BTreeMap;
 use std::env;
@@ -42,14 +46,95 @@ impl CommandRegistry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Categoria de agrupamento exibida no `/help`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlashCategory {
+    /// /help, /status, /clear, /compact, /resume, /export, /cost
+    Session,
+    /// /model, /permissions, /tools, /budget, /cache, /providers
+    Behavior,
+    /// /init, /memory, /config, /verify
+    Project,
+    /// /diff, /branch, /worktree, /commit, /commit-push-pr, /pr, /issue
+    Git,
+    /// /bughunter, /ultraplan, /teleport, /debug-tool-call
+    Analysis,
+    /// /version, /update, /commands
+    System,
+    /// /plugin, /agents, /skills, /dream, /stats, /session
+    Plugins,
+    /// comandos .md do usuário
+    Custom,
+}
+
+impl SlashCategory {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Session => "Session",
+            Self::Behavior => "Behavior",
+            Self::Project => "Project",
+            Self::Git => "Git",
+            Self::Analysis => "Analysis",
+            Self::System => "System",
+            Self::Plugins => "Plugins",
+            Self::Custom => "Custom",
+        }
+    }
+
+    #[must_use]
+    pub const fn order(self) -> u8 {
+        match self {
+            Self::Session => 0,
+            Self::Behavior => 1,
+            Self::Project => 2,
+            Self::Git => 3,
+            Self::Analysis => 4,
+            Self::System => 5,
+            Self::Plugins => 6,
+            Self::Custom => 7,
+        }
+    }
+}
+
+/// Predicado padrão: sempre habilitado.
+#[must_use]
+pub const fn always_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct SlashCommandSpec {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
     pub summary: &'static str,
     pub argument_hint: Option<&'static str>,
     pub resume_supported: bool,
+    /// Categoria para agrupamento no /help.
+    pub category: SlashCategory,
+    /// Predicado runtime — se retornar `false` o comando é omitido do /help.
+    pub is_enabled: fn() -> bool,
+    /// Se `true`, não aparece no /help mas continua parseável.
+    pub hidden: bool,
+    /// Nome de exibição alternativo; se `None`, usa `name`.
+    pub user_facing_name: Option<&'static str>,
 }
+
+impl PartialEq for SlashCommandSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.aliases == other.aliases
+            && self.summary == other.summary
+            && self.argument_hint == other.argument_hint
+            && self.resume_supported == other.resume_supported
+            && self.category == other.category
+            && self.hidden == other.hidden
+            && self.user_facing_name == other.user_facing_name
+        // is_enabled intentionally excluded from equality (fn pointer comparison is unreliable)
+    }
+}
+
+impl Eq for SlashCommandSpec {}
 
 const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
@@ -58,6 +143,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show available slash commands",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "status",
@@ -65,6 +154,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show current session status",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "compact",
@@ -72,6 +165,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Compact local session history",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "model",
@@ -79,6 +176,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show or switch the active model",
         argument_hint: Some("[model]"),
         resume_supported: false,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "permissions",
@@ -86,6 +187,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show or switch the active permission mode",
         argument_hint: Some("[read-only|workspace-write|danger-full-access]"),
         resume_supported: false,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "clear",
@@ -93,6 +198,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Start a fresh local session",
         argument_hint: Some("[--confirm]"),
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "cost",
@@ -100,6 +209,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show cumulative token usage for this session",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "resume",
@@ -107,6 +220,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Load a saved session into the REPL",
         argument_hint: Some("<session-path>"),
         resume_supported: false,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "config",
@@ -114,6 +231,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Inspect Elai config files or merged sections",
         argument_hint: Some("[env|hooks|model|plugins]"),
         resume_supported: true,
+        category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "memory",
@@ -121,6 +242,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Inspect loaded Elai instruction memory files",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "init",
@@ -128,6 +253,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Create a starter ELAI.md for this repo",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "diff",
@@ -135,6 +264,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show git diff for current workspace changes",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "version",
@@ -142,6 +275,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show CLI version and build information",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::System,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "update",
@@ -149,6 +286,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Check for and install the latest Elai Code release",
         argument_hint: None,
         resume_supported: false,
+        category: SlashCategory::System,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "bughunter",
@@ -156,6 +297,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Inspect the codebase for likely bugs",
         argument_hint: Some("[scope]"),
         resume_supported: false,
+        category: SlashCategory::Analysis,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "branch",
@@ -163,6 +308,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "List, create, or switch git branches",
         argument_hint: Some("[list|create <name>|switch <name>]"),
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "worktree",
@@ -170,6 +319,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "List, add, remove, or prune git worktrees",
         argument_hint: Some("[list|add <path> [branch]|remove <path>|prune]"),
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "commit",
@@ -177,6 +330,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Generate a commit message and create a git commit",
         argument_hint: None,
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "commit-push-pr",
@@ -184,6 +341,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Commit workspace changes, push the branch, and open a PR",
         argument_hint: Some("[context]"),
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "pr",
@@ -191,6 +352,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Draft or create a pull request from the conversation",
         argument_hint: Some("[context]"),
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "issue",
@@ -198,6 +363,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Draft or create a GitHub issue from the conversation",
         argument_hint: Some("[context]"),
         resume_supported: false,
+        category: SlashCategory::Git,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "ultraplan",
@@ -205,6 +374,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Run a deep planning prompt with multi-step reasoning",
         argument_hint: Some("[task]"),
         resume_supported: false,
+        category: SlashCategory::Analysis,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "teleport",
@@ -212,6 +385,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Jump to a file or symbol by searching the workspace",
         argument_hint: Some("<symbol-or-path>"),
         resume_supported: false,
+        category: SlashCategory::Analysis,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "debug-tool-call",
@@ -219,6 +396,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Replay the last tool call with debug details",
         argument_hint: None,
         resume_supported: false,
+        category: SlashCategory::Analysis,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "export",
@@ -226,6 +407,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Export the current conversation to a file",
         argument_hint: Some("[file]"),
         resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "session",
@@ -233,6 +418,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "List or switch managed local sessions",
         argument_hint: Some("[list|switch <session-id>]"),
         resume_supported: false,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "plugin",
@@ -242,6 +431,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
             "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
         ),
         resume_supported: false,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "agents",
@@ -249,6 +442,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "List configured agents",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "skills",
@@ -256,6 +453,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "List available skills",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "budget",
@@ -263,6 +464,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Budget limiter (tokens/cost USD)",
         argument_hint: Some("[tokens] [usd] | off"),
         resume_supported: true,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "tools",
@@ -270,6 +475,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Inspect tool selection for the current session",
         argument_hint: Some("[why]"),
         resume_supported: true,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "cache",
@@ -277,6 +486,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Manage the response cache",
         argument_hint: Some("[clear|stats]"),
         resume_supported: false,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "dream",
@@ -284,6 +497,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Compress old memory entries into a summary",
         argument_hint: Some("[--force]"),
         resume_supported: false,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "stats",
@@ -291,6 +508,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show token usage and cost statistics",
         argument_hint: Some("[--days N] [--by-model] [--by-project]"),
         resume_supported: true,
+        category: SlashCategory::Plugins,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "providers",
@@ -298,6 +519,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show provider usage dashboard",
         argument_hint: Some("[--verbose]"),
         resume_supported: true,
+        category: SlashCategory::Behavior,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
     SlashCommandSpec {
         name: "verify",
@@ -305,6 +530,10 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Verify codebase files against memory entries",
         argument_hint: None,
         resume_supported: true,
+        category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
     },
 ];
 
@@ -576,6 +805,63 @@ pub fn render_slash_command_help() -> String {
         ));
     }
     lines.join("\n")
+}
+
+/// Renderiza o help agrupado por categoria, respeitando `hidden` e `is_enabled`.
+#[must_use]
+pub fn render_help_grouped() -> String {
+    let mut by_cat: std::collections::BTreeMap<u8, Vec<&SlashCommandSpec>> =
+        std::collections::BTreeMap::new();
+    for spec in SLASH_COMMAND_SPECS {
+        if spec.hidden || !(spec.is_enabled)() {
+            continue;
+        }
+        by_cat.entry(spec.category.order()).or_default().push(spec);
+    }
+    let mut out = String::from("Slash commands\n  [resume] means the command also works with --resume SESSION.json\n");
+    for (_, specs) in &by_cat {
+        if specs.is_empty() {
+            continue;
+        }
+        let cat = specs[0].category;
+        out.push_str(&format!("\n{}\n", cat.label()));
+        for spec in specs {
+            let display = spec.user_facing_name.unwrap_or(spec.name);
+            let resume = if spec.resume_supported { " [resume]" } else { "" };
+            out.push_str(&format!("  /{display:<18} {}{resume}\n", spec.summary));
+        }
+    }
+    out
+}
+
+/// Resultado da expansão de um user command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedUserCommand {
+    pub command_name: String,
+    pub expanded_prompt: String,
+    pub argument_hint: Option<String>,
+}
+
+/// Tenta parsear e despachar o input contra o registry de user commands.
+/// Se houver match, retorna `Some(ExpandedUserCommand)`.
+/// O caller (REPL) injeta o registry e usa o template expandido como prompt.
+#[must_use]
+pub fn try_user_command(
+    input: &str,
+    registry: &user_commands::UserCommandRegistry,
+    cwd: &Path,
+) -> Option<ExpandedUserCommand> {
+    let trimmed = input.trim().strip_prefix('/').unwrap_or(input.trim());
+    let (name, args) = trimmed
+        .split_once(' ')
+        .map_or((trimmed, ""), |(n, a)| (n, a.trim()));
+    let cmd = registry.get(name)?;
+    let expanded = user_commands::expand_template(&cmd.body_template, args, cwd);
+    Some(ExpandedUserCommand {
+        command_name: cmd.name.clone(),
+        expanded_prompt: expanded,
+        argument_hint: cmd.argument_hint.clone(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1805,7 +2091,7 @@ pub fn handle_slash_command(
             })
         }
         SlashCommand::Help => Some(SlashCommandResult {
-            message: render_slash_command_help(),
+            message: render_help_grouped(),
             session: session.clone(),
         }),
         SlashCommand::Tools { subcommand } => Some(SlashCommandResult {
@@ -2755,5 +3041,84 @@ mod tests {
         let _ = fs::remove_dir_all(repo);
         let _ = fs::remove_dir_all(remote);
         let _ = fs::remove_dir_all(fake_bin);
+    }
+
+    // ── New tests for SlashCategory, render_help_grouped, and try_user_command ──
+
+    #[test]
+    fn every_spec_has_category_and_predicate() {
+        use super::{always_enabled, slash_command_specs};
+        for spec in slash_command_specs() {
+            // Calling is_enabled must not panic and must be callable
+            let _enabled = (spec.is_enabled)();
+            // Category must be a valid variant (pattern exhaustiveness ensures this at compile time,
+            // but we also verify the order value is in [0..7])
+            assert!(
+                spec.category.order() <= 7,
+                "spec '{}' has unexpected category order {}",
+                spec.name,
+                spec.category.order()
+            );
+            // Ensure always_enabled is wired up (at least it compiles and returns true)
+            assert!(always_enabled());
+        }
+    }
+
+    #[test]
+    fn render_help_grouped_contains_category_labels() {
+        use super::render_help_grouped;
+        let output = render_help_grouped();
+        // Must include at least some category labels
+        assert!(
+            output.contains("Session")
+                || output.contains("Git")
+                || output.contains("Analysis"),
+            "render_help_grouped output missing expected category labels:\n{output}"
+        );
+        // Must not include hidden items (none are hidden by default, so all 36 should appear)
+        assert!(output.contains("/help"));
+        assert!(output.contains("/version"));
+    }
+
+    #[test]
+    fn try_user_command_returns_none_when_unknown() {
+        use super::try_user_command;
+        use crate::user_commands::UserCommandRegistry;
+        let registry = UserCommandRegistry::new();
+        let cwd = Path::new("/tmp");
+        assert!(try_user_command("/nonexistent", &registry, cwd).is_none());
+    }
+
+    #[test]
+    fn try_user_command_expands_with_args() {
+        use super::{try_user_command, ExpandedUserCommand};
+        use crate::user_commands::UserCommandRegistry;
+
+        let root = {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time ok")
+                .as_nanos();
+            std::env::temp_dir().join(format!("lib-try-user-cmd-{nanos}"))
+        };
+        let cmd_dir = root.join(".elai").join("commands");
+        fs::create_dir_all(&cmd_dir).expect("create cmd dir");
+        fs::write(cmd_dir.join("greet.md"), "Hello $ARGUMENTS!").expect("write greet.md");
+
+        let registry = UserCommandRegistry::discover(&root).expect("discover");
+        let cwd = Path::new("/my/project");
+        let result = try_user_command("/greet world", &registry, cwd)
+            .expect("greet command should match");
+
+        assert_eq!(
+            result,
+            ExpandedUserCommand {
+                command_name: "greet".to_string(),
+                expanded_prompt: "Hello world!".to_string(),
+                argument_hint: None,
+            }
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

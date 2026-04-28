@@ -9,9 +9,21 @@ publish.workspace = true
 name = "elai"
 path = "src/main.rs"
 
+[features]
+# Por default o binário inclui o backend de embedding local via fastembed.
+# Targets sem prebuilt do ort (x86_64-apple-darwin, aarch64-unknown-linux-musl)
+# devem buildar com `--no-default-features` — `--embed-provider local` fica
+# indisponível, mas `ollama`/`http` continuam funcionando.
+default = ["embed-fastembed"]
+embed-fastembed = ["code_index/embed-fastembed"]
+
 [dependencies]
 api = { path = "../api" }
-code_index = { path = "../code_index" }
+code_index = { path = "../code_index", default-features = false, features = [
+    "tree-sitter-langs",
+    "vec-sqlite",
+    "embed-http",
+] }
 clap = { version = "4", features = ["derive"] }
 commands = { path = "../commands" }
 dotenvy = "0.15"

@@ -1,5 +1,7 @@
 mod bash;
 mod bootstrap;
+pub mod auto_dream;
+pub mod tasks;
 mod response_cache;
 pub mod tool_catalog;
 pub mod budget;
@@ -119,6 +121,14 @@ pub use remote::{
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+pub use auto_dream::{
+    build_consolidation_prompt, evaluate as evaluate_auto_dream, AutoDreamConfig,
+    AutoDreamDecision, SkipReason as AutoDreamSkipReason,
+};
+pub use tasks::{
+    generate_task_id, task_output_path, TaskHandle, TaskOutputWriter, TaskRegistry,
+    TaskRegistryError, TaskState, TaskStatus, TaskType,
 };
 
 pub use telemetry::{

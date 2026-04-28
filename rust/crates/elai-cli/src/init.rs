@@ -176,14 +176,24 @@ fn run_indexing(
     Ok(stats)
 }
 
+#[cfg(feature = "embed-fastembed")]
+fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    let e = code_index::LocalFastEmbedder::new()?;
+    Ok(Arc::new(e))
+}
+
+#[cfg(not(feature = "embed-fastembed"))]
+fn build_local_embedder() -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    Err("embed-provider 'local' não está disponível neste binário (compilado sem \
+         embed-fastembed). Use --embed-provider ollama ou um endpoint HTTP."
+        .into())
+}
+
 fn build_embedder(
     args: &InitArgs,
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     match args.embed_provider {
-        EmbedProviderArg::Local => {
-            let e = code_index::LocalFastEmbedder::new()?;
-            Ok(Arc::new(e))
-        }
+        EmbedProviderArg::Local => build_local_embedder(),
         EmbedProviderArg::Ollama => {
             let url = args
                 .ollama_url
