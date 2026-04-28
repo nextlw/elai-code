@@ -38,9 +38,15 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v0.6.0
+## What's New — v0.6.5
 
-- feat(auth): multi-method authentication with Claude Code spoofing
+- feat(init): wire indexing pipeline + InitArgs flags
+- test(commands): bump slash spec count to 36 after /update was added
+- chore(scripts): add Cloudflare Worker provisioner for get.nexcode.live
+- feat(index): code_index crate (RAG foundation) + @mention TUI + /update
+- chore: remove obsolete configuration and agent files
+- feat: implement headless handlers + import-claude-code login
+- feat: headless/agent mode — send, model, chat, reply, status commands + --auth install flag
 
 ---
 
