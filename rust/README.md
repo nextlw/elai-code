@@ -56,6 +56,40 @@ export ELAI_SKIP_UPDATE=1                                     # disable bg updat
 export ELAI_UPDATE_CHECK_INTERVAL_SECS=3600                   # default: 1 h
 ```
 
+### Theme overrides
+
+The TUI theme is resolved with this precedence:
+
+1. Environment variables for the current process.
+2. Persistent user config in `~/.elai/config.json`.
+3. Defaults compiled into the CLI.
+
+The secondary/meta text color defaults to ANSI grayscale `248`:
+
+```bash
+# Temporary override for one shell/session.
+export ELAI_TEXT_SECONDARY_INTENSITY=240
+
+# Runtime TUI command: applies immediately and persists to ~/.elai/config.json.
+/theme gray 248
+```
+
+`text_secondary` uses the ANSI 256 grayscale ramp `232..=255`: lower values are
+darker and higher values are lighter. Quick reference:
+
+- `232` = almost black
+- `240` = dark gray
+- `244` = medium gray
+- `248` = medium-light gray (default)
+- `252` = light gray
+- `255` = almost white
+
+Values outside `232..=255` fall back to the default `248` without breaking
+rendering. Advanced theme tokens can also be overridden with `ELAI_THEME_*`
+environment variables or the `theme` object in `~/.elai/config.json`; color
+values accept ANSI names (`white`, `dark_grey`), ANSI indexes (`0..=255`), or
+hex RGB (`#RRGGBB`).
+
 ### Authentication methods
 
 `elai login` opens an interactive picker, but every method has a flag for non-interactive / CI use:
@@ -187,6 +221,7 @@ Commands are grouped by category. The full registry lives in `crates/commands/sr
 | `/cache [clear\|stats]` | Manage the response cache |
 | `/providers [--verbose]` | Provider usage dashboard |
 | `/swd [off\|partial\|full]` | Show or change SWD level |
+| `/theme gray <232-255>` | Adjust secondary/meta gray and persist it to `~/.elai/config.json` |
 
 ### Project
 
