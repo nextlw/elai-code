@@ -2188,7 +2188,7 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                     let result = match method {
                         AuthMethodChoice::PasteApiKey => crate::auth::save_pasted_api_key(&input),
                         AuthMethodChoice::PasteAuthToken => crate::auth::save_pasted_auth_token(&input),
-                        AuthMethodChoice::PasteOpenAiKey => crate::auth::save_pasted_api_key(&input),
+                        AuthMethodChoice::PasteOpenAiKey => crate::auth::save_pasted_openai_key(&input),
                         _ => Err(crate::auth::AuthError::InvalidInput("unexpected method".into())),
                     };
                     match result {

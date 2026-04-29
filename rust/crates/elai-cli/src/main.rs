@@ -30,10 +30,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    default_thinking_config, max_tokens_for_model, resolve_model_alias, suggested_default_model,
-    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    default_thinking_config, max_tokens_for_model, resolve_model_alias, resolve_output_config,
+    suggested_default_model, ContentBlockDelta, EffortLevel, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
+    StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice, ToolDefinition,
+    ToolResultContentBlock,
 };
 
 use commands::{
@@ -5565,7 +5566,21 @@ impl ApiClient for DefaultRuntimeClient {
                 .thinking_override
                 .clone()
                 .or_else(|| default_thinking_config(&self.model)),
-            output_config: None,
+            output_config: {
+                let effort = match self.thinking_override.as_ref().or_else(|| {
+                    // borrow only for the match; don't store the Option
+                    None::<&ThinkingConfig>
+                }) {
+                    Some(ThinkingConfig::Enabled { .. }) => Some(EffortLevel::High),
+                    Some(ThinkingConfig::Adaptive) | None
+                        if default_thinking_config(&self.model).is_some() =>
+                    {
+                        Some(EffortLevel::Medium)
+                    }
+                    _ => None,
+                };
+                resolve_output_config(effort)
+            },
         };
 
         // Clone sender before moving into async block.

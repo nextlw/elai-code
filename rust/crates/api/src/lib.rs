@@ -24,12 +24,12 @@ pub use providers::elai_provider::{
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     default_thinking_config, detect_provider_kind, max_tokens_for_model, resolve_model_alias,
-    suggested_default_model, ProviderKind,
+    resolve_output_config, suggested_default_model, ProviderKind,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
     EffortLevel, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
-    MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent,
-    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
+    MessageResponse, MessageStartEvent, MessageStopEvent, OutputConfig, OutputContentBlock,
+    StreamEvent, ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };
