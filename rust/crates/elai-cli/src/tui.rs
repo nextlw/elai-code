@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseEventKind,
 };
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
@@ -1178,18 +1178,18 @@ fn first_selectable_row(rows: &[PaletteRow]) -> usize {
 
 // ─── Terminal lifecycle helpers ───────────────────────────────────────────────
 
-/// Enter alternate screen + raw mode. Mouse capture is intentionally NOT enabled
-/// so the user can select and copy text natively at any time.
+/// Enter alternate screen + raw mode with mouse capture for scroll events.
+/// Text selection still works via Shift+drag in most terminals.
 pub fn enter_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     Ok(())
 }
 
 /// Restore terminal on exit (always call even on error).
 pub fn leave_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(stdout, LeaveAlternateScreen)?;
+    execute!(stdout, DisableMouseCapture, LeaveAlternateScreen)?;
     Ok(())
 }
 
