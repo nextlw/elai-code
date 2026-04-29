@@ -140,5 +140,81 @@
     "changed": "Idioma alterado para %{lang}",
     "invalid": "Idioma inválido. Disponíveis: pt-BR, en",
     "available_header": "Idiomas disponíveis:"
+  },
+  "tui": {
+    "header": {
+      "welcome": "Welcome back, %{username}!"
+    },
+    "side_panel": {
+      "tips_header": "Tips for getting started",
+      "run_init": "Run /init to create a ELAI.md",
+      "shortcuts": "F2 trocar modelo · F3 permissões",
+      "slash_palette": "Ctrl+K slash palette",
+      "recent_activity_header": "Recent activity",
+      "no_recent": "No recent activity",
+      "session_msgs": "%{count} msgs"
+    },
+    "nav": {
+      "next_prev": "Ctrl+→ próxima  ·  Ctrl+← anterior"
+    },
+    "tool_approval": {
+      "title": "⚠  Aprovar tool?",
+      "tool_label": "Tool",
+      "required_label": "Required",
+      "input_label": "Input",
+      "yes_once": "Sim, uma vez",
+      "always": "Sempre",
+      "no": "Não",
+      "hint": "Enter=Sim · A=Sempre · N/Esc=Não"
+    },
+    "swd_confirm": {
+      "title": "⚨ SWD: Aplicar %{count} arquivo(s)?",
+      "accept": "Aceitar",
+      "reject": "Rejeitar",
+      "hint": "A/Enter = Aceitar  ·  R/Esc = Rejeitar"
+    },
+    "uninstall": {
+      "title": "⚠  Desinstalar Elai Code",
+      "will_remove": "Serão removidos:",
+      "shell_rc_lines": "Linhas elai-code no arquivo shell RC",
+      "irreversible": "Esta ação é irreversível.",
+      "confirm_hint": "Enter confirmar  ·  Esc cancelar"
+    },
+    "repl": {
+      "help": {
+        "header": "Comandos disponíveis:",
+        "help": "Esta ajuda",
+        "status": "Status da sessão (modelo, tokens, custo)",
+        "model": "Mostrar/trocar modelo (F2 para picker)",
+        "permissions": "Trocar modo de permissão (F3 para picker)",
+        "session": "Retomar sessão (F4 para picker)",
+        "clear": "Limpar histórico de chat",
+        "cost": "Mostrar custo estimado",
+        "compact": "Compactar histórico (mantém últimas 20 msgs)",
+        "export": "Exportar conversa para arquivo .txt",
+        "memory": "Mostrar conteúdo do ELAI.md",
+        "dream": "Comprimir entradas antigas da memória (AI summary)",
+        "init": "Inicializar ELAI.md no projeto",
+        "verify": "Verificar codebase vs memória (ELAI.md)",
+        "theme_gray": "Ajustar cinza secundário (232-255)",
+        "swd": "Strict Write Discipline (padrão: partial)",
+        "keys": "Configurar/trocar API keys",
+        "uninstall": "Desinstalar Elai Code",
+        "version": "Mostrar versão",
+        "locale": "Mostrar/trocar idioma da interface (pt-BR | en)",
+        "exit": "Sair",
+        "shortcuts": "Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta"
+      },
+      "status": {
+        "header": "Status",
+        "model": "Modelo",
+        "permissions": "Permissões",
+        "session": "Sessão",
+        "messages": "Mensagens",
+        "tokens": "Tokens in",
+        "tokens_out": "out",
+        "cost_estimate": "Custo est."
+      }
+    }
   }
 }

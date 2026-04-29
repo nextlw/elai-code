@@ -140,5 +140,81 @@
     "changed": "Language changed to %{lang}",
     "invalid": "Invalid language. Available: pt-BR, en",
     "available_header": "Available languages:"
+  },
+  "tui": {
+    "header": {
+      "welcome": "Welcome back, %{username}!"
+    },
+    "side_panel": {
+      "tips_header": "Tips for getting started",
+      "run_init": "Run /init to create a ELAI.md",
+      "shortcuts": "F2 switch model · F3 permissions",
+      "slash_palette": "Ctrl+K slash palette",
+      "recent_activity_header": "Recent activity",
+      "no_recent": "No recent activity",
+      "session_msgs": "%{count} msgs"
+    },
+    "nav": {
+      "next_prev": "Ctrl+→ next  ·  Ctrl+← previous"
+    },
+    "tool_approval": {
+      "title": "⚠  Approve tool?",
+      "tool_label": "Tool",
+      "required_label": "Required",
+      "input_label": "Input",
+      "yes_once": "Yes, once",
+      "always": "Always",
+      "no": "No",
+      "hint": "Enter=Yes · A=Always · N/Esc=No"
+    },
+    "swd_confirm": {
+      "title": "⚨ SWD: Apply %{count} file(s)?",
+      "accept": "Accept",
+      "reject": "Reject",
+      "hint": "A/Enter = Accept  ·  R/Esc = Reject"
+    },
+    "uninstall": {
+      "title": "⚠  Uninstall Elai Code",
+      "will_remove": "Will be removed:",
+      "shell_rc_lines": "elai-code lines in shell RC file",
+      "irreversible": "This action is irreversible.",
+      "confirm_hint": "Enter to confirm  ·  Esc to cancel"
+    },
+    "repl": {
+      "help": {
+        "header": "Available commands:",
+        "help": "This help",
+        "status": "Session status (model, tokens, cost)",
+        "model": "Show/switch model (F2 for picker)",
+        "permissions": "Switch permission mode (F3 for picker)",
+        "session": "Resume session (F4 for picker)",
+        "clear": "Clear chat history",
+        "cost": "Show estimated cost",
+        "compact": "Compact history (keeps last 20 msgs)",
+        "export": "Export conversation to a .txt file",
+        "memory": "Show ELAI.md contents",
+        "dream": "Compress old memory entries (AI summary)",
+        "init": "Initialize ELAI.md in the project",
+        "verify": "Verify codebase against memory (ELAI.md)",
+        "theme_gray": "Adjust secondary gray (232-255)",
+        "swd": "Strict Write Discipline (default: partial)",
+        "keys": "Configure/rotate API keys",
+        "uninstall": "Uninstall Elai Code",
+        "version": "Show version",
+        "locale": "Show/switch interface language (pt-BR | en)",
+        "exit": "Exit",
+        "shortcuts": "Shortcuts: F2=model · F3=permissions · F4=sessions · Ctrl+K=palette"
+      },
+      "status": {
+        "header": "Status",
+        "model": "Model",
+        "permissions": "Permissions",
+        "session": "Session",
+        "messages": "Messages",
+        "tokens": "Tokens in",
+        "tokens_out": "out",
+        "cost_estimate": "Cost est."
+      }
+    }
   }
 }

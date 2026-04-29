@@ -208,40 +208,50 @@ fn init_locale() {
 
 /// Handler do slash command `/locale [<idioma>]`.
 ///
-/// - Sem argumento: imprime locale atual + lista de idiomas disponíveis.
+/// - Sem argumento: retorna locale atual + lista de idiomas disponíveis.
 /// - Com argumento válido: troca locale em runtime via `rust_i18n::set_locale`,
 ///   persiste em `~/.elai/config.json`, e confirma na nova língua.
 /// - Com argumento inválido: mensagem de erro listando idiomas válidos. Sem
 ///   alteração de estado.
-fn handle_locale_command(lang: Option<&str>) {
+///
+/// Retorna a mensagem composta (uma `String` multilinha). O caller decide se
+/// printa em stdout (`LiveCli` non-TUI) ou empurra como `SystemNote` (TUI).
+fn handle_locale_command(lang: Option<&str>) -> String {
+    use std::fmt::Write as _;
+
     match lang {
         None => {
+            let mut out = String::new();
             let current = rust_i18n::locale().to_string();
-            println!("{}", rust_i18n::t!("locale.current", lang = current));
-            println!("{}", rust_i18n::t!("locale.available_header"));
+            let _ = writeln!(out, "{}", rust_i18n::t!("locale.current", lang = current));
+            let _ = writeln!(out, "{}", rust_i18n::t!("locale.available_header"));
             for locale in SUPPORTED_LOCALES {
-                println!("  - {locale}");
+                let _ = writeln!(out, "  - {locale}");
             }
+            out.trim_end().to_string()
         }
         Some(lang) if SUPPORTED_LOCALES.contains(&lang) => {
             rust_i18n::set_locale(lang);
-            match runtime::global_config::load() {
-                Ok(mut cfg) => {
-                    cfg.locale = lang.to_string();
-                    if let Err(e) = runtime::global_config::save(&cfg) {
-                        eprintln!("warning: failed to persist locale: {e}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("warning: failed to load config to persist locale: {e}");
-                }
+            let mut out = String::new();
+            if let Err(e) = persist_locale(lang) {
+                let _ = writeln!(out, "warning: {e}");
             }
-            println!("{}", rust_i18n::t!("locale.changed", lang = lang.to_string()));
+            let _ = write!(
+                out,
+                "{}",
+                rust_i18n::t!("locale.changed", lang = lang.to_string())
+            );
+            out
         }
-        Some(_) => {
-            eprintln!("{}", rust_i18n::t!("locale.invalid"));
-        }
+        Some(_) => rust_i18n::t!("locale.invalid").to_string(),
     }
+}
+
+fn persist_locale(lang: &str) -> Result<(), String> {
+    let mut cfg = runtime::global_config::load()
+        .map_err(|e| format!("failed to load config: {e}"))?;
+    cfg.locale = lang.to_string();
+    runtime::global_config::save(&cfg).map_err(|e| format!("failed to persist locale: {e}"))
 }
 
 fn has_any_auth() -> bool {
@@ -2186,37 +2196,70 @@ fn handle_tui_slash_command(
             app.reset_tips();
         }
         "help" => {
-            let help = "\
-Comandos disponíveis:\n\
-  /help          Esta ajuda\n\
-  /status        Status da sessão (modelo, tokens, custo)\n\
-  /model [nome]  Mostrar/trocar modelo (F2 para picker)\n\
-  /permissions   Trocar modo de permissão (F3 para picker)\n\
-  /session [id]  Retomar sessão (F4 para picker)\n\
-  /clear         Limpar histórico de chat\n\
-  /cost          Mostrar custo estimado\n\
-  /compact       Compactar histórico (mantém últimas 20 msgs)\n\
-  /export        Exportar conversa para arquivo .txt\n\
-  /memory        Mostrar conteúdo do ELAI.md\n\
-  /dream         Comprimir entradas antigas da memória (AI summary)\n\
-  /init          Inicializar ELAI.md no projeto\n\
-  /verify        Verificar codebase vs memória (ELAI.md)\n\
-  /theme gray <n> Ajustar cinza secundário (232-255)\n\
-  /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
-  /keys          Configurar/trocar API keys\n\
-  /uninstall     Desinstalar Elai Code\n\
-  /version       Mostrar versão\n\
-  /exit          Sair\n\
-Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
-            app.push_chat(tui::ChatEntry::SystemNote(help.into()));
+            let help = format!(
+                "\
+{header}\n\
+  /help          {help}\n\
+  /status        {status}\n\
+  /model [nome]  {model}\n\
+  /permissions   {permissions}\n\
+  /session [id]  {session}\n\
+  /clear         {clear}\n\
+  /cost          {cost}\n\
+  /compact       {compact}\n\
+  /export        {export}\n\
+  /memory        {memory}\n\
+  /dream         {dream}\n\
+  /init          {init}\n\
+  /verify        {verify}\n\
+  /theme gray <n> {theme_gray}\n\
+  /swd [off|partial|full]  {swd}\n\
+  /keys          {keys}\n\
+  /uninstall     {uninstall}\n\
+  /version       {version}\n\
+  /locale [pt-BR|en] {locale}\n\
+  /exit          {exit}\n\
+{shortcuts}",
+                header = rust_i18n::t!("tui.repl.help.header"),
+                help = rust_i18n::t!("tui.repl.help.help"),
+                status = rust_i18n::t!("tui.repl.help.status"),
+                model = rust_i18n::t!("tui.repl.help.model"),
+                permissions = rust_i18n::t!("tui.repl.help.permissions"),
+                session = rust_i18n::t!("tui.repl.help.session"),
+                clear = rust_i18n::t!("tui.repl.help.clear"),
+                cost = rust_i18n::t!("tui.repl.help.cost"),
+                compact = rust_i18n::t!("tui.repl.help.compact"),
+                export = rust_i18n::t!("tui.repl.help.export"),
+                memory = rust_i18n::t!("tui.repl.help.memory"),
+                dream = rust_i18n::t!("tui.repl.help.dream"),
+                init = rust_i18n::t!("tui.repl.help.init"),
+                verify = rust_i18n::t!("tui.repl.help.verify"),
+                theme_gray = rust_i18n::t!("tui.repl.help.theme_gray"),
+                swd = rust_i18n::t!("tui.repl.help.swd"),
+                keys = rust_i18n::t!("tui.repl.help.keys"),
+                uninstall = rust_i18n::t!("tui.repl.help.uninstall"),
+                version = rust_i18n::t!("tui.repl.help.version"),
+                locale = rust_i18n::t!("tui.repl.help.locale"),
+                exit = rust_i18n::t!("tui.repl.help.exit"),
+                shortcuts = rust_i18n::t!("tui.repl.help.shortcuts"),
+            );
+            app.push_chat(tui::ChatEntry::SystemNote(help));
         }
         "status" => {
             let cost = estimate_tui_cost(app);
             let msgs = session.lock().map(|g| g.messages.len()).unwrap_or(0);
             app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "Status\n  Modelo      {}\n  Permissões  {}\n  Sessão      {}\n  Mensagens   {msgs}\n  Tokens in   {} / out {}\n  Custo est.  ${cost:.4}",
+                "{header}\n  {model:<11} {}\n  {permissions:<11} {}\n  {session:<11} {}\n  {messages:<11} {msgs}\n  {tokens:<11} {} / {tokens_out} {}\n  {cost_estimate:<11} ${cost:.4}",
                 app.model, app.permission_mode, app.session_id,
-                app.input_tokens, app.output_tokens
+                app.input_tokens, app.output_tokens,
+                header = rust_i18n::t!("tui.repl.status.header"),
+                model = rust_i18n::t!("tui.repl.status.model"),
+                permissions = rust_i18n::t!("tui.repl.status.permissions"),
+                session = rust_i18n::t!("tui.repl.status.session"),
+                messages = rust_i18n::t!("tui.repl.status.messages"),
+                tokens = rust_i18n::t!("tui.repl.status.tokens"),
+                tokens_out = rust_i18n::t!("tui.repl.status.tokens_out"),
+                cost_estimate = rust_i18n::t!("tui.repl.status.cost_estimate"),
             )));
         }
         "model" => {
@@ -2786,6 +2829,10 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 "🚧 /{base} em breve no modo TUI — por enquanto execute `elai prompt /{base}` no shell."
             )));
         }
+        "locale" => {
+            let message = handle_locale_command(arg);
+            app.push_chat(tui::ChatEntry::SystemNote(message));
+        }
         "exit" | "quit" => {
             app.should_quit = true;
         }
@@ -3332,7 +3379,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 false
             }
             SlashCommand::Locale { lang } => {
-                handle_locale_command(lang.as_deref());
+                println!("{}", handle_locale_command(lang.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5709,9 +5756,10 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
 }
 
 /// Resumo de uma linha (≤ 60 chars) do input de um tool, no formato exibido
-/// pelo modo compacto do CLI não-TUI. Para `bash`/`Bash` extrai o comando; para
-/// tools de arquivo extrai o path; para o resto faz truncação genérica do JSON.
-fn tool_input_one_line(name: &str, input: &str) -> String {
+/// pelo modo compacto do CLI não-TUI **e** pelo `ToolBatchEntry` da TUI.
+/// Para `bash`/`Bash` extrai o comando; para tools de arquivo extrai o path;
+/// para o resto faz truncação genérica do JSON.
+pub(crate) fn tool_input_one_line(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
     let raw = match name {
