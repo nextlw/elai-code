@@ -209,6 +209,10 @@ pub enum OverlayKind {
         items: Vec<String>,
         selected: usize,
     },
+    LocalePicker {
+        items: Vec<String>,
+        selected: usize,
+    },
     SlashPalette {
         items: Vec<(SlashCategory, String, String)>,
         filter: String,
@@ -886,6 +890,11 @@ impl UiApp {
         self.overlay = Some(OverlayKind::PermissionPicker { items, selected });
     }
 
+    pub fn open_locale_picker(&mut self, locales: Vec<String>, current: &str) {
+        let selected = locales.iter().position(|s| s == current).unwrap_or(0);
+        self.overlay = Some(OverlayKind::LocalePicker { items: locales, selected });
+    }
+
     pub fn open_slash_palette(&mut self) {
         let items = slash_palette_items();
         let initial_rows = build_palette_rows(&items, "");
@@ -1556,6 +1565,37 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 _ => {
                     app.overlay = Some(OverlayKind::PermissionPicker { items, selected });
+                }
+            }
+            TuiAction::None
+        }
+
+        Some(OverlayKind::LocalePicker {
+            items,
+            mut selected,
+        }) => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                }
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    selected = selected.saturating_sub(1);
+                    app.overlay = Some(OverlayKind::LocalePicker { items, selected });
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    selected = (selected + 1).min(items.len().saturating_sub(1));
+                    app.overlay = Some(OverlayKind::LocalePicker { items, selected });
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    if let Some(lang) = items.get(selected) {
+                        let cmd = format!("/locale {lang}");
+                        app.overlay = None;
+                        return TuiAction::SlashCommand(cmd);
+                    }
+                    app.overlay = None;
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::LocalePicker { items, selected });
                 }
             }
             TuiAction::None
@@ -3888,6 +3928,18 @@ fn draw_overlay(
                 *selected,
                 None,
                 &format!("atual: {}", app.permission_mode),
+            );
+        }
+        OverlayKind::LocalePicker { items, selected } => {
+            let current = rust_i18n::locale().to_string();
+            draw_picker(
+                frame,
+                area,
+                "Idioma / Language",
+                &items.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                *selected,
+                None,
+                &format!("atual: {current}"),
             );
         }
         OverlayKind::SlashPalette {

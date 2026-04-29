@@ -2912,8 +2912,15 @@ fn handle_tui_slash_command(
             )));
         }
         "locale" => {
-            let message = handle_locale_command(arg);
-            app.push_chat(tui::ChatEntry::SystemNote(message));
+            if let Some(lang) = arg {
+                let message = handle_locale_command(Some(lang));
+                app.push_chat(tui::ChatEntry::SystemNote(message));
+            } else {
+                let locales: Vec<String> =
+                    SUPPORTED_LOCALES.iter().map(|s| s.to_string()).collect();
+                let current = rust_i18n::locale().to_string();
+                app.open_locale_picker(locales, &current);
+            }
         }
         "exit" | "quit" => {
             app.should_quit = true;
