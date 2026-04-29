@@ -2580,10 +2580,17 @@ fn handle_tui_slash_command(
         "uninstall" => {
             app.open_uninstall_confirm();
         }
-        "agents" | "skills" => {
-            app.push_chat(tui::ChatEntry::SystemNote(
-                rust_i18n::t!("tui.repl.feedback.agents_skills_note").to_string(),
-            ));
+        "agents" => {
+            let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let output = handle_agents_slash_command(arg, &cwd)
+                .unwrap_or_else(|e| format!("agents: {e}"));
+            app.push_chat(tui::ChatEntry::SystemNote(output));
+        }
+        "skills" => {
+            let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let output = handle_skills_slash_command(arg, &cwd)
+                .unwrap_or_else(|e| format!("skills: {e}"));
+            app.push_chat(tui::ChatEntry::SystemNote(output));
         }
         "budget" => {
             if let Some(a) = arg {
