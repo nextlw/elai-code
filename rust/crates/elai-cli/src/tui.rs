@@ -429,6 +429,8 @@ pub struct UiApp {
     pub message_queue: std::collections::VecDeque<String>,
     /// Próxima mensagem a ser despachada logo que `thinking` voltar a `false`.
     pub pending_outgoing: Option<String>,
+    /// `true` se a mensagem atual contém a keyword `ultrathink`.
+    pub ultrathink_active: bool,
 }
 
 impl UiApp {
@@ -473,6 +475,7 @@ impl UiApp {
             show_tips: true,
             message_queue: std::collections::VecDeque::new(),
             pending_outgoing: None,
+            ultrathink_active: false,
         }
         .with_shuffled_tips()
     }
@@ -632,6 +635,7 @@ impl UiApp {
             }
             TuiMsg::Done => {
                 self.thinking = false;
+                self.ultrathink_active = false;
                 if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
                     *finished = true;
                 }
@@ -641,6 +645,7 @@ impl UiApp {
             }
             TuiMsg::Error(msg) => {
                 self.thinking = false;
+                self.ultrathink_active = false;
                 if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
                     *finished = true;
                 }
@@ -1234,6 +1239,7 @@ pub fn poll_and_handle(
 
     // Despacha mensagem enfileirada assim que thinking voltou a false.
     if let Some(msg) = app.pending_outgoing.take() {
+        app.ultrathink_active = msg.to_lowercase().contains("ultrathink");
         return TuiAction::SendMessage(msg);
     }
 
@@ -1435,6 +1441,8 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             app.clear_input();
             app.push_chat(ChatEntry::UserMessage(text.clone()));
             app.scroll_to_bottom();
+
+            app.ultrathink_active = text.to_lowercase().contains("ultrathink");
 
             // Detect other slash commands.
             if text.starts_with('/') {
@@ -3846,11 +3854,14 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
 
     if app.thinking {
         let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+        let (label, color) = if app.ultrathink_active {
+            ("⚡ Ultrathink…", ratatui::style::Color::Rgb(255, 200, 50))
+        } else {
+            ("Thinking…", theme().thinking)
+        };
         result.push(Line::from(Span::styled(
-            format!("  {frame} Thinking…"),
-            Style::default()
-                .fg(theme().thinking)
-                .add_modifier(Modifier::BOLD),
+            format!("  {frame} {label}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         )));
     }
 
@@ -3950,6 +3961,8 @@ fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     );
     let style = if app.read_mode {
         Style::default().fg(theme().warn)
+    } else if app.ultrathink_active && app.thinking {
+        Style::default().fg(ratatui::style::Color::Rgb(255, 200, 50))
     } else if app.thinking {
         Style::default().fg(theme().thinking)
     } else {
