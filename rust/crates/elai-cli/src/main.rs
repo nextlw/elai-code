@@ -57,7 +57,6 @@ use runtime::{
     TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use serde_json::json;
 
 const DEFAULT_DATE: &str = "2026-03-31";
@@ -874,12 +873,12 @@ fn current_tool_registry() -> Result<GlobalToolRegistry, String> {
 
 fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
     normalize_permission_mode(value)
+        .and_then(permission_mode_from_label)
         .ok_or_else(|| {
             format!(
                 "unsupported permission mode '{value}'. Use read-only, workspace-write, or danger-full-access."
             )
         })
-        .map(permission_mode_from_label)
 }
 
 /// Remove o binário, ~/.elai/ e as linhas do shell RC inseridas pelo instalador.
@@ -1043,12 +1042,35 @@ fn estimate_tui_cost(app: &tui::UiApp) -> f64 {
     f64::from(app.input_tokens) * in_rate + f64::from(app.output_tokens) * out_rate
 }
 
-fn permission_mode_from_label(mode: &str) -> PermissionMode {
+fn permission_mode_from_label(mode: &str) -> Option<PermissionMode> {
     match mode {
-        "read-only" => PermissionMode::ReadOnly,
-        "workspace-write" => PermissionMode::WorkspaceWrite,
-        "danger-full-access" => PermissionMode::DangerFullAccess,
-        other => panic!("unsupported permission mode label: {other}"),
+        "read-only" => Some(PermissionMode::ReadOnly),
+        "workspace-write" => Some(PermissionMode::WorkspaceWrite),
+        "danger-full-access" => Some(PermissionMode::DangerFullAccess),
+        _ => None,
+    }
+}
+
+/// Writes `text` to the system clipboard using the OS-native utility.
+/// Tries pbcopy (macOS), wl-copy (Wayland), then xclip (X11).
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let candidates: &[(&str, &[&str])] = &[
+        ("pbcopy", &[]),
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    for (cmd, args) in candidates {
+        if let Ok(mut child) = Command::new(cmd).args(*args).stdin(Stdio::piped()).spawn() {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
     }
 }
 
@@ -1057,7 +1079,8 @@ fn default_permission_mode() -> PermissionMode {
         .ok()
         .as_deref()
         .and_then(normalize_permission_mode)
-        .map_or(PermissionMode::DangerFullAccess, permission_mode_from_label)
+        .and_then(permission_mode_from_label)
+        .unwrap_or(PermissionMode::DangerFullAccess)
 }
 
 fn filter_tool_specs(
@@ -1296,7 +1319,8 @@ fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
         .map(std::path::PathBuf::from)
         .map_err(|_| "HOME is not set")?;
     let env_path = home.join(".elai").join(".env");
-    std::fs::create_dir_all(env_path.parent().unwrap())?;
+    let env_parent = env_path.parent().ok_or("env path has no parent component")?;
+    std::fs::create_dir_all(env_parent)?;
     // Read existing content, replace or append ELAI_DEFAULT_OPENAI_MODEL
     let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
     let key = "ELAI_DEFAULT_OPENAI_MODEL";
@@ -1456,7 +1480,7 @@ struct ResumeCommandOutcome {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct StatusContext {
     cwd: PathBuf,
     session_path: Option<PathBuf>,
@@ -1896,7 +1920,9 @@ fn run_tui_repl(
         recent_sessions,
         Arc::clone(&swd_atomic),
     );
-    app.budget_enabled = budget_tracker.lock().unwrap().is_enabled();
+    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+    //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+    app.budget_enabled = budget_tracker.lock().expect("budget_tracker mutex poisoned").is_enabled();
 
     // Background update check — first run at startup, then every hour while the
     // TUI is alive. Results surface as a SystemNote; never blocks or forces a
@@ -1908,7 +1934,8 @@ fn run_tui_repl(
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3600);
-        std::thread::spawn(move || {
+        // JoinHandle descartado: thread daemon de verificação de atualização em background; encerra quando o canal fecha (TUI encerrando).
+        let _update_checker = std::thread::spawn(move || {
             let interval = std::time::Duration::from_secs(interval_secs);
             let mut last_notified: Option<String> = None;
             loop {
@@ -1983,16 +2010,22 @@ fn run_tui_repl(
                 }
                 // Persist session.
                 {
-                    let guard = session.lock().unwrap();
+                    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                    //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                    let guard = session.lock().expect("session mutex poisoned");
                     let _ = guard.save_to_path(&session_handle.path);
                 }
                 // Budget check after each turn
                 {
                     let usage = {
-                        let guard = session.lock().unwrap();
+                        // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                        //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                        let guard = session.lock().expect("session mutex poisoned");
                         UsageTracker::from_session(&guard)
                     };
-                    let bt = budget_tracker.lock().unwrap();
+                    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                    //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                    let bt = budget_tracker.lock().expect("budget_tracker mutex poisoned");
                     if bt.is_enabled() {
                         let pct_data = bt.usage_pct(&usage, &app.model);
                         app.budget_pct = pct_data.highest_pct;
@@ -2036,7 +2069,7 @@ fn run_tui_repl(
                         let model_clone = app.model.clone();
                         let perm_clone = permission_mode_from_label(
                             &app.permission_mode
-                        );
+                        ).unwrap_or(PermissionMode::DangerFullAccess);
                         let allowed_clone = allowed_tools.clone();
                         let mut prompt_clone = system_prompt.clone();
                         // Inject SWD full-mode system prompt if enabled at spawn time.
@@ -2053,7 +2086,9 @@ fn run_tui_repl(
                             prompt_clone.push(runtime::CAPYBARA_SYSTEM_PROMPT.to_string());
                         }
                         let session_clone = {
-                            let guard = session.lock().unwrap();
+                            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                            let guard = session.lock().expect("session mutex poisoned");
                             guard.clone()
                         };
                         let msg_tx_clone = msg_tx.clone();
@@ -2067,7 +2102,8 @@ fn run_tui_repl(
                             None
                         };
 
-                        thread::spawn(move || {
+                        // JoinHandle descartado: thread daemon de execução principal do runtime de IA; encerra quando o canal fecha (TUI encerrando).
+                        let _runtime_handle = thread::spawn(move || {
                             let result: Result<(), String> = (|| {
                                 let mut runtime = build_runtime_for_tui(
                                     session_clone,
@@ -2124,7 +2160,9 @@ fn run_tui_repl(
                         if let Ok(loaded) = Session::load_from_path(&handle.path) {
                             let msg_count = loaded.messages.len();
                             sync_session_to_app_chat(&loaded, &mut app);
-                            *session.lock().unwrap() = loaded;
+                            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                            *session.lock().expect("session mutex poisoned") = loaded;
                             app.push_chat(tui::ChatEntry::SystemNote(format!(
                                 "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
                             )));
@@ -2136,17 +2174,15 @@ fn run_tui_repl(
                 }
                 tui::TuiAction::EnterReadMode => {
                     app.read_mode = true;
-                    let _ = crossterm::execute!(
-                        terminal.backend_mut(),
-                        DisableMouseCapture
-                    );
                 }
                 tui::TuiAction::ExitReadMode => {
                     app.read_mode = false;
-                    let _ = crossterm::execute!(
-                        terminal.backend_mut(),
-                        EnableMouseCapture
-                    );
+                }
+                tui::TuiAction::CopyToClipboard(text) => {
+                    copy_to_clipboard(&text);
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "✓ Mensagem copiada para a área de transferência".into(),
+                    ));
                 }
                 tui::TuiAction::SetupComplete => {
                     // Re-detect the best model now that keys are in the environment.
@@ -2245,7 +2281,9 @@ fn handle_tui_slash_command(
         "clear" => {
             app.chat.clear();
             app.chat_scroll = 0;
-            *session.lock().unwrap() = Session::new();
+            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+            *session.lock().expect("session mutex poisoned") = Session::new();
             // Reativa o overlay de dicas — o reaparecimento é o feedback visual
             // de "histórico limpo" sem precisar empurrar uma SystemNote que
             // contaminaria o `app.chat.is_empty()` checado pelo render_tips.
@@ -2345,7 +2383,9 @@ fn handle_tui_slash_command(
                     if let Ok(loaded) = Session::load_from_path(&handle.path) {
                         let msg_count = loaded.messages.len();
                         sync_session_to_app_chat(&loaded, app);
-                        *session.lock().unwrap() = loaded;
+                        // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                        //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                        *session.lock().expect("session mutex poisoned") = loaded;
                         app.push_chat(tui::ChatEntry::SystemNote(
                             rust_i18n::t!(
                                 "tui.repl.feedback.session_resumed",
@@ -2389,7 +2429,9 @@ fn handle_tui_slash_command(
             app.push_chat(tui::ChatEntry::SystemNote(out));
         }
         "compact" => {
-            let mut guard = session.lock().unwrap();
+            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+            let mut guard = session.lock().expect("session mutex poisoned");
             let total = guard.messages.len();
             let keep = 20;
             if total > keep {
@@ -2411,7 +2453,9 @@ fn handle_tui_slash_command(
             }
         }
         "export" => {
-            let guard = session.lock().unwrap();
+            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+            let guard = session.lock().expect("session mutex poisoned");
             let ts = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -2478,7 +2522,8 @@ fn handle_tui_slash_command(
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let args = crate::args::InitArgs::default();
-            std::thread::spawn(move || match initialize_repo(&cwd, &args) {
+            // JoinHandle descartado: thread daemon de inicialização de repositório em background; encerra quando o canal fecha (TUI encerrando).
+            let _init_handle = std::thread::spawn(move || match initialize_repo(&cwd, &args) {
                 Ok(report) => {
                     let _ = tx.send(tui::TuiMsg::SystemNote(report.render()));
                 }
@@ -2493,7 +2538,8 @@ fn handle_tui_slash_command(
         "verify" => {
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_default();
-            std::thread::spawn(move || {
+            // JoinHandle descartado: thread daemon de execução de `elai verify` em background; encerra quando o canal fecha (TUI encerrando).
+            let _verify_handle = std::thread::spawn(move || {
                 let outcome = runtime::with_task_default(
                     runtime::TaskType::LocalWorkflow,
                     format!("elai verify {}", cwd.display()),
@@ -2517,7 +2563,8 @@ fn handle_tui_slash_command(
         "plugin" | "plugins" => {
             let tx = msg_tx.clone();
             let raw = arg.unwrap_or("").trim().to_string();
-            std::thread::spawn(move || {
+            // JoinHandle descartado: thread daemon de gerenciamento de plugin em background; encerra quando o canal fecha (TUI encerrando).
+            let _plugin_handle = std::thread::spawn(move || {
                 let send = |s: &str| { let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string())); };
                 let mut parts = raw.splitn(2, char::is_whitespace);
                 let action = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
@@ -2595,7 +2642,9 @@ fn handle_tui_slash_command(
         "budget" => {
             if let Some(a) = arg {
                 if a == "off" {
-                    budget_tracker.lock().unwrap().disable();
+                    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                    //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                    budget_tracker.lock().expect("budget_tracker mutex poisoned").disable();
                     app.budget_enabled = false;
                     app.push_chat(tui::ChatEntry::SystemNote(
                         rust_i18n::t!("tui.repl.feedback.budget_off").to_string(),
@@ -2613,7 +2662,9 @@ fn handle_tui_slash_command(
                         };
                         let cwd = std::env::current_dir().unwrap_or_default();
                         let _ = save_budget_config(&cwd, &cfg);
-                        budget_tracker.lock().unwrap().update_config(cfg.clone());
+                        // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                        //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                        budget_tracker.lock().expect("budget_tracker mutex poisoned").update_config(cfg.clone());
                         app.budget_enabled = true;
                         app.push_chat(tui::ChatEntry::SystemNote(
                             rust_i18n::t!(
@@ -2629,9 +2680,13 @@ fn handle_tui_slash_command(
                     }
                 }
             } else {
-                let bt = budget_tracker.lock().unwrap();
+                // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                let bt = budget_tracker.lock().expect("budget_tracker mutex poisoned");
                 let usage = {
-                    let guard = session.lock().unwrap();
+                    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                    //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                    let guard = session.lock().expect("session mutex poisoned");
                     UsageTracker::from_session(&guard)
                 };
                 if bt.is_enabled() {
@@ -2783,7 +2838,8 @@ fn handle_tui_slash_command(
         }
         "update" => {
             let tx = msg_tx.clone();
-            std::thread::spawn(move || {
+            // JoinHandle descartado: thread daemon de consulta de atualização disponível; encerra quando o canal fecha (TUI encerrando).
+            let _update_check_handle = std::thread::spawn(move || {
                 let msg = match crate::updater::check_available() {
                     Some(info) => format!(
                         "🆙 Nova versão disponível: v{} (atual: v{}).\n   Para instalar, execute `elai update` no shell — `apply` está bloqueado dentro do TUI por segurança.",
@@ -2803,7 +2859,8 @@ fn handle_tui_slash_command(
         "config" => {
             let section = arg.map(str::to_owned);
             let tx = msg_tx.clone();
-            std::thread::spawn(move || match render_config_report(section.as_deref()) {
+            // JoinHandle descartado: thread daemon de renderização do relatório de config; encerra quando o canal fecha (TUI encerrando).
+            let _config_handle = std::thread::spawn(move || match render_config_report(section.as_deref()) {
                 Ok(out) => {
                     let _ = tx.send(tui::TuiMsg::SystemNote(out));
                 }
@@ -2850,8 +2907,11 @@ fn handle_tui_slash_command(
         "debug-tool-call" => {
             let session_arc = session.clone();
             let tx = msg_tx.clone();
-            std::thread::spawn(move || {
-                let session = session_arc.lock().unwrap().clone();
+            // JoinHandle descartado: thread daemon de renderização do relatório de debug de ferramenta; encerra quando o canal fecha (TUI encerrando).
+            let _debug_tool_handle = std::thread::spawn(move || {
+                // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                let session = session_arc.lock().expect("session mutex poisoned").clone();
                 match render_last_tool_debug_report(&session) {
                     Ok(out) => {
                         let _ = tx.send(tui::TuiMsg::SystemNote(out));
@@ -2869,7 +2929,8 @@ fn handle_tui_slash_command(
         "branch" => {
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_default();
-            std::thread::spawn(move || {
+            // JoinHandle descartado: thread daemon de listagem de branches git; encerra quando o canal fecha (TUI encerrando).
+            let _branch_handle = std::thread::spawn(move || {
                 let out = std::process::Command::new("git")
                     .args(["branch", "-a"])
                     .current_dir(&cwd)
@@ -2891,7 +2952,8 @@ fn handle_tui_slash_command(
         "worktree" => {
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_default();
-            std::thread::spawn(move || {
+            // JoinHandle descartado: thread daemon de listagem de worktrees git; encerra quando o canal fecha (TUI encerrando).
+            let _worktree_handle = std::thread::spawn(move || {
                 let out = std::process::Command::new("git")
                     .args(["worktree", "list"])
                     .current_dir(&cwd)
@@ -3593,6 +3655,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     fn print_status(&self) {
         let cumulative = self.runtime.usage().cumulative_usage();
         let latest = self.runtime.usage().current_turn_usage();
+        let ctx = status_context(Some(&self.session.path)).unwrap_or_default();
         println!(
             "{}",
             format_status_report(
@@ -3605,7 +3668,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     estimated_tokens: self.runtime.estimated_tokens(),
                 },
                 self.permission_mode.as_str(),
-                &status_context(Some(&self.session.path)).expect("status context should load"),
+                &ctx,
             )
         );
     }
@@ -3684,7 +3747,8 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
         let previous = self.permission_mode.as_str().to_string();
         let session = self.runtime.session().clone();
-        self.permission_mode = permission_mode_from_label(normalized);
+        self.permission_mode = permission_mode_from_label(normalized)
+            .ok_or_else(|| format!("unsupported permission mode label: {normalized}"))?;
         self.runtime = build_runtime(
             session,
             self.model.clone(),
@@ -5395,7 +5459,7 @@ fn save_permanent_tool_whitelist(set: &BTreeSet<String>) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let list: Vec<&String> = set.iter().collect();
+    let list: Vec<&str> = set.iter().map(String::as_str).collect();
     if let Ok(data) = serde_json::to_string_pretty(&list) {
         let _ = fs::write(&path, data);
     }
@@ -5858,7 +5922,9 @@ impl ApiClient for DefaultRuntimeClient {
             if crate::swd::SwdLevel::from_u8(self.swd_level.load(Ordering::Relaxed))
                 == crate::swd::SwdLevel::Full
             {
-                let ctx = correction_shared.lock().unwrap().clone();
+                // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                let ctx = correction_shared.lock().expect("correction_ctx mutex poisoned").clone();
                 if ctx.has_failures() && ctx.can_retry() {
                     let attempt = ctx.attempts;
                     let max_attempts = ctx.max_attempts;
@@ -5866,7 +5932,9 @@ impl ApiClient for DefaultRuntimeClient {
                         let _ = sender.send(tui::TuiMsg::CorrectionRetry { attempt, max_attempts });
                     }
                 }
-                self.correction_ctx = correction_shared.lock().unwrap().clone();
+                // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+                //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
+                self.correction_ctx = correction_shared.lock().expect("correction_ctx mutex poisoned").clone();
             }
         }
 

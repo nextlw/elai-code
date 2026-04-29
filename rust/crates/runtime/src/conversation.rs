@@ -355,30 +355,41 @@ where
             ptl_err.message,
         );
 
-        let result = compact_session(
-            &self.session,
-            CompactionConfig {
-                max_estimated_tokens: 0,
-                ..CompactionConfig::default()
-            },
-        );
-
-        if result.removed_message_count == 0 {
-            self.consecutive_compact_failures += 1;
-            eprintln!(
-                "[elai] auto-compact removed 0 messages; circuit breaker count now {}",
-                self.consecutive_compact_failures
+        // Try progressively more aggressive compaction before giving up.
+        // When the session is already small (e.g. 5 messages with preserve=4),
+        // the default preserve_recent_messages=4 removes nothing. Reduce it
+        // step-by-step so there is always something to cut.
+        for preserve_recent in [
+            CompactionConfig::default().preserve_recent_messages,
+            2,
+            1,
+            0,
+        ] {
+            let result = compact_session(
+                &self.session,
+                CompactionConfig {
+                    max_estimated_tokens: 0,
+                    preserve_recent_messages: preserve_recent,
+                },
             );
-            return Ok(false);
+
+            if result.removed_message_count > 0 {
+                eprintln!(
+                    "[elai] auto-compact removed {} message(s) (preserve_recent={}); retrying request",
+                    result.removed_message_count, preserve_recent,
+                );
+                self.session = result.compacted_session;
+                self.consecutive_compact_failures = 0;
+                return Ok(true);
+            }
         }
 
+        self.consecutive_compact_failures += 1;
         eprintln!(
-            "[elai] auto-compact removed {} message(s); retrying request",
-            result.removed_message_count
+            "[elai] auto-compact removed 0 messages even with aggressive settings; circuit breaker count now {}",
+            self.consecutive_compact_failures
         );
-        self.session = result.compacted_session;
-        self.consecutive_compact_failures = 0;
-        Ok(true)
+        Ok(false)
     }
 
     pub fn reset_compact_failures(&mut self) {

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseEventKind,
 };
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
@@ -76,6 +76,10 @@ fn theme() -> RatatuiTheme {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Atualiza o cache de tema com as cores resolvidas do ambiente.
+///
+/// Chamado pelo runtime quando um comando altera o tema (ex: `/theme gray 240`).
+/// Re-resolve `ColorTheme` e projeta para `RatatuiTheme` via cache singleton.
 pub fn refresh_theme_cache() {
     let mut guard = theme_cache()
         .lock()
@@ -1159,17 +1163,18 @@ fn first_selectable_row(rows: &[PaletteRow]) -> usize {
 
 // ─── Terminal lifecycle helpers ───────────────────────────────────────────────
 
-/// Enter alternate screen + raw mode + mouse capture.
+/// Enter alternate screen + raw mode. Mouse capture is intentionally NOT enabled
+/// so the user can select and copy text natively at any time.
 pub fn enter_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     Ok(())
 }
 
 /// Restore terminal on exit (always call even on error).
 pub fn leave_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(stdout, LeaveAlternateScreen)?;
     Ok(())
 }
 
@@ -1182,6 +1187,7 @@ pub enum TuiAction {
     SetPermissions(String),
     ResumeSession(String),
     SlashCommand(String),
+    CopyToClipboard(String),
     EnterReadMode,
     ExitReadMode,
     SetupComplete,
@@ -1303,6 +1309,25 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         }
         (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
             return TuiAction::EnterReadMode;
+        }
+        // Ctrl+Y: copia a última mensagem do assistente para a área de transferência.
+        (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
+            let text = app
+                .chat
+                .iter()
+                .rev()
+                .find_map(|e| {
+                    if let ChatEntry::AssistantText(t) = e {
+                        Some(t.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            if !text.is_empty() {
+                return TuiAction::CopyToClipboard(text);
+            }
+            return TuiAction::None;
         }
         (KeyModifiers::NONE, KeyCode::F(2)) => {
             app.open_model_picker();
@@ -2670,7 +2695,8 @@ fn start_oauth_flow(
     let url = req.build_url();
     let url_for_thread = url.clone();
 
-    std::thread::spawn(move || {
+    // JoinHandle descartado: thread daemon de abertura do browser para OAuth; encerra quando o canal fecha (TUI encerrando).
+    let _oauth_browser_handle = std::thread::spawn(move || {
         let _ = tx.send(AuthEvent::Progress("Opening browser...".into()));
         let _ = crate::auth::open_browser(&url_for_thread);
         let _ = tx.send(AuthEvent::Progress(format!("Waiting for callback on port {port}...")));
@@ -2918,8 +2944,7 @@ pub fn render(
         // Compute how many rows the input text needs so the box grows with content.
         // avail_w = terminal_width - 2 (block borders) - 2 ("> " prompt prefix), min 1
         let avail_w = (size.width.saturating_sub(4) as usize).max(1);
-        let char_count = app.input.chars().count();
-        let text_rows = ((char_count + avail_w - 1) / avail_w).max(1);
+        let text_rows = count_input_rows(&app.input, avail_w);
         let visible_input_rows = text_rows.min(6_usize); // grow up to 6 rows, then scroll
         // area height = top_border(1) + input_rows + hint(1) + bottom_border(1) = rows + 3
         let input_area_h = (visible_input_rows + 3) as u16;
@@ -3925,6 +3950,57 @@ fn estimate_cost(model: &str, input: u32, output: u32) -> f64 {
     f64::from(input) * in_rate + f64::from(output) * out_rate
 }
 
+// ── Input helpers ─────────────────────────────────────────────────────────────
+
+/// Build visual rows for multi-line input. Each row is `(start, end)` into `chars`,
+/// where `chars[start..end]` is the visible content (excludes any trailing `\n`).
+/// Hard line breaks (`\n`) start a new row; soft wraps happen at `avail_w`.
+fn build_input_rows(chars: &[char], avail_w: usize) -> Vec<(usize, usize)> {
+    let avail_w = avail_w.max(1);
+    if chars.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut rows = Vec::new();
+    let mut pos = 0;
+    while pos <= chars.len() {
+        // End of the current logical line (next \n or end of chars).
+        let line_end = chars[pos..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map(|i| pos + i)
+            .unwrap_or(chars.len());
+
+        let line_len = line_end - pos;
+        if line_len == 0 {
+            // Empty logical line (blank line after \n or trailing \n).
+            rows.push((pos, pos));
+        } else {
+            // Soft-wrap each segment that exceeds avail_w.
+            let mut seg = pos;
+            while seg < line_end {
+                let end = (seg + avail_w).min(line_end);
+                rows.push((seg, end));
+                seg = end;
+            }
+        }
+
+        if line_end >= chars.len() {
+            break;
+        }
+        pos = line_end + 1; // skip past the \n
+    }
+    if rows.is_empty() {
+        rows.push((0, 0));
+    }
+    rows
+}
+
+/// Count how many visual rows the input occupies (respects `\n` and `avail_w`).
+fn count_input_rows(input: &str, avail_w: usize) -> usize {
+    let chars: Vec<char> = input.chars().collect();
+    build_input_rows(&chars, avail_w).len().max(1)
+}
+
 // ── Input box ─────────────────────────────────────────────────────────────────
 
 fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
@@ -3976,23 +4052,10 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         layout[1],
     );
 
-    // Multi-line input: break text into rows of avail_w chars, render each row.
+    // Multi-line input: break text into rows respecting \n and avail_w wrap width.
     let avail_w = (input_area.width.saturating_sub(2) as usize).max(1); // minus "> " prefix
     let chars: Vec<char> = app.input.chars().collect();
-
-    // Build row spans: each entry is (start_char_idx, end_char_idx).
-    let rows: Vec<(usize, usize)> = if chars.is_empty() {
-        vec![(0, 0)]
-    } else {
-        let mut r = Vec::new();
-        let mut pos = 0;
-        while pos < chars.len() {
-            let end = (pos + avail_w).min(chars.len());
-            r.push((pos, end));
-            pos = end;
-        }
-        r
-    };
+    let rows = build_input_rows(&chars, avail_w);
 
     // Cursor row: last row whose start <= cursor_col.
     let cursor_row = rows
