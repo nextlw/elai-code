@@ -85,6 +85,7 @@ pub fn refresh_theme_cache() {
 #[derive(Debug)]
 pub enum TuiMsg {
     TextChunk(String),
+    ThinkingChunk(String),
     ToolCall { name: String, input: String },
     ToolResult { ok: bool },
     Usage { input_tokens: u32, output_tokens: u32 },
@@ -168,6 +169,12 @@ pub enum ChatEntry {
     ToolBatchEntry {
         items: Vec<ToolBatchItem>,
         closed: bool,
+    },
+    /// Bloco de raciocínio interno (extended thinking). Acumula enquanto
+    /// `finished = false`; congela quando texto ou Done/Error chega.
+    ThinkingBlock {
+        text: String,
+        finished: bool,
     },
     SystemNote(String),
     SwdLogEntry {
@@ -508,6 +515,12 @@ impl UiApp {
         if !matches!(entry, ChatEntry::ToolBatchEntry { .. }) {
             self.close_open_tool_batch();
         }
+        // Fecha ThinkingBlock aberto quando outra entry que não seja ThinkingBlock chega.
+        if !matches!(entry, ChatEntry::ThinkingBlock { .. }) {
+            if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
+                *finished = true;
+            }
+        }
         self.chat.push(entry);
         self.scroll_to_bottom();
     }
@@ -529,6 +542,10 @@ impl UiApp {
     pub fn apply_tui_msg(&mut self, msg: TuiMsg) {
         match msg {
             TuiMsg::TextChunk(text) => {
+                // Fecha bloco de thinking quando texto narrativo começa.
+                if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
+                    *finished = true;
+                }
                 // Texto do agente entra direto na entry `AssistantText` aberta
                 // (caso comum: chunks fragmentados do mesmo parágrafo) ou cria
                 // uma nova entry. Texto entre tools NÃO é tratado como
@@ -541,6 +558,16 @@ impl UiApp {
                     self.chat.push(ChatEntry::AssistantText(text));
                 }
                 self.scroll_to_bottom();
+            }
+            TuiMsg::ThinkingChunk(text) => {
+                if let Some(ChatEntry::ThinkingBlock { text: buf, finished: false }) =
+                    self.chat.last_mut()
+                {
+                    buf.push_str(&text);
+                } else {
+                    self.chat.push(ChatEntry::ThinkingBlock { text, finished: false });
+                    self.scroll_to_bottom();
+                }
             }
             TuiMsg::ToolCall { name, input } => {
                 // Resumo legível: usa `tool_input_one_line` para extrair o
@@ -587,9 +614,15 @@ impl UiApp {
             }
             TuiMsg::Done => {
                 self.thinking = false;
+                if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
+                    *finished = true;
+                }
             }
             TuiMsg::Error(msg) => {
                 self.thinking = false;
+                if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
+                    *finished = true;
+                }
                 self.push_chat(ChatEntry::SystemNote(format!("❌ Error: {msg}")));
             }
             TuiMsg::SwdResult(tx) => {
@@ -3435,6 +3468,29 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 if *closed {
                     result.push(Line::from(""));
                 }
+            }
+            ChatEntry::ThinkingBlock { text, finished } => {
+                let (icon, label) = if *finished {
+                    ("\u{1f4ad}", format!("Pensamento ({} chars)", text.len()))
+                } else {
+                    let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                    (frame, "Pensando...".to_string())
+                };
+                result.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {icon} "),
+                        Style::default()
+                            .fg(theme().thinking)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .fg(theme().thinking)
+                            .add_modifier(if *finished { Modifier::DIM } else { Modifier::BOLD }),
+                    ),
+                ]));
+                result.push(Line::from(""));
             }
             ChatEntry::SystemNote(note) => {
                 for line in note.lines() {

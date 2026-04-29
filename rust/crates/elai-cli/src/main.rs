@@ -30,10 +30,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    max_tokens_for_model, resolve_model_alias, suggested_default_model,
+    default_thinking_config, max_tokens_for_model, resolve_model_alias, suggested_default_model,
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContentBlock,
+    OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice,
+    ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -142,7 +142,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let report = perform_uninstall();
             println!("{report}");
         }
-        CliAction::Send { message, wait, json } => run_headless_send(&message, wait, json)?,
+        CliAction::Send { message, wait, json, thinking_budget } => run_headless_send(&message, wait, json, thinking_budget)?,
         CliAction::ChatShow { last, json } => run_chat_show(last, json)?,
         CliAction::ModelGet => run_model_get()?,
         CliAction::ModelSet { model } => run_model_set(&model)?,
@@ -371,6 +371,8 @@ enum CliAction {
         message: String,
         wait: bool,
         json: bool,
+        /// Orçamento explícito de tokens para thinking (None = default por modelo).
+        thinking_budget: Option<u32>,
     },
     ChatShow {
         last: usize,
@@ -784,6 +786,7 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
     let mut wait = false;
     let mut json = false;
     let mut stdin = false;
+    let mut thinking_budget: Option<u32> = None;
     let mut parts: Vec<String> = Vec::new();
     let mut idx = 0;
     while idx < args.len() {
@@ -791,6 +794,14 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
             "--wait" => { wait = true; idx += 1; }
             "--json" => { json = true; idx += 1; }
             "--stdin" | "-" => { stdin = true; idx += 1; }
+            "--ultrathink" => { thinking_budget = Some(32_000); idx += 1; }
+            "--thinking" => {
+                idx += 1;
+                if let Some(raw) = args.get(idx) {
+                    thinking_budget = raw.parse::<u32>().ok();
+                    idx += 1;
+                }
+            }
             other => { parts.push(other.to_string()); idx += 1; }
         }
     }
@@ -805,7 +816,7 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
     if message.is_empty() {
         return Err("send requires a message; use 'elai send \"text\"' or 'echo text | elai send -'".into());
     }
-    Ok(CliAction::Send { message, wait, json })
+    Ok(CliAction::Send { message, wait, json, thinking_budget })
 }
 
 fn parse_chat_args(args: &[String]) -> Result<CliAction, String> {
@@ -1175,13 +1186,45 @@ fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
 /// `elai send "message"` — fire a single prompt and print the response to stdout.
 /// With `--wait` it waits for the full response (default); always waits currently.
 /// With `--json` it emits JSON (same structure as CliAction::Prompt with --output-format=json).
-fn run_headless_send(message: &str, _wait: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// With `--thinking N` ou `--ultrathink` configura o orçamento de extended thinking.
+/// Quando thinking está ativo (override explícito, palavra-chave `ultrathink` no
+/// texto, ou default por modelo), o `CAPYBARA_SYSTEM_PROMPT` é anexado ao system
+/// prompt para reforçar a disciplina de raciocínio profundo.
+fn run_headless_send(
+    message: &str,
+    _wait: bool,
+    json: bool,
+    thinking_budget: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let model = suggested_default_model();
     let output_format = if json { CliOutputFormat::Json } else { CliOutputFormat::Text };
     let allowed_tools = None;
     let permission_mode = default_permission_mode();
-    LiveCli::new(model, true, allowed_tools, permission_mode, false)?
-        .run_turn_with_output(message, output_format)
+
+    // Detecta ultrathink no texto OU --ultrathink/--thinking flag.
+    let ultrathink_keyword = message.to_ascii_lowercase().contains("ultrathink");
+    let thinking_config: Option<ThinkingConfig> = match thinking_budget {
+        Some(budget) => Some(ThinkingConfig::Enabled { budget_tokens: budget }),
+        None if ultrathink_keyword => Some(ThinkingConfig::Enabled { budget_tokens: 32_000 }),
+        None => default_thinking_config(&model),
+    };
+
+    let extra_system = if thinking_config.is_some() {
+        Some(runtime::CAPYBARA_SYSTEM_PROMPT.to_string())
+    } else {
+        None
+    };
+
+    LiveCli::new_with_thinking(
+        model,
+        true,
+        allowed_tools,
+        permission_mode,
+        false,
+        thinking_config,
+        extra_system,
+    )?
+    .run_turn_with_output(message, output_format)
 }
 
 /// `elai chat show [--last N] [--json]` — show the last N messages from the most-recent session.
@@ -1278,7 +1321,7 @@ fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// `elai reply "answer"` — send a reply in the context of the most recent session.
 /// Implemented as a headless send (the session continuity is handled by LiveCli resumption).
 fn run_reply(answer: &str) -> Result<(), Box<dyn std::error::Error>> {
-    run_headless_send(answer, true, false)
+    run_headless_send(answer, true, false, None)
 }
 
 /// `elai status [--json]` — show elai version, current model, auth state, and cwd.
@@ -1985,6 +2028,7 @@ fn run_tui_repl(
                     app.should_quit = true;
                 }
                 tui::TuiAction::SendMessage(text) => {
+                    let ultrathink = text.to_ascii_lowercase().contains("ultrathink");
                     if !app.thinking {
                         budget_warned_at = 0;
                         app.thinking = true;
@@ -2003,6 +2047,10 @@ fn run_tui_repl(
                                 prompt_clone.push(crate::swd::SWD_FULL_SYSTEM_PROMPT.to_string());
                             }
                         }
+                        // Injeta CAPYBARA quando ultrathink está ativo.
+                        if ultrathink {
+                            prompt_clone.push(runtime::CAPYBARA_SYSTEM_PROMPT.to_string());
+                        }
                         let session_clone = {
                             let guard = session.lock().unwrap();
                             guard.clone()
@@ -2012,6 +2060,11 @@ fn run_tui_repl(
                         let done_tx = thread_done_tx.clone();
                         let session_for_thread = Arc::clone(&session);
                         let swd_atomic_clone = Arc::clone(&swd_atomic);
+                        let thinking_override: Option<ThinkingConfig> = if ultrathink {
+                            Some(ThinkingConfig::Enabled { budget_tokens: 32_000 })
+                        } else {
+                            None
+                        };
 
                         thread::spawn(move || {
                             let result: Result<(), String> = (|| {
@@ -2023,6 +2076,7 @@ fn run_tui_repl(
                                     perm_clone,
                                     msg_tx_clone.clone(),
                                     swd_atomic_clone,
+                                    thinking_override,
                                 ).map_err(|e| {
                                     let msg = e.to_string();
                                     let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
@@ -2928,6 +2982,74 @@ impl LiveCli {
         )?;
 
         // Initialize response cache.
+        let cache = if no_cache {
+            ResponseCache::disabled()
+        } else {
+            let cache_path = dirs_home()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".elai")
+                .join("cache.json");
+            ResponseCache::new(cache_path, ResponseCache::DEFAULT_TTL_MS)
+        };
+
+        let user_commands = {
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            UserCommandRegistry::discover(&cwd).unwrap_or_default()
+        };
+
+        let cli = Self {
+            model,
+            allowed_tools,
+            permission_mode,
+            system_prompt,
+            runtime,
+            session,
+            telemetry,
+            _telemetry_shutdown: telemetry_shutdown,
+            session_start: Instant::now(),
+            cache,
+            user_commands,
+        };
+        cli.persist_session()?;
+        Ok(cli)
+    }
+
+    /// Variante de [`Self::new`] que aplica um override de extended thinking e
+    /// (opcionalmente) anexa uma seção extra ao system prompt antes de construir
+    /// o runtime. Usada pelo CLI headless para suportar `--thinking`/`--ultrathink`
+    /// e injetar o `CAPYBARA_SYSTEM_PROMPT` quando thinking está ativo.
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_thinking(
+        model: String,
+        enable_tools: bool,
+        allowed_tools: Option<AllowedToolSet>,
+        permission_mode: PermissionMode,
+        no_cache: bool,
+        thinking: Option<ThinkingConfig>,
+        extra_system: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut system_prompt = build_system_prompt()?;
+        if let Some(extra) = extra_system {
+            system_prompt.push(extra);
+        }
+        let session = create_managed_session_handle()?;
+
+        let (telemetry, telemetry_shutdown) = start_telemetry();
+
+        let runtime = build_runtime_with_thinking(
+            Session::new(),
+            model.clone(),
+            system_prompt.clone(),
+            enable_tools,
+            true,
+            allowed_tools.clone(),
+            permission_mode,
+            None,
+            telemetry.clone(),
+            thinking,
+        )?;
+
         let cache = if no_cache {
             ResponseCache::disabled()
         } else {
@@ -5129,6 +5251,35 @@ fn build_runtime(
     telemetry: TelemetryHandle,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
+    build_runtime_with_thinking(
+        session,
+        model,
+        system_prompt,
+        enable_tools,
+        emit_output,
+        allowed_tools,
+        permission_mode,
+        progress_reporter,
+        telemetry,
+        None,
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
+fn build_runtime_with_thinking(
+    session: Session,
+    model: String,
+    system_prompt: Vec<String>,
+    enable_tools: bool,
+    emit_output: bool,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    progress_reporter: Option<InternalPromptProgressReporter>,
+    telemetry: TelemetryHandle,
+    thinking: Option<ThinkingConfig>,
+) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
+{
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
     let swd_level = Arc::new(std::sync::atomic::AtomicU8::new(
         crate::swd::SwdLevel::default() as u8,
@@ -5144,7 +5295,8 @@ fn build_runtime(
             tool_registry.clone(),
             progress_reporter,
             Arc::clone(&swd_level),
-        )?,
+        )?
+        .with_thinking_opt(thinking),
         CliToolExecutor::new(
             allowed_tools.clone(),
             emit_output,
@@ -5168,6 +5320,7 @@ fn build_runtime_for_tui(
     permission_mode: PermissionMode,
     tui_msg_tx: mpsc::Sender<tui::TuiMsg>,
     swd_level: Arc<std::sync::atomic::AtomicU8>,
+    thinking_override: Option<ThinkingConfig>,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
@@ -5181,7 +5334,9 @@ fn build_runtime_for_tui(
             tool_registry.clone(),
             None,
             Arc::clone(&swd_level),
-        )?.with_tui_sender(tui_msg_tx.clone()),
+        )?
+        .with_tui_sender(tui_msg_tx.clone())
+        .with_thinking_opt(thinking_override),
         CliToolExecutor::new(
             allowed_tools.clone(),
             false,
@@ -5335,6 +5490,7 @@ struct DefaultRuntimeClient {
     tui_sender: Option<mpsc::Sender<tui::TuiMsg>>,
     swd_level: Arc<std::sync::atomic::AtomicU8>,
     correction_ctx: crate::swd::CorrectionContext,
+    thinking_override: Option<ThinkingConfig>,
 }
 
 impl DefaultRuntimeClient {
@@ -5368,11 +5524,23 @@ impl DefaultRuntimeClient {
             tui_sender: None,
             swd_level,
             correction_ctx: crate::swd::CorrectionContext::new(),
+            thinking_override: None,
         })
     }
 
     fn with_tui_sender(mut self, tx: mpsc::Sender<tui::TuiMsg>) -> Self {
         self.tui_sender = Some(tx);
+        self
+    }
+
+    #[allow(dead_code)]
+    fn with_thinking(mut self, config: ThinkingConfig) -> Self {
+        self.thinking_override = Some(config);
+        self
+    }
+
+    fn with_thinking_opt(mut self, config: Option<ThinkingConfig>) -> Self {
+        self.thinking_override = config;
         self
     }
 }
@@ -5393,7 +5561,10 @@ impl ApiClient for DefaultRuntimeClient {
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref(), &runtime::ToolCatalog::default(), None)),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
-            thinking: None,
+            thinking: self
+                .thinking_override
+                .clone()
+                .or_else(|| default_thinking_config(&self.model)),
             output_config: None,
         };
 
@@ -5477,8 +5648,12 @@ impl ApiClient for DefaultRuntimeClient {
                                 input.push_str(&partial_json);
                             }
                         }
-                        ContentBlockDelta::ThinkingDelta { .. }
-                        | ContentBlockDelta::SignatureDelta { .. } => {}
+                        ContentBlockDelta::ThinkingDelta { thinking } => {
+                            if let Some(ref tx) = tui_sender {
+                                let _ = tx.send(tui::TuiMsg::ThinkingChunk(thinking));
+                            }
+                        }
+                        ContentBlockDelta::SignatureDelta { .. } => {}
                     },
                     ApiStreamEvent::ContentBlockStop(_) => {
                         if tui_sender.is_none() {

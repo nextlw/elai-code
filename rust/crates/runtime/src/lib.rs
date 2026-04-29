@@ -102,7 +102,7 @@ pub use oneshot::{
 pub use prompt::{
     load_system_prompt, load_system_prompt_with_output, parse_mentions, prepend_bullets,
     read_mentioned_files, ContextFile, ProjectContext, PromptBuildError, SystemPromptBuilder,
-    SystemPromptOutput, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    SystemPromptOutput, CAPYBARA_SYSTEM_PROMPT, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use skills::{
     build_skill_prompt_sections, load_all_skills, validate_skills, Skill, SkillMetadata,

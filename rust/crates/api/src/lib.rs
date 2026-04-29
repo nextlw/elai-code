@@ -23,13 +23,13 @@ pub use providers::elai_provider::{
 };
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, resolve_model_alias, suggested_default_model,
-    ProviderKind,
+    default_thinking_config, detect_provider_kind, max_tokens_for_model, resolve_model_alias,
+    suggested_default_model, ProviderKind,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
-    InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
+    EffortLevel, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
     MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent,
-    ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
+    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };

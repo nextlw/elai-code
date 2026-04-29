@@ -49,6 +49,26 @@ impl From<ConfigError> for PromptBuildError {
 
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
 pub const FRONTIER_MODEL_NAME: &str = "Opus 4.6";
+
+/// Seção de personalidade adicionada quando extended thinking está ativo.
+/// Baseado no esquema "Capybara" do mythos-router — adapta as diretivas
+/// de raciocínio profundo para o contexto de elai-code.
+pub const CAPYBARA_SYSTEM_PROMPT: &str = "\
+## IDENTITY
+Tier: Capybara (Elai — Specialized Coding & PhD Reasoning)
+Protocol: Strict Write Discipline | Extended Thinking Active
+
+## ADAPTIVE DEEP REASONING
+You are running in high-effort adaptive thinking mode.
+Use your full reasoning capability for complex tasks.
+For simple queries, respond directly without overthinking.
+
+## RESPONSE FORMAT
+- Be precise. Be surgical. No slop.
+- When writing code, write complete implementations — no placeholders, no TODOs.
+- When analyzing, provide concrete evidence and file paths.
+- If uncertain, state your uncertainty explicitly rather than guessing.
+";
 const MAX_INSTRUCTION_FILE_CHARS: usize = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
 const MAX_MENTIONED_FILE_BYTES: usize = 50 * 1024;
