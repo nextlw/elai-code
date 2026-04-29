@@ -51,15 +51,23 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v0.7.3
+## What's New — v0.7.5
 
-- chore: update swd.log with new tool outcomes for types.rs
-- feat: add extended thinking and effort configuration to MessageRequest
-- feat(i18n): rollout completo (PR2-PR5)
-- feat: enhance README and add batch analysis documentation
-- feat: integrate rust-i18n for multilingual support and enhance command localization
-- feat: add onboarding tips to TUI and enhance runtime error handling
-- chore: update .gitignore to include ELAI.md
+- refactor(tui): enhance permission mode handling and add clipboard functionality
+- feat(tui): add syntax highlighting for code blocks in markdown
+- fix(tui): enhance input handling and markdown rendering
+- fix(runtime): improve tool result coverage detection in message repair
+- fix(tui): preserve inline text spaces in markdown renderer
+- fix(tui): remove Ctrl modifier from tips navigation hint
+- fix(tui): render /agents and /skills output inside TUI
+- feat(tui): add LocalePicker overlay for /locale command
+- fix(tui): sync chat history when resuming session via picker
+- fix(thinking): wire resolve_output_config and fix PasteOpenAiKey handler
+- feat(thinking): implement extended thinking — Capybara scheme
+- feat(tui): implement sync_session_to_app_chat for /session command
+- fix(elai-cli): remove undefined sync_session_to_app_chat call
+- fix(compaction): address code review issues — enforce PTL retry limit and cleanup
+- fix(compaction): boundary-aware cut, message repair guard, and auto-compact retry
 
 ---
 
