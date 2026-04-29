@@ -268,8 +268,6 @@ impl ElaiApiClient {
     ) -> Result<MessageResponse, ApiError> {
         let request = MessageRequest {
             stream: false,
-            thinking: None,
-            output_config: None,
             ..request.clone()
         };
         let (response, modified_tools) = self.send_with_retry(&request).await?;

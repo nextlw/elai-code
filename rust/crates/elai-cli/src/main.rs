@@ -30,11 +30,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    default_thinking_config, max_tokens_for_model, resolve_model_alias, resolve_output_config,
-    suggested_default_model, ContentBlockDelta, EffortLevel, InputContentBlock, InputMessage,
-    MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
-    StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice, ToolDefinition,
-    ToolResultContentBlock,
+    default_thinking_config, max_tokens_for_model, model_supports_adaptive_thinking,
+    model_supports_thinking, resolve_model_alias, resolve_output_config, suggested_default_model,
+    ContentBlockDelta, EffortLevel, InputContentBlock, InputMessage, MessageRequest,
+    MessageResponse, OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent,
+    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -5577,15 +5577,17 @@ impl ApiClient for DefaultRuntimeClient {
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref(), &runtime::ToolCatalog::default(), None)),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
-            thinking: self
-                .thinking_override
-                .clone()
-                .or_else(|| default_thinking_config(&self.model)),
-            output_config: {
-                let effort = match self.thinking_override.as_ref().or_else(|| {
-                    // borrow only for the match; don't store the Option
-                    None::<&ThinkingConfig>
-                }) {
+            thinking: if model_supports_thinking(&self.model) {
+                self.thinking_override
+                    .clone()
+                    .or_else(|| default_thinking_config(&self.model))
+            } else {
+                None
+            },
+            // output_config (effort level) only for models with adaptive thinking support
+            // (Opus/Sonnet 4.6+). Haiku and other models support thinking but not effort.
+            output_config: if model_supports_adaptive_thinking(&self.model) {
+                let effort = match self.thinking_override.as_ref() {
                     Some(ThinkingConfig::Enabled { .. }) => Some(EffortLevel::High),
                     Some(ThinkingConfig::Adaptive) | None
                         if default_thinking_config(&self.model).is_some() =>
@@ -5595,6 +5597,8 @@ impl ApiClient for DefaultRuntimeClient {
                     _ => None,
                 };
                 resolve_output_config(effort)
+            } else {
+                None
             },
         };
 

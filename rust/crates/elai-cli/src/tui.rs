@@ -2911,21 +2911,32 @@ pub fn render(
     terminal.draw(|frame| {
         let size = frame.area();
 
-        // Outer vertical split: header, body, status, input.
+        // Compute how many rows the input text needs so the box grows with content.
+        // avail_w = terminal_width - 2 (block borders) - 2 ("> " prompt prefix), min 1
+        let avail_w = (size.width.saturating_sub(4) as usize).max(1);
+        let char_count = app.input.chars().count();
+        let text_rows = ((char_count + avail_w - 1) / avail_w).max(1);
+        let visible_input_rows = text_rows.min(6_usize); // grow up to 6 rows, then scroll
+        // area height = top_border(1) + input_rows + hint(1) + bottom_border(1) = rows + 3
+        let input_area_h = (visible_input_rows + 3) as u16;
+
+        // Outer vertical split: header, body, margin, status, input.
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(12), // header
-                Constraint::Min(3),     // chat body
-                Constraint::Length(1),  // status footer
-                Constraint::Length(3),  // input + hint
+                Constraint::Length(12),         // header
+                Constraint::Min(3),             // chat body
+                Constraint::Length(2),          // margin between chat and status (≈24px)
+                Constraint::Length(1),          // status footer
+                Constraint::Length(input_area_h), // input (grows with content)
             ])
             .split(size);
 
         draw_header(frame, outer[0], app);
         draw_chat(frame, outer[1], app);
-        draw_status(frame, outer[2], app);
-        draw_input(frame, outer[3], app);
+        // outer[2] is the visual margin — nothing rendered
+        draw_status(frame, outer[3], app);
+        draw_input(frame, outer[4], app);
 
         // Draw overlays on top.
         if let Some(ref overlay) = app.overlay {
@@ -3239,6 +3250,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
     let mut italic = false;
     let mut heading: Option<u8> = None;
     let mut in_code = false;
+    let mut code_lang = String::new();
     let mut list_depth: usize = 0;
 
     let flush = |lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>| {
@@ -3299,17 +3311,21 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
             MdEvent::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
                 flush(&mut lines, &mut spans);
-                let lang = match kind {
-                    CodeBlockKind::Fenced(l) if !l.is_empty() => format!(" {l} "),
-                    _ => String::new(),
+                let (raw_lang, lang_display) = match kind {
+                    CodeBlockKind::Fenced(l) if !l.is_empty() => {
+                        (l.to_string().to_lowercase(), format!(" {l} "))
+                    }
+                    _ => (String::new(), String::new()),
                 };
+                code_lang = raw_lang;
                 lines.push(Line::from(Span::styled(
-                    format!("  ╭─{lang}─"),
+                    format!("  ╭─{lang_display}─"),
                     Style::default().fg(theme().border_inactive),
                 )));
             }
             MdEvent::End(TagEnd::CodeBlock) => {
                 in_code = false;
+                code_lang.clear();
                 flush(&mut lines, &mut spans);
                 lines.push(Line::from(Span::styled(
                     "  ╰──────",
@@ -3322,10 +3338,20 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 if in_code {
                     for l in t.lines() {
                         flush(&mut lines, &mut spans);
-                        lines.push(Line::from(Span::styled(
-                            format!("  │ {l}"),
-                            Style::default().fg(theme().inline_code),
-                        )));
+                        let line_style = if code_lang == "diff" {
+                            if l.starts_with('+') {
+                                Style::default().fg(theme().success).add_modifier(Modifier::BOLD)
+                            } else if l.starts_with('-') {
+                                Style::default().fg(theme().error).add_modifier(Modifier::BOLD)
+                            } else if l.starts_with('@') {
+                                Style::default().fg(theme().diff_context)
+                            } else {
+                                Style::default().fg(theme().inline_code)
+                            }
+                        } else {
+                            Style::default().fg(theme().inline_code)
+                        };
+                        lines.push(Line::from(Span::styled(format!("  │ {l}"), line_style)));
                     }
                 } else {
                     let style = text_style(bold, italic, heading);
@@ -3861,35 +3887,91 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
 
-    // Input line with cursor.
-    let before_cursor: String = app.input.chars().take(app.cursor_col).collect();
-    let cursor_char: String = app
-        .input
-        .chars()
-        .nth(app.cursor_col)
-        .map(|c| c.to_string())
-        .unwrap_or_else(|| " ".to_string());
-    let after_cursor: String = app.input.chars().skip(app.cursor_col + 1).collect();
-
-    let input_spans = vec![
-        Span::styled("> ", Style::default().fg(theme().primary_accent)),
-        Span::styled(before_cursor, Style::default().fg(theme().text_primary)),
-        Span::styled(
-            cursor_char,
-            Style::default()
-                .fg(theme().accent_on_primary_bg)
-                .bg(theme().primary_accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(after_cursor, Style::default().fg(theme().text_primary)),
-    ];
-    frame.render_widget(Paragraph::new(Line::from(input_spans)), layout[0]);
+    let input_area = layout[0];
 
     // Hint line.
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(theme().text_secondary)),
         layout[1],
     );
+
+    // Multi-line input: break text into rows of avail_w chars, render each row.
+    let avail_w = (input_area.width.saturating_sub(2) as usize).max(1); // minus "> " prefix
+    let chars: Vec<char> = app.input.chars().collect();
+
+    // Build row spans: each entry is (start_char_idx, end_char_idx).
+    let rows: Vec<(usize, usize)> = if chars.is_empty() {
+        vec![(0, 0)]
+    } else {
+        let mut r = Vec::new();
+        let mut pos = 0;
+        while pos < chars.len() {
+            let end = (pos + avail_w).min(chars.len());
+            r.push((pos, end));
+            pos = end;
+        }
+        r
+    };
+
+    // Cursor row: last row whose start <= cursor_col.
+    let cursor_row = rows
+        .iter()
+        .rposition(|(s, _)| *s <= app.cursor_col)
+        .unwrap_or(0);
+
+    // Scroll window: keep cursor visible (scroll from bottom).
+    let max_visible = input_area.height as usize;
+    let first_visible = if cursor_row + 1 > max_visible {
+        cursor_row + 1 - max_visible
+    } else {
+        0
+    };
+
+    for (vis_i, row_i) in
+        (first_visible..(first_visible + max_visible).min(rows.len())).enumerate()
+    {
+        let (row_start, row_end) = rows[row_i];
+        let prefix = if row_i == 0 { "> " } else { "  " };
+        let is_cursor_row = row_i == cursor_row;
+        let row_area = Rect { y: input_area.y + vis_i as u16, height: 1, ..input_area };
+
+        let mut spans = vec![Span::styled(prefix, Style::default().fg(theme().primary_accent))];
+
+        if is_cursor_row {
+            let local = app.cursor_col.saturating_sub(row_start);
+            let row_chars = &chars[row_start..row_end];
+            let before: String = row_chars[..local.min(row_chars.len())].iter().collect();
+            let cursor_char = row_chars
+                .get(local)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| " ".to_string());
+            let after: String = row_chars
+                .get(local + 1..)
+                .unwrap_or(&[])
+                .iter()
+                .collect();
+            if !before.is_empty() {
+                spans.push(Span::styled(before, Style::default().fg(theme().text_primary)));
+            }
+            spans.push(Span::styled(
+                cursor_char,
+                Style::default()
+                    .fg(theme().accent_on_primary_bg)
+                    .bg(theme().primary_accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if !after.is_empty() {
+                spans.push(Span::styled(after, Style::default().fg(theme().text_primary)));
+            }
+        } else {
+            let text: String = chars[row_start..row_end].iter().collect();
+            if !text.is_empty() {
+                spans.push(Span::styled(text, Style::default().fg(theme().text_primary)));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+    }
 }
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
