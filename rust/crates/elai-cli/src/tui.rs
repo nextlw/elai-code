@@ -33,6 +33,10 @@ use crossterm::event::{
     KeyModifiers, MouseEventKind,
 };
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Theme as SyntectTheme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -3243,6 +3247,89 @@ fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
     }
 }
 
+// ── Syntax highlighting ───────────────────────────────────────────────────────
+
+static SYNTAX_RESOURCES: OnceLock<(SyntaxSet, SyntectTheme)> = OnceLock::new();
+
+fn syntax_resources() -> &'static (SyntaxSet, SyntectTheme) {
+    SYNTAX_RESOURCES.get_or_init(|| {
+        let ss = SyntaxSet::load_defaults_newlines();
+        let theme = ThemeSet::load_defaults()
+            .themes
+            .remove("base16-ocean.dark")
+            .unwrap_or_default();
+        (ss, theme)
+    })
+}
+
+/// Language-specific label color — each language has its recognized brand color.
+fn lang_label_color(lang: &str) -> ratatui::style::Color {
+    match lang {
+        "rust" | "rs" => ratatui::style::Color::Rgb(206, 100, 40),
+        "python" | "py" => ratatui::style::Color::Rgb(53, 114, 165),
+        "javascript" | "js" => ratatui::style::Color::Rgb(241, 224, 90),
+        "typescript" | "ts" | "tsx" | "jsx" => ratatui::style::Color::Rgb(43, 116, 175),
+        "go" => ratatui::style::Color::Rgb(0, 173, 216),
+        "bash" | "sh" | "shell" | "zsh" | "fish" => ratatui::style::Color::Rgb(137, 224, 81),
+        "json" => ratatui::style::Color::Rgb(200, 200, 200),
+        "toml" | "yaml" | "yml" => ratatui::style::Color::Rgb(180, 130, 70),
+        "html" => ratatui::style::Color::Rgb(227, 76, 38),
+        "css" | "scss" | "sass" => ratatui::style::Color::Rgb(150, 90, 200),
+        "c" => ratatui::style::Color::Rgb(85, 170, 200),
+        "cpp" | "c++" | "cxx" => ratatui::style::Color::Rgb(243, 75, 125),
+        "java" => ratatui::style::Color::Rgb(176, 114, 25),
+        "ruby" | "rb" => ratatui::style::Color::Rgb(180, 40, 40),
+        "sql" => ratatui::style::Color::Rgb(220, 80, 80),
+        "diff" => ratatui::style::Color::Rgb(240, 200, 80),
+        "markdown" | "md" => ratatui::style::Color::Rgb(100, 150, 200),
+        _ => ratatui::style::Color::Rgb(160, 160, 160),
+    }
+}
+
+/// Highlight a block of code using syntect and return ratatui Lines.
+/// Each line is prefixed with the sidebar gutter `  │ `.
+fn highlight_code_to_lines(code: &str, lang: &str, border_color: ratatui::style::Color) -> Vec<Line<'static>> {
+    let (ss, syn_theme) = syntax_resources();
+    let syntax = ss
+        .find_syntax_by_token(lang)
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let mut h = HighlightLines::new(syntax, syn_theme);
+    let mut result = Vec::new();
+
+    for raw_line in LinesWithEndings::from(code) {
+        let stripped = raw_line.trim_end_matches('\n').trim_end_matches('\r').to_string();
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::styled("  │ ", Style::default().fg(border_color)),
+        ];
+        match h.highlight_line(raw_line, ss) {
+            Ok(ranges) => {
+                for (style, fragment) in ranges {
+                    let text = fragment
+                        .trim_end_matches('\n')
+                        .trim_end_matches('\r')
+                        .to_string();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let fg = ratatui::style::Color::Rgb(
+                        style.foreground.r,
+                        style.foreground.g,
+                        style.foreground.b,
+                    );
+                    spans.push(Span::styled(text, Style::default().fg(fg)));
+                }
+            }
+            Err(_) => {
+                spans.push(Span::styled(stripped, Style::default().fg(theme().inline_code)));
+            }
+        }
+        result.push(Line::from(spans));
+    }
+    result
+}
+
+// ── Markdown → ratatui Lines ──────────────────────────────────────────────────
+
 fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -3251,6 +3338,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
     let mut heading: Option<u8> = None;
     let mut in_code = false;
     let mut code_lang = String::new();
+    let mut code_buffer = String::new();
     let mut list_depth: usize = 0;
 
     let flush = |lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>| {
@@ -3310,49 +3398,42 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
             MdEvent::End(TagEnd::Item) => flush(&mut lines, &mut spans),
             MdEvent::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
+                code_buffer.clear();
                 flush(&mut lines, &mut spans);
-                let (raw_lang, lang_display) = match kind {
+                let (raw_lang, lang_display, original_label) = match kind {
                     CodeBlockKind::Fenced(l) if !l.is_empty() => {
-                        (l.to_string().to_lowercase(), format!(" {l} "))
+                        let original = l.to_string();
+                        (original.to_lowercase(), format!(" {original} "), original)
                     }
-                    _ => (String::new(), String::new()),
+                    _ => (String::new(), String::new(), String::new()),
                 };
                 code_lang = raw_lang;
-                lines.push(Line::from(Span::styled(
-                    format!("  ╭─{lang_display}─"),
-                    Style::default().fg(theme().border_inactive),
-                )));
+                let lc = lang_label_color(&code_lang);
+                // Header: colored border + bold label + border continuation
+                lines.push(Line::from(vec![
+                    Span::styled("  ╭─", Style::default().fg(lc)),
+                    Span::styled(lang_display, Style::default().fg(lc).add_modifier(Modifier::BOLD)),
+                    Span::styled("─", Style::default().fg(lc)),
+                ]));
+                let _ = original_label;
             }
             MdEvent::End(TagEnd::CodeBlock) => {
                 in_code = false;
-                code_lang.clear();
-                flush(&mut lines, &mut spans);
-                lines.push(Line::from(Span::styled(
-                    "  ╰──────",
-                    Style::default().fg(theme().border_inactive),
-                )));
+                // Render accumulated code with syntect syntax highlighting.
+                let lc = lang_label_color(&code_lang);
+                let highlighted = highlight_code_to_lines(&code_buffer, &code_lang, lc);
+                lines.extend(highlighted);
+                // Footer border in lang color.
+                lines.push(Line::from(Span::styled("  ╰──────", Style::default().fg(lc))));
                 lines.push(Line::from(""));
+                code_lang.clear();
+                code_buffer.clear();
             }
             MdEvent::Text(t) => {
                 let t = t.into_string();
                 if in_code {
-                    for l in t.lines() {
-                        flush(&mut lines, &mut spans);
-                        let line_style = if code_lang == "diff" {
-                            if l.starts_with('+') {
-                                Style::default().fg(theme().success).add_modifier(Modifier::BOLD)
-                            } else if l.starts_with('-') {
-                                Style::default().fg(theme().error).add_modifier(Modifier::BOLD)
-                            } else if l.starts_with('@') {
-                                Style::default().fg(theme().diff_context)
-                            } else {
-                                Style::default().fg(theme().inline_code)
-                            }
-                        } else {
-                            Style::default().fg(theme().inline_code)
-                        };
-                        lines.push(Line::from(Span::styled(format!("  │ {l}"), line_style)));
-                    }
+                    // Accumulate; rendering happens at End(CodeBlock) with syntect.
+                    code_buffer.push_str(&t);
                 } else {
                     let style = text_style(bold, italic, heading);
                     let mut first = true;
