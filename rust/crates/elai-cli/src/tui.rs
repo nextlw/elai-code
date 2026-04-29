@@ -148,7 +148,10 @@ pub enum ToolItemStatus {
 
 #[derive(Debug, Clone)]
 pub struct ToolBatchItem {
+    /// Nome da ferramenta (ex: `bash`, `read_file`).
     pub name: String,
+    /// Resumo legível do input — extraído via `tool_input_one_line` (mostra
+    /// `cd /foo` em vez do JSON literal `{"command":"cd /foo"}`).
     pub input_summary: String,
     pub status: ToolItemStatus,
 }
@@ -157,11 +160,11 @@ pub struct ToolBatchItem {
 pub enum ChatEntry {
     UserMessage(String),
     AssistantText(String),
-    /// Bloco agrupado de tool calls executadas em sequência, no padrão visual de
-    /// `TaskProgress`. Itens recém-chegados são `Running` (spinner) e migram para
-    /// `Ok`/`Err` quando o resultado correspondente chega. Qualquer texto do
-    /// assistente, mensagem do usuário ou nota de sistema fecha o bloco — o
-    /// próximo `TuiMsg::ToolCall` então abre um bloco novo.
+    /// Bloco agrupado de tool calls executadas em sequência. Itens recém-chegados
+    /// são `Running` (spinner) e migram para `Ok`/`Err` quando o resultado
+    /// correspondente chega. Qualquer entry de outro tipo "interrompe" o
+    /// agrupamento (`closed = true`); o próximo `TuiMsg::ToolCall` abre um
+    /// bloco novo.
     ToolBatchEntry {
         items: Vec<ToolBatchItem>,
         closed: bool,
@@ -253,6 +256,9 @@ pub enum AuthMethodChoice {
     SsoOAuth,
     PasteApiKey,
     PasteAuthToken,
+    /// API key da OpenAI (sk-... ou sk-proj-...). Salva como
+    /// `AuthMethod::OpenAiApiKey` no credentials store.
+    PasteOpenAiKey,
     UseBedrock,
     UseVertex,
     UseFoundry,
@@ -497,8 +503,8 @@ impl UiApp {
         if matches!(entry, ChatEntry::UserMessage(_)) {
             self.show_tips = false;
         }
-        // Qualquer entry que não seja um item de tool batch fecha o batch
-        // aberto na cauda do chat — o próximo tool call iniciará um novo bloco.
+        // Qualquer entry que NÃO seja um item de tool batch fecha o batch
+        // aberto na cauda do chat — o próximo tool call iniciará um bloco novo.
         if !matches!(entry, ChatEntry::ToolBatchEntry { .. }) {
             self.close_open_tool_batch();
         }
@@ -506,7 +512,7 @@ impl UiApp {
         self.scroll_to_bottom();
     }
 
-    /// Marca o último `ToolBatchEntry` ainda aberto como `closed = true`. Idempotente.
+    /// Marca o último `ToolBatchEntry` aberto como `closed = true`. Idempotente.
     fn close_open_tool_batch(&mut self) {
         if let Some(ChatEntry::ToolBatchEntry { closed, .. }) = self.chat.last_mut() {
             *closed = true;
@@ -523,18 +529,23 @@ impl UiApp {
     pub fn apply_tui_msg(&mut self, msg: TuiMsg) {
         match msg {
             TuiMsg::TextChunk(text) => {
+                // Texto do agente entra direto na entry `AssistantText` aberta
+                // (caso comum: chunks fragmentados do mesmo parágrafo) ou cria
+                // uma nova entry. Texto entre tools NÃO é tratado como
+                // "pensamento" — é resposta normal multi-linha do agente.
                 if let Some(ChatEntry::AssistantText(ref mut buf)) = self.chat.last_mut() {
                     buf.push_str(&text);
                 } else {
-                    // Texto do assistente após uma cadeia de tools fecha o batch
-                    // antes de criar a entry de texto.
+                    // Nova entry de texto → fecha o tool batch aberto, se houver.
                     self.close_open_tool_batch();
                     self.chat.push(ChatEntry::AssistantText(text));
                 }
                 self.scroll_to_bottom();
             }
             TuiMsg::ToolCall { name, input } => {
-                let input_summary = input.chars().take(60).collect::<String>();
+                // Resumo legível: usa `tool_input_one_line` para extrair o
+                // command/path/query relevante (em vez do JSON literal cru).
+                let input_summary = crate::tool_input_one_line(&name, &input);
                 let item = ToolBatchItem {
                     name,
                     input_summary,
@@ -553,9 +564,9 @@ impl UiApp {
                 self.scroll_to_bottom();
             }
             TuiMsg::ToolResult { ok } => {
-                // Localiza o último item `Running` do último batch aberto e
-                // atualiza seu status. O `summary` do output é descartado por
-                // design — o bloco mostra apenas ✓/✗ por item.
+                // Tool result chega imediatamente após o tool call no mesmo
+                // turn — o último entry deve ser o ToolBatchEntry onde o call
+                // foi inserido. Marca o último item ainda Running.
                 if let Some(ChatEntry::ToolBatchEntry { items, .. }) = self.chat.last_mut() {
                     if let Some(item) = items
                         .iter_mut()
@@ -1224,11 +1235,19 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             app.reset_tips();
             return TuiAction::None;
         }
-        (KeyModifiers::CONTROL, KeyCode::Right) if app.show_tips && app.chat.is_empty() => {
+        // Navegação entre dicas: setas simples quando o overlay de tips está
+        // visível e o input está vazio (cursor não tem onde ir nesse estado,
+        // então não conflita com o handler genérico de cursor).
+        // Evitamos `Ctrl+arrow` porque o macOS intercepta para troca de Spaces.
+        (KeyModifiers::NONE, KeyCode::Right)
+            if app.show_tips && app.chat.is_empty() && app.input.is_empty() =>
+        {
             app.next_tip();
             return TuiAction::None;
         }
-        (KeyModifiers::CONTROL, KeyCode::Left) if app.show_tips && app.chat.is_empty() => {
+        (KeyModifiers::NONE, KeyCode::Left)
+            if app.show_tips && app.chat.is_empty() && app.input.is_empty() =>
+        {
             app.prev_tip();
             return TuiAction::None;
         }
@@ -1912,6 +1931,7 @@ fn auth_methods_visible(claude_code_detected: bool) -> Vec<(AuthMethodChoice, &'
         (AuthMethodChoice::SsoOAuth,      "SSO OAuth        (claude.ai + SSO)"),
         (AuthMethodChoice::PasteApiKey,   "Colar API key    (sk-ant-...)"),
         (AuthMethodChoice::PasteAuthToken,"Colar Auth Token (Bearer)"),
+        (AuthMethodChoice::PasteOpenAiKey,"Colar OpenAI key (sk-...)"),
         (AuthMethodChoice::UseBedrock,    "AWS Bedrock"),
         (AuthMethodChoice::UseVertex,     "Google Vertex AI"),
         (AuthMethodChoice::UseFoundry,    "Azure Foundry"),
@@ -1982,7 +2002,9 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                                 });
                             }
                         }
-                        AuthMethodChoice::PasteApiKey | AuthMethodChoice::PasteAuthToken => {
+                        AuthMethodChoice::PasteApiKey
+                        | AuthMethodChoice::PasteAuthToken
+                        | AuthMethodChoice::PasteOpenAiKey => {
                             app.overlay = Some(OverlayKind::AuthPicker {
                                 step: AuthStep::PasteSecret {
                                     method,
@@ -2133,12 +2155,14 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                     let result = match method {
                         AuthMethodChoice::PasteApiKey => crate::auth::save_pasted_api_key(&input),
                         AuthMethodChoice::PasteAuthToken => crate::auth::save_pasted_auth_token(&input),
+                        AuthMethodChoice::PasteOpenAiKey => crate::auth::save_pasted_api_key(&input),
                         _ => Err(crate::auth::AuthError::InvalidInput("unexpected method".into())),
                     };
                     match result {
                         Ok(()) => {
                             let label = match method {
                                 AuthMethodChoice::PasteApiKey => "API key salva".to_string(),
+                                AuthMethodChoice::PasteOpenAiKey => "OpenAI key salva".to_string(),
                                 _ => "Auth token salvo".to_string(),
                             };
                             app.overlay = Some(OverlayKind::AuthPicker {
@@ -3025,7 +3049,7 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(vec![
         Span::styled(
-            format!("Welcome back, {username}!"),
+            rust_i18n::t!("tui.header.welcome", username = username).to_string(),
             Style::default().fg(theme().easter_egg.warm).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -3046,20 +3070,29 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "Tips for getting started",
+                rust_i18n::t!("tui.side_panel.tips_header").to_string(),
                 Style::default()
                     .fg(theme().primary_accent)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(Span::styled("  Run /init to create a ELAI.md", muted)),
-        Line::from(Span::styled("  F2 trocar modelo · F3 permissões", muted)),
-        Line::from(Span::styled("  Ctrl+K slash palette", muted)),
+        Line::from(Span::styled(
+            format!("  {}", rust_i18n::t!("tui.side_panel.run_init")),
+            muted,
+        )),
+        Line::from(Span::styled(
+            format!("  {}", rust_i18n::t!("tui.side_panel.shortcuts")),
+            muted,
+        )),
+        Line::from(Span::styled(
+            format!("  {}", rust_i18n::t!("tui.side_panel.slash_palette")),
+            muted,
+        )),
         Line::from(Span::raw("")),
         Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "Recent activity",
+                rust_i18n::t!("tui.side_panel.recent_activity_header").to_string(),
                 Style::default()
                     .fg(theme().primary_accent)
                     .add_modifier(Modifier::BOLD),
@@ -3068,7 +3101,10 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     ];
 
     if app.recent_sessions.is_empty() {
-        lines.push(Line::from(Span::styled("  No recent activity", muted)));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", rust_i18n::t!("tui.side_panel.no_recent")),
+            muted,
+        )));
     } else {
         for (session_id, msg_count) in app.recent_sessions.iter().take(3) {
             let short_id = session_id
@@ -3077,8 +3113,10 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
                 .chars()
                 .take(12)
                 .collect::<String>();
+            let msgs_label =
+                rust_i18n::t!("tui.side_panel.session_msgs", count = msg_count.to_string());
             lines.push(Line::from(Span::styled(
-                format!("  • {short_id} ({msg_count} msgs)"),
+                format!("  • {short_id} ({msgs_label})"),
                 muted,
             )));
         }
@@ -3313,7 +3351,7 @@ fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(vec![
         Span::raw(pad.clone()),
-        Span::styled("Ctrl+→ próxima  ·  Ctrl+← anterior", dim),
+        Span::styled(rust_i18n::t!("tui.nav.next_prev").to_string(), dim),
     ]));
 
     lines
@@ -3357,7 +3395,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 // Header: `  ⚙ Tools (N)`
                 result.push(Line::from(vec![
                     Span::styled(
-                        "  ⚙ ".to_string(),
+                        "  \u{2699} ".to_string(),
                         Style::default().fg(theme().info),
                     ),
                     Span::styled(
@@ -3367,7 +3405,6 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                // Itens indentados com ícone de status à esquerda.
                 for item in items {
                     let (icon, color) = match item.status {
                         ToolItemStatus::Running => {
@@ -4053,7 +4090,7 @@ fn draw_tool_approval(
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" ⚠  Aprovar tool? ")
+        .title(format!(" {} ", rust_i18n::t!("tui.tool_approval.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().warn));
 
@@ -4062,7 +4099,10 @@ fn draw_tool_approval(
 
     let lines = vec![
         Line::from(vec![
-            Span::styled("  Tool        ", Style::default().fg(theme().text_secondary)),
+            Span::styled(
+                format!("  {:<11} ", rust_i18n::t!("tui.tool_approval.tool_label")),
+                Style::default().fg(theme().text_secondary),
+            ),
             Span::styled(
                 tool_name.to_string(),
                 Style::default()
@@ -4071,11 +4111,17 @@ fn draw_tool_approval(
             ),
         ]),
         Line::from(vec![
-            Span::styled("  Required    ", Style::default().fg(theme().text_secondary)),
+            Span::styled(
+                format!("  {:<11} ", rust_i18n::t!("tui.tool_approval.required_label")),
+                Style::default().fg(theme().text_secondary),
+            ),
             Span::styled(required_mode.to_string(), Style::default().fg(theme().warn)),
         ]),
         Line::from(vec![
-            Span::styled("  Input       ", Style::default().fg(theme().text_secondary)),
+            Span::styled(
+                format!("  {:<11} ", rust_i18n::t!("tui.tool_approval.input_label")),
+                Style::default().fg(theme().text_secondary),
+            ),
             Span::styled(
                 input_preview.chars().take(60).collect::<String>(),
                 Style::default().fg(theme().text_primary),
@@ -4084,15 +4130,24 @@ fn draw_tool_approval(
         Line::from(""),
         Line::from(vec![
             Span::styled("  [ Y ] ", Style::default().fg(theme().success).add_modifier(Modifier::BOLD)),
-            Span::styled("Sim, uma vez   ", Style::default().fg(theme().success)),
+            Span::styled(
+                format!("{}   ", rust_i18n::t!("tui.tool_approval.yes_once")),
+                Style::default().fg(theme().success),
+            ),
             Span::styled("[ A ] ", Style::default().fg(theme().info).add_modifier(Modifier::BOLD)),
-            Span::styled("Sempre   ", Style::default().fg(theme().info)),
+            Span::styled(
+                format!("{}   ", rust_i18n::t!("tui.tool_approval.always")),
+                Style::default().fg(theme().info),
+            ),
             Span::styled("[ N ] ", Style::default().fg(theme().error).add_modifier(Modifier::BOLD)),
-            Span::styled("Não", Style::default().fg(theme().error)),
+            Span::styled(
+                rust_i18n::t!("tui.tool_approval.no").to_string(),
+                Style::default().fg(theme().error),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "  Enter=Sim · A=Sempre · N/Esc=Não",
+            format!("  {}", rust_i18n::t!("tui.tool_approval.hint")),
             Style::default().fg(theme().text_secondary),
         )),
     ];
@@ -4110,7 +4165,10 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(format!(" \u{26a8} SWD: Aplicar {action_count} arquivo(s)? "))
+        .title(format!(
+            " {} ",
+            rust_i18n::t!("tui.swd_confirm.title", count = action_count.to_string())
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4124,16 +4182,22 @@ fn draw_swd_confirm(frame: &mut ratatui::Frame, area: Rect, action_count: usize)
                 "  [A] ",
                 Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Aceitar    ", Style::default().fg(theme().text_primary)),
+            Span::styled(
+                format!("{}    ", rust_i18n::t!("tui.swd_confirm.accept")),
+                Style::default().fg(theme().text_primary),
+            ),
             Span::styled(
                 "[R] ",
                 Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Rejeitar", Style::default().fg(theme().text_primary)),
+            Span::styled(
+                rust_i18n::t!("tui.swd_confirm.reject").to_string(),
+                Style::default().fg(theme().text_primary),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "  A/Enter = Aceitar  ·  R/Esc = Rejeitar",
+            format!("  {}", rust_i18n::t!("tui.swd_confirm.hint")),
             Style::default().fg(theme().text_secondary),
         )),
     ];
@@ -4151,7 +4215,7 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" ⚠  Desinstalar Elai Code ")
+        .title(format!(" {} ", rust_i18n::t!("tui.uninstall.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().error));
 
@@ -4164,7 +4228,7 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
     let lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "  Serão removidos:",
+            format!("  {}", rust_i18n::t!("tui.uninstall.will_remove")),
             Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -4177,17 +4241,17 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
             Style::default().fg(theme().error),
         )),
         Line::from(Span::styled(
-            "  • Linhas elai-code no arquivo shell RC",
+            format!("  • {}", rust_i18n::t!("tui.uninstall.shell_rc_lines")),
             Style::default().fg(theme().error),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Esta ação é irreversível.",
+            format!("  {}", rust_i18n::t!("tui.uninstall.irreversible")),
             Style::default().fg(theme().warn),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Enter confirmar  ·  Esc cancelar",
+            format!("  {}", rust_i18n::t!("tui.uninstall.confirm_hint")),
             Style::default().fg(theme().text_secondary),
         )),
     ];
@@ -4211,7 +4275,7 @@ fn draw_setup_wizard(
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Configurar API Key ")
+        .title(format!(" {} ", rust_i18n::t!("tui.setup.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4219,15 +4283,18 @@ fn draw_setup_wizard(
     frame.render_widget(block, popup);
 
     let lines: Vec<Line> = if step == 0 {
-        let providers = [
-            ("Anthropic", "(Claude opus / sonnet / haiku)"),
-            ("OpenAI", "(gpt-4o, gpt-4o-mini, o3...)"),
-            ("Ambos", ""),
+        let anthropic_note = rust_i18n::t!("tui.setup.provider_anthropic_note").to_string();
+        let openai_note = rust_i18n::t!("tui.setup.provider_openai_note").to_string();
+        let both_label = rust_i18n::t!("tui.setup.provider_both").to_string();
+        let providers: [(&str, &str); 3] = [
+            ("Anthropic", anthropic_note.as_str()),
+            ("OpenAI", openai_note.as_str()),
+            (both_label.as_str(), ""),
         ];
         let mut v: Vec<Line> = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Escolha seu provedor de IA:",
+                format!("  {}", rust_i18n::t!("tui.setup.provider_question")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
@@ -4250,7 +4317,7 @@ fn draw_setup_wizard(
         }
         v.push(Line::from(""));
         v.push(Line::from(Span::styled(
-            "  \u{2191}/\u{2193} navegar \u{00b7} Enter confirmar",
+            format!("  {}", rust_i18n::t!("tui.setup.nav_select")),
             Style::default().fg(theme().text_secondary),
         )));
         v
@@ -4260,7 +4327,10 @@ fn draw_setup_wizard(
             1 => "OpenAI",
             _ => if step == 1 { "Anthropic" } else { "OpenAI" },
         };
-        let field_label = format!("  {} API key:", provider_name);
+        let field_label = format!(
+            "  {}",
+            rust_i18n::t!("tui.setup.field_label", provider = provider_name.to_string())
+        );
         let masked: String = "\u{2022}".repeat(input.chars().count());
         let display = format!("  > {masked}");
         vec![
@@ -4273,7 +4343,7 @@ fn draw_setup_wizard(
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Enter confirmar \u{00b7} Esc cancelar",
+                format!("  {}", rust_i18n::t!("tui.setup.nav_confirm")),
                 Style::default().fg(theme().text_secondary),
             )),
         ]
@@ -4305,7 +4375,10 @@ fn draw_first_run_wizard(
     };
 
     let block = Block::default()
-        .title(format!(" Setup  [{step_label}/{total_steps}] "))
+        .title(format!(
+            " {} ",
+            rust_i18n::t!("tui.wizard.title", step = step_label, total = total_steps)
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4316,34 +4389,34 @@ fn draw_first_run_wizard(
         WizardStep::Welcome => vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Bem-vindo ao Elai Code!",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.title")),
                 Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Este assistente vai configurar:",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.intro")),
                 Style::default().fg(theme().text_secondary),
             )),
             Line::from(Span::styled(
-                "   • Modelo de IA padrão",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_model")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
-                "   • Modo de permissões",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_permissions")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
-                "   • Preferências opcionais",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_defaults")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Se ainda não tem auth, use `elai login` após o setup.",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.auth_hint")),
                 Style::default().fg(theme().warn),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Enter para começar  ·  Esc para cancelar",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.start_hint")),
                 Style::default().fg(theme().text_secondary),
             )),
         ],
@@ -4352,16 +4425,18 @@ fn draw_first_run_wizard(
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Escolha o modelo padrão:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.model.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
+            let recommended = rust_i18n::t!("tui.wizard.model.recommended");
+            let fallback = rust_i18n::t!("tui.wizard.model.fallback");
             let labels = [
-                "claude-opus-4-7        (recommended)",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001",
-                "gpt-4o-mini            (fallback)",
+                format!("claude-opus-4-7        {recommended}"),
+                "claude-sonnet-4-6".to_string(),
+                "claude-haiku-4-5-20251001".to_string(),
+                format!("gpt-4o-mini            {fallback}"),
             ];
             for (i, label) in labels.iter().enumerate() {
                 if i == *selected {
@@ -4381,7 +4456,7 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.nav.up_down_enter_esc")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
@@ -4391,15 +4466,18 @@ fn draw_first_run_wizard(
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Modo de permissões:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.permissions.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
-            let labels = [
-                ("read-only", "Apenas leitura — sem alterações"),
-                ("workspace-write", "Workspace write — escreve no projeto"),
-                ("danger-full-access", "Full access — power users (recomendado)"),
+            let read_only = rust_i18n::t!("tui.wizard.permissions.read_only_desc").to_string();
+            let workspace_write = rust_i18n::t!("tui.wizard.permissions.workspace_write_desc").to_string();
+            let full_access = rust_i18n::t!("tui.wizard.permissions.full_access_desc").to_string();
+            let labels: [(&str, &str); 3] = [
+                ("read-only", read_only.as_str()),
+                ("workspace-write", workspace_write.as_str()),
+                ("danger-full-access", full_access.as_str()),
             ];
             for (i, (mode, desc)) in labels.iter().enumerate() {
                 if i == *selected {
@@ -4419,22 +4497,25 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.nav.up_down_enter_esc")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
         }
 
         WizardStep::Defaults { focused } => {
-            let toggles: &[(&str, bool)] = &[
-                ("Auto-update", state.features.auto_update),
-                ("Telemetry  ", state.features.telemetry),
-                ("Indexing   ", state.features.indexing),
+            let auto_update = rust_i18n::t!("tui.wizard.defaults.label_auto_update").to_string();
+            let telemetry = rust_i18n::t!("tui.wizard.defaults.label_telemetry").to_string();
+            let indexing = rust_i18n::t!("tui.wizard.defaults.label_indexing").to_string();
+            let toggles: [(&str, bool); 3] = [
+                (auto_update.as_str(), state.features.auto_update),
+                (telemetry.as_str(), state.features.telemetry),
+                (indexing.as_str(), state.features.indexing),
             ];
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Preferências opcionais:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.defaults.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
@@ -4472,57 +4553,77 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  Tab/↑↓ navegar  ·  Space alternar  ·  Enter próximo  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.defaults.hint")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
         }
 
-        WizardStep::Done => vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Configuração concluída!",
-                Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Modelo       ", Style::default().fg(theme().text_secondary)),
-                Span::styled(state.model.clone(), Style::default().fg(theme().info)),
-            ]),
-            Line::from(vec![
-                Span::styled("  Permissões   ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    state.permission_mode.clone(),
-                    Style::default().fg(theme().warn),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Auto-update  ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.auto_update { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Telemetry    ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.telemetry { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Indexing     ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.indexing { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Enter para fechar e iniciar",
-                Style::default().fg(theme().text_secondary),
-            )),
-        ],
+        WizardStep::Done => {
+            let on = rust_i18n::t!("tui.wizard.state.on").to_string();
+            let off = rust_i18n::t!("tui.wizard.state.off").to_string();
+            let bool_str = |v: bool| -> String { if v { on.clone() } else { off.clone() } };
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.wizard.done.title")),
+                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_model")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(state.model.clone(), Style::default().fg(theme().info)),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_permissions")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        state.permission_mode.clone(),
+                        Style::default().fg(theme().warn),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_auto_update")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.auto_update),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_telemetry")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.telemetry),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_indexing")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.indexing),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.wizard.done.start_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
+            ]
+        },
     };
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -4538,7 +4639,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Authentication ")
+        .title(format!(" {} ", rust_i18n::t!("tui.auth.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4552,7 +4653,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
 
             if *claude_code_detected {
                 lines.push(Line::from(Span::styled(
-                    "  Detected Claude Code credentials — press Enter on 'Import' to use them",
+                    format!("  {}", rust_i18n::t!("tui.auth.claude_code_detected")),
                     Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -4575,7 +4676,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
 
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  Up/Down navegar · Enter selecionar · Esc cancelar",
+                format!("  {}", rust_i18n::t!("tui.auth.nav.list")),
                 Style::default().fg(theme().text_secondary),
             )));
 
@@ -4588,7 +4689,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let after: String = input.chars().skip(*cursor + 1).collect();
             let lines = vec![
                 Line::from(""),
-                Line::from(Span::styled("  E-mail para SSO (ou Enter para pular):", Style::default().fg(theme().text_primary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.email_input.label")),
+                    Style::default().fg(theme().text_primary),
+                )),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("  > ", Style::default().fg(theme().primary_accent)),
@@ -4597,7 +4701,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Span::raw(after),
                 ]),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.enter_esc")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4609,8 +4716,9 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 input.clone()
             };
             let label = match method {
-                AuthMethodChoice::PasteApiKey => "API key (sk-ant-...):",
-                _ => "Auth Token (Bearer):",
+                AuthMethodChoice::PasteApiKey => rust_i18n::t!("tui.auth.paste.api_key_label").to_string(),
+                AuthMethodChoice::PasteOpenAiKey => rust_i18n::t!("tui.auth.paste.openai_key_label").to_string(),
+                _ => rust_i18n::t!("tui.auth.paste.token_label").to_string(),
             };
             let lines = vec![
                 Line::from(""),
@@ -4621,7 +4729,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Style::default().fg(theme().primary_accent),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.enter_esc")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4634,14 +4745,23 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  {spin} Aguardando callback OAuth na porta {port}..."),
+                    format!(
+                        "  {spin} {}",
+                        rust_i18n::t!("tui.auth.browser.waiting", port = port.to_string())
+                    ),
                     Style::default().fg(theme().thinking).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  URL (abra manualmente se o browser nao abrir):", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.browser.url_label")),
+                    Style::default().fg(theme().text_secondary),
+                )),
                 Line::from(Span::styled(short_url, Style::default().fg(theme().info))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc cancelar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.esc_cancel")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4650,12 +4770,15 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  Salvar metodo 3P e definir {env_var}=1?"),
+                    format!(
+                        "  {}",
+                        rust_i18n::t!("tui.auth.confirm3p.title", env_var = env_var.to_string())
+                    ),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  Apos confirmar, adicione ao shell RC:"),
+                    format!("  {}", rust_i18n::t!("tui.auth.confirm3p.shell_rc")),
                     Style::default().fg(theme().text_secondary),
                 )),
                 Line::from(Span::styled(
@@ -4664,7 +4787,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Y/Enter confirmar · N/Esc voltar",
+                    format!("  {}", rust_i18n::t!("tui.auth.confirm3p.hint")),
                     Style::default().fg(theme().text_secondary),
                 )),
             ];
@@ -4679,7 +4802,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para fechar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.done.close_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4689,13 +4815,16 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  \u{2717} Erro na autenticacao",
+                    format!("  \u{2717} {}", rust_i18n::t!("tui.auth.failed.title")),
                     Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(short, Style::default().fg(theme().warn))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.failed.back_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4787,15 +4916,36 @@ mod tests {
     }
 
     #[test]
-    fn apply_text_chunk_appends_to_existing_assistant_entry() {
+    fn text_chunks_append_to_existing_assistant_entry() {
+        // Chunks fragmentados do mesmo parágrafo devem ser concatenados na
+        // mesma `AssistantText` — preserva markdown / bullets / parágrafos
+        // multi-linha exatamente como o agente emitiu.
         let mut app = make_app();
         app.apply_tui_msg(TuiMsg::TextChunk("Hello".to_string()));
         app.apply_tui_msg(TuiMsg::TextChunk(", World".to_string()));
         assert_eq!(app.chat.len(), 1);
-        if let ChatEntry::AssistantText(text) = &app.chat[0] {
-            assert_eq!(text, "Hello, World");
-        } else {
-            panic!("expected AssistantText");
+        match &app.chat[0] {
+            ChatEntry::AssistantText(text) => assert_eq!(text, "Hello, World"),
+            other => panic!("expected AssistantText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multiline_text_only_turn_stays_as_single_assistant_text() {
+        // Resposta com bullets / parágrafos sem tool call vira UMA entry só
+        // — sem fragmentação, sem batch.
+        let mut app = make_app();
+        app.apply_tui_msg(TuiMsg::TextChunk(
+            "Vou analisar:\n- locales/ — i18n\n- crates/api/ — providers\n\nO que prefere?".into(),
+        ));
+        app.apply_tui_msg(TuiMsg::Done);
+        assert_eq!(app.chat.len(), 1);
+        match &app.chat[0] {
+            ChatEntry::AssistantText(text) => {
+                assert!(text.contains("- locales/"));
+                assert!(text.contains("O que prefere?"));
+            }
+            other => panic!("expected AssistantText, got {other:?}"),
         }
     }
 
@@ -4845,7 +4995,7 @@ mod tests {
             ChatEntry::ToolBatchEntry { items, closed } => {
                 assert_eq!(items.len(), 3);
                 assert!(items.iter().all(|it| it.status == ToolItemStatus::Ok));
-                assert!(!closed, "batch must remain open until something else interrupts");
+                assert!(!closed, "batch stays open until something else interrupts");
             }
             other => panic!("expected ToolBatchEntry, got {other:?}"),
         }
@@ -4874,48 +5024,59 @@ mod tests {
     }
 
     #[test]
-    fn assistant_text_closes_open_batch() {
+    fn text_chunk_between_tools_closes_batch_and_creates_assistant_text() {
+        // Texto entre tools encerra o batch atual e abre uma `AssistantText`
+        // separada — o próximo tool call iniciará um NOVO batch.
         let mut app = make_app();
         app.apply_tui_msg(TuiMsg::ToolCall {
             name: "bash".into(),
             input: r#"{"command":"ls"}"#.into(),
         });
         app.apply_tui_msg(TuiMsg::ToolResult { ok: true });
-        app.apply_tui_msg(TuiMsg::TextChunk("ok pronto".into()));
-        // Agora um novo tool call: deve criar um batch novo (não anexar ao primeiro).
+        app.apply_tui_msg(TuiMsg::TextChunk("Encontrei tudo.".into()));
         app.apply_tui_msg(TuiMsg::ToolCall {
             name: "bash".into(),
             input: r#"{"command":"pwd"}"#.into(),
         });
+        // Esperado: [Tools (fechado)] [AssistantText] [Tools (aberto)]
         assert_eq!(app.chat.len(), 3);
         match &app.chat[0] {
             ChatEntry::ToolBatchEntry { items, closed } => {
                 assert_eq!(items.len(), 1);
-                assert!(*closed, "first batch must be closed by the assistant text");
+                assert!(*closed, "first batch closed by the assistant text that follows");
             }
-            _ => panic!("expected first ToolBatchEntry"),
+            _ => panic!("expected first Tools batch"),
         }
-        assert!(matches!(app.chat[1], ChatEntry::AssistantText(_)));
+        match &app.chat[1] {
+            ChatEntry::AssistantText(text) => assert_eq!(text, "Encontrei tudo."),
+            _ => panic!("expected AssistantText"),
+        }
         match &app.chat[2] {
             ChatEntry::ToolBatchEntry { items, closed } => {
                 assert_eq!(items.len(), 1);
                 assert!(!closed);
             }
-            _ => panic!("expected second ToolBatchEntry"),
+            _ => panic!("expected second Tools batch"),
         }
     }
 
     #[test]
-    fn system_note_closes_open_batch() {
+    fn tool_input_summary_uses_human_readable_form() {
+        // O `input_summary` deve ser o comando legível (extraído via
+        // `tool_input_one_line`), NÃO o JSON literal completo. Garante que
+        // turns longos não fiquem mostrando `{"command":"cd /Users/..."` cru.
         let mut app = make_app();
         app.apply_tui_msg(TuiMsg::ToolCall {
             name: "bash".into(),
-            input: r#"{"command":"ls"}"#.into(),
+            input: r#"{"command":"git status --short"}"#.into(),
         });
-        app.apply_tui_msg(TuiMsg::SystemNote("aviso".into()));
         match &app.chat[0] {
-            ChatEntry::ToolBatchEntry { closed, .. } => {
-                assert!(*closed, "batch must be closed by the system note that follows");
+            ChatEntry::ToolBatchEntry { items, .. } => {
+                assert_eq!(items[0].input_summary, "git status --short");
+                assert!(
+                    !items[0].input_summary.contains("{\"command\""),
+                    "summary não pode incluir o JSON cru"
+                );
             }
             _ => panic!("expected ToolBatchEntry"),
         }

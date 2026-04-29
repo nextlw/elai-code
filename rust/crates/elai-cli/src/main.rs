@@ -208,40 +208,50 @@ fn init_locale() {
 
 /// Handler do slash command `/locale [<idioma>]`.
 ///
-/// - Sem argumento: imprime locale atual + lista de idiomas disponíveis.
+/// - Sem argumento: retorna locale atual + lista de idiomas disponíveis.
 /// - Com argumento válido: troca locale em runtime via `rust_i18n::set_locale`,
 ///   persiste em `~/.elai/config.json`, e confirma na nova língua.
 /// - Com argumento inválido: mensagem de erro listando idiomas válidos. Sem
 ///   alteração de estado.
-fn handle_locale_command(lang: Option<&str>) {
+///
+/// Retorna a mensagem composta (uma `String` multilinha). O caller decide se
+/// printa em stdout (`LiveCli` non-TUI) ou empurra como `SystemNote` (TUI).
+fn handle_locale_command(lang: Option<&str>) -> String {
+    use std::fmt::Write as _;
+
     match lang {
         None => {
+            let mut out = String::new();
             let current = rust_i18n::locale().to_string();
-            println!("{}", rust_i18n::t!("locale.current", lang = current));
-            println!("{}", rust_i18n::t!("locale.available_header"));
+            let _ = writeln!(out, "{}", rust_i18n::t!("locale.current", lang = current));
+            let _ = writeln!(out, "{}", rust_i18n::t!("locale.available_header"));
             for locale in SUPPORTED_LOCALES {
-                println!("  - {locale}");
+                let _ = writeln!(out, "  - {locale}");
             }
+            out.trim_end().to_string()
         }
         Some(lang) if SUPPORTED_LOCALES.contains(&lang) => {
             rust_i18n::set_locale(lang);
-            match runtime::global_config::load() {
-                Ok(mut cfg) => {
-                    cfg.locale = lang.to_string();
-                    if let Err(e) = runtime::global_config::save(&cfg) {
-                        eprintln!("warning: failed to persist locale: {e}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("warning: failed to load config to persist locale: {e}");
-                }
+            let mut out = String::new();
+            if let Err(e) = persist_locale(lang) {
+                let _ = writeln!(out, "warning: {e}");
             }
-            println!("{}", rust_i18n::t!("locale.changed", lang = lang.to_string()));
+            let _ = write!(
+                out,
+                "{}",
+                rust_i18n::t!("locale.changed", lang = lang.to_string())
+            );
+            out
         }
-        Some(_) => {
-            eprintln!("{}", rust_i18n::t!("locale.invalid"));
-        }
+        Some(_) => rust_i18n::t!("locale.invalid").to_string(),
     }
+}
+
+fn persist_locale(lang: &str) -> Result<(), String> {
+    let mut cfg = runtime::global_config::load()
+        .map_err(|e| format!("failed to load config: {e}"))?;
+    cfg.locale = lang.to_string();
+    runtime::global_config::save(&cfg).map_err(|e| format!("failed to persist locale: {e}"))
 }
 
 fn has_any_auth() -> bool {
@@ -2186,46 +2196,79 @@ fn handle_tui_slash_command(
             app.reset_tips();
         }
         "help" => {
-            let help = "\
-Comandos disponíveis:\n\
-  /help          Esta ajuda\n\
-  /status        Status da sessão (modelo, tokens, custo)\n\
-  /model [nome]  Mostrar/trocar modelo (F2 para picker)\n\
-  /permissions   Trocar modo de permissão (F3 para picker)\n\
-  /session [id]  Retomar sessão (F4 para picker)\n\
-  /clear         Limpar histórico de chat\n\
-  /cost          Mostrar custo estimado\n\
-  /compact       Compactar histórico (mantém últimas 20 msgs)\n\
-  /export        Exportar conversa para arquivo .txt\n\
-  /memory        Mostrar conteúdo do ELAI.md\n\
-  /dream         Comprimir entradas antigas da memória (AI summary)\n\
-  /init          Inicializar ELAI.md no projeto\n\
-  /verify        Verificar codebase vs memória (ELAI.md)\n\
-  /theme gray <n> Ajustar cinza secundário (232-255)\n\
-  /swd [off|partial|full]  Strict Write Discipline (padrão: partial)\n\
-  /keys          Configurar/trocar API keys\n\
-  /uninstall     Desinstalar Elai Code\n\
-  /version       Mostrar versão\n\
-  /exit          Sair\n\
-Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
-            app.push_chat(tui::ChatEntry::SystemNote(help.into()));
+            let help = format!(
+                "\
+{header}\n\
+  /help          {help}\n\
+  /status        {status}\n\
+  /model [nome]  {model}\n\
+  /permissions   {permissions}\n\
+  /session [id]  {session}\n\
+  /clear         {clear}\n\
+  /cost          {cost}\n\
+  /compact       {compact}\n\
+  /export        {export}\n\
+  /memory        {memory}\n\
+  /dream         {dream}\n\
+  /init          {init}\n\
+  /verify        {verify}\n\
+  /theme gray <n> {theme_gray}\n\
+  /swd [off|partial|full]  {swd}\n\
+  /keys          {keys}\n\
+  /uninstall     {uninstall}\n\
+  /version       {version}\n\
+  /locale [pt-BR|en] {locale}\n\
+  /exit          {exit}\n\
+{shortcuts}",
+                header = rust_i18n::t!("tui.repl.help.header"),
+                help = rust_i18n::t!("tui.repl.help.help"),
+                status = rust_i18n::t!("tui.repl.help.status"),
+                model = rust_i18n::t!("tui.repl.help.model"),
+                permissions = rust_i18n::t!("tui.repl.help.permissions"),
+                session = rust_i18n::t!("tui.repl.help.session"),
+                clear = rust_i18n::t!("tui.repl.help.clear"),
+                cost = rust_i18n::t!("tui.repl.help.cost"),
+                compact = rust_i18n::t!("tui.repl.help.compact"),
+                export = rust_i18n::t!("tui.repl.help.export"),
+                memory = rust_i18n::t!("tui.repl.help.memory"),
+                dream = rust_i18n::t!("tui.repl.help.dream"),
+                init = rust_i18n::t!("tui.repl.help.init"),
+                verify = rust_i18n::t!("tui.repl.help.verify"),
+                theme_gray = rust_i18n::t!("tui.repl.help.theme_gray"),
+                swd = rust_i18n::t!("tui.repl.help.swd"),
+                keys = rust_i18n::t!("tui.repl.help.keys"),
+                uninstall = rust_i18n::t!("tui.repl.help.uninstall"),
+                version = rust_i18n::t!("tui.repl.help.version"),
+                locale = rust_i18n::t!("tui.repl.help.locale"),
+                exit = rust_i18n::t!("tui.repl.help.exit"),
+                shortcuts = rust_i18n::t!("tui.repl.help.shortcuts"),
+            );
+            app.push_chat(tui::ChatEntry::SystemNote(help));
         }
         "status" => {
             let cost = estimate_tui_cost(app);
             let msgs = session.lock().map(|g| g.messages.len()).unwrap_or(0);
             app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "Status\n  Modelo      {}\n  Permissões  {}\n  Sessão      {}\n  Mensagens   {msgs}\n  Tokens in   {} / out {}\n  Custo est.  ${cost:.4}",
+                "{header}\n  {model:<11} {}\n  {permissions:<11} {}\n  {session:<11} {}\n  {messages:<11} {msgs}\n  {tokens:<11} {} / {tokens_out} {}\n  {cost_estimate:<11} ${cost:.4}",
                 app.model, app.permission_mode, app.session_id,
-                app.input_tokens, app.output_tokens
+                app.input_tokens, app.output_tokens,
+                header = rust_i18n::t!("tui.repl.status.header"),
+                model = rust_i18n::t!("tui.repl.status.model"),
+                permissions = rust_i18n::t!("tui.repl.status.permissions"),
+                session = rust_i18n::t!("tui.repl.status.session"),
+                messages = rust_i18n::t!("tui.repl.status.messages"),
+                tokens = rust_i18n::t!("tui.repl.status.tokens"),
+                tokens_out = rust_i18n::t!("tui.repl.status.tokens_out"),
+                cost_estimate = rust_i18n::t!("tui.repl.status.cost_estimate"),
             )));
         }
         "model" => {
             if let Some(model_name) = arg {
                 let m = model_name.to_string();
                 app.model = m.clone();
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Modelo alterado para: {m}"
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.model_changed", model = m).to_string(),
+                ));
             } else {
                 app.open_model_picker();
             }
@@ -2233,9 +2276,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         "permissions" => {
             if let Some(perm) = arg {
                 app.permission_mode = perm.to_string();
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Permissões alteradas para: {perm}"
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.permissions_changed", mode = perm.to_string()).to_string(),
+                ));
             } else {
                 app.open_permission_picker();
             }
@@ -2246,9 +2289,13 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     if let Ok(loaded) = Session::load_from_path(&handle.path) {
                         let msg_count = loaded.messages.len();
                         *session.lock().unwrap() = loaded;
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.session_resumed",
+                                id = session_id.to_string(),
+                                count = msg_count.to_string()
+                            ).to_string(),
+                        ));
                     }
                 }
             } else {
@@ -2257,15 +2304,19 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "cost" => {
             let cost = estimate_tui_cost(app);
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "💰 Custo estimado: ${cost:.4}  (in={} out={})",
-                app.input_tokens, app.output_tokens
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.cost_estimate",
+                    cost = format!("{cost:.4}"),
+                    tokens_in = app.input_tokens.to_string(),
+                    tokens_out = app.output_tokens.to_string()
+                ).to_string(),
+            ));
         }
         "version" => {
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "ELAI v{VERSION} · TUI mode · ratatui"
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.version_line", version = VERSION).to_string(),
+            ));
         }
         "diff" => {
             let diff = Command::new("git")
@@ -2274,7 +2325,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_else(|_| "git diff failed".to_string());
             let out = if diff.trim().is_empty() {
-                "Nenhuma alteração no git.".to_string()
+                rust_i18n::t!("tui.repl.feedback.no_git_changes").to_string()
             } else {
                 diff
             };
@@ -2286,13 +2337,20 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             let keep = 20;
             if total > keep {
                 guard.messages.drain(0..total - keep);
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Sessão compactada: {total} → {keep} mensagens."
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!(
+                        "tui.repl.feedback.compact_done",
+                        from = total.to_string(),
+                        to = keep.to_string()
+                    ).to_string(),
+                ));
             } else {
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "Sessão já está compacta ({total} mensagens)."
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!(
+                        "tui.repl.feedback.compact_already",
+                        count = total.to_string()
+                    ).to_string(),
+                ));
             }
         }
         "export" => {
@@ -2323,12 +2381,12 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
             }
             drop(guard);
             match fs::write(&filename, &content) {
-                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Conversa exportada para {filename}"
-                ))),
-                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "❌ Erro ao exportar: {e}"
-                ))),
+                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.export_ok", file = filename).to_string(),
+                )),
+                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.export_err", error = e.to_string()).to_string(),
+                )),
             }
         }
         "memory" => {
@@ -2350,7 +2408,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}"))),
                 },
                 None => app.push_chat(tui::ChatEntry::SystemNote(
-                    "Nenhum ELAI.md ou CLAUDE.md encontrado no diretório atual.".into(),
+                    rust_i18n::t!("tui.repl.feedback.memory_not_found").to_string(),
                 )),
             }
         }
@@ -2372,7 +2430,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 }
             });
             app.push_chat(tui::ChatEntry::SystemNote(
-                "Iniciando /init em background...".to_string(),
+                rust_i18n::t!("tui.repl.feedback.init_started").to_string(),
             ));
         }
         "verify" => {
@@ -2395,7 +2453,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     }
                 }
             });
-            app.push_chat(tui::ChatEntry::SystemNote("Verificando codebase em background...".to_string()));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.verify_started").to_string(),
+            ));
         }
         "plugin" | "plugins" => {
             let tx = msg_tx.clone();
@@ -2424,7 +2484,9 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); }
                 }
             });
-            app.push_chat(tui::ChatEntry::SystemNote("Plugin: processando em background...".to_string()));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.plugin_started").to_string(),
+            ));
         }
         "swd" => {
             use std::sync::atomic::Ordering;
@@ -2434,9 +2496,12 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 match SwdLevel::from_str(level_str) {
                     Some(l) => l,
                     None => {
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "❌ SWD: nível inválido '{level_str}'. Use: off | partial | full"
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.swd_invalid",
+                                level = level_str.to_string()
+                            ).to_string(),
+                        ));
                         return;
                     }
                 }
@@ -2444,11 +2509,13 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 current.cycle()
             };
             app.swd_level.store(new_level as u8, Ordering::Relaxed);
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "✅ SWD alterado: {} → {}",
-                current.as_str(),
-                new_level.as_str()
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.swd_changed",
+                    from = current.as_str().to_string(),
+                    to = new_level.as_str().to_string()
+                ).to_string(),
+            ));
         }
         "keys" | "setup" => {
             app.open_auth_picker();
@@ -2458,7 +2525,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
         }
         "agents" | "skills" => {
             app.push_chat(tui::ChatEntry::SystemNote(
-                "ℹ Use `elai agents` ou `elai skills` fora do modo TUI para listar.".to_string(),
+                rust_i18n::t!("tui.repl.feedback.agents_skills_note").to_string(),
             ));
         }
         "budget" => {
@@ -2467,7 +2534,7 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                     budget_tracker.lock().unwrap().disable();
                     app.budget_enabled = false;
                     app.push_chat(tui::ChatEntry::SystemNote(
-                        "✅ Budget desativado".to_string(),
+                        rust_i18n::t!("tui.repl.feedback.budget_off").to_string(),
                     ));
                 } else {
                     let parts: Vec<&str> = a.split_whitespace().collect();
@@ -2484,15 +2551,16 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                         let _ = save_budget_config(&cwd, &cfg);
                         budget_tracker.lock().unwrap().update_config(cfg.clone());
                         app.budget_enabled = true;
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "✅ Budget definido: tokens={} usd={}",
-                            cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
-                            cfg.max_cost_usd
-                                .map_or("∞".into(), |u| format!("${u:.2}")),
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.budget_set",
+                                tokens = cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
+                                usd = cfg.max_cost_usd.map_or("∞".into(), |u| format!("${u:.2}"))
+                            ).to_string(),
+                        ));
                     } else {
                         app.push_chat(tui::ChatEntry::SystemNote(
-                            "❓ Uso: /budget [tokens] [usd] | off".to_string(),
+                            rust_i18n::t!("tui.repl.feedback.budget_usage_hint").to_string(),
                         ));
                     }
                 }
@@ -2786,13 +2854,20 @@ Atalhos: F2=modelo · F3=permissões · F4=sessões · Ctrl+K=paleta";
                 "🚧 /{base} em breve no modo TUI — por enquanto execute `elai prompt /{base}` no shell."
             )));
         }
+        "locale" => {
+            let message = handle_locale_command(arg);
+            app.push_chat(tui::ChatEntry::SystemNote(message));
+        }
         "exit" | "quit" => {
             app.should_quit = true;
         }
         other => {
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.unknown_command",
+                    cmd = other.to_string()
+                ).to_string(),
+            ));
         }
     }
 }
@@ -3332,7 +3407,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 false
             }
             SlashCommand::Locale { lang } => {
-                handle_locale_command(lang.as_deref());
+                println!("{}", handle_locale_command(lang.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5709,9 +5784,10 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
 }
 
 /// Resumo de uma linha (≤ 60 chars) do input de um tool, no formato exibido
-/// pelo modo compacto do CLI não-TUI. Para `bash`/`Bash` extrai o comando; para
-/// tools de arquivo extrai o path; para o resto faz truncação genérica do JSON.
-fn tool_input_one_line(name: &str, input: &str) -> String {
+/// pelo modo compacto do CLI não-TUI **e** pelo `ToolBatchEntry` da TUI.
+/// Para `bash`/`Bash` extrai o comando; para tools de arquivo extrai o path;
+/// para o resto faz truncação genérica do JSON.
+pub(crate) fn tool_input_one_line(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
     let raw = match name {

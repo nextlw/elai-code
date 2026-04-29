@@ -140,5 +140,193 @@
     "changed": "Language changed to %{lang}",
     "invalid": "Invalid language. Available: pt-BR, en",
     "available_header": "Available languages:"
+  },
+  "tui": {
+    "header": {
+      "welcome": "Welcome back, %{username}!"
+    },
+    "side_panel": {
+      "tips_header": "Tips for getting started",
+      "run_init": "Run /init to create a ELAI.md",
+      "shortcuts": "F2 switch model · F3 permissions",
+      "slash_palette": "Ctrl+K slash palette",
+      "recent_activity_header": "Recent activity",
+      "no_recent": "No recent activity",
+      "session_msgs": "%{count} msgs"
+    },
+    "nav": {
+      "next_prev": "Ctrl+→ next  ·  Ctrl+← previous"
+    },
+    "tool_approval": {
+      "title": "⚠  Approve tool?",
+      "tool_label": "Tool",
+      "required_label": "Required",
+      "input_label": "Input",
+      "yes_once": "Yes, once",
+      "always": "Always",
+      "no": "No",
+      "hint": "Enter=Yes · A=Always · N/Esc=No"
+    },
+    "swd_confirm": {
+      "title": "⚨ SWD: Apply %{count} file(s)?",
+      "accept": "Accept",
+      "reject": "Reject",
+      "hint": "A/Enter = Accept  ·  R/Esc = Reject"
+    },
+    "uninstall": {
+      "title": "⚠  Uninstall Elai Code",
+      "will_remove": "Will be removed:",
+      "shell_rc_lines": "elai-code lines in shell RC file",
+      "irreversible": "This action is irreversible.",
+      "confirm_hint": "Enter to confirm  ·  Esc to cancel"
+    },
+    "repl": {
+      "help": {
+        "header": "Available commands:",
+        "help": "This help",
+        "status": "Session status (model, tokens, cost)",
+        "model": "Show/switch model (F2 for picker)",
+        "permissions": "Switch permission mode (F3 for picker)",
+        "session": "Resume session (F4 for picker)",
+        "clear": "Clear chat history",
+        "cost": "Show estimated cost",
+        "compact": "Compact history (keeps last 20 msgs)",
+        "export": "Export conversation to a .txt file",
+        "memory": "Show ELAI.md contents",
+        "dream": "Compress old memory entries (AI summary)",
+        "init": "Initialize ELAI.md in the project",
+        "verify": "Verify codebase against memory (ELAI.md)",
+        "theme_gray": "Adjust secondary gray (232-255)",
+        "swd": "Strict Write Discipline (default: partial)",
+        "keys": "Configure/rotate API keys",
+        "uninstall": "Uninstall Elai Code",
+        "version": "Show version",
+        "locale": "Show/switch interface language (pt-BR | en)",
+        "exit": "Exit",
+        "shortcuts": "Shortcuts: F2=model · F3=permissions · F4=sessions · Ctrl+K=palette"
+      },
+      "status": {
+        "header": "Status",
+        "model": "Model",
+        "permissions": "Permissions",
+        "session": "Session",
+        "messages": "Messages",
+        "tokens": "Tokens in",
+        "tokens_out": "out",
+        "cost_estimate": "Cost est."
+      },
+      "feedback": {
+        "model_changed": "✅ Model changed to: %{model}",
+        "permissions_changed": "✅ Permissions changed to: %{mode}",
+        "session_resumed": "✅ Session %{id} resumed (%{count} messages)",
+        "cost_estimate": "💰 Estimated cost: $%{cost}  (in=%{tokens_in} out=%{tokens_out})",
+        "version_line": "ELAI v%{version} · TUI mode · ratatui",
+        "no_git_changes": "No git changes.",
+        "compact_done": "✅ Session compacted: %{from} → %{to} messages.",
+        "compact_already": "Session already compact (%{count} messages).",
+        "export_ok": "✅ Conversation exported to %{file}",
+        "export_err": "❌ Export error: %{error}",
+        "memory_not_found": "No ELAI.md or CLAUDE.md found in the current directory.",
+        "init_started": "Starting /init in the background...",
+        "verify_started": "Verifying codebase in the background...",
+        "plugin_started": "Plugin: processing in the background...",
+        "unknown_command": "ℹ Unknown command /%{cmd} in TUI mode. Use /help or Ctrl+K.",
+        "swd_invalid": "❌ SWD: invalid level '%{level}'. Use: off | partial | full",
+        "swd_changed": "✅ SWD changed: %{from} → %{to}",
+        "agents_skills_note": "ℹ Use `elai agents` or `elai skills` outside TUI mode to list them.",
+        "budget_off": "✅ Budget disabled",
+        "budget_set": "✅ Budget set: tokens=%{tokens} usd=%{usd}",
+        "budget_usage_hint": "❓ Usage: /budget [tokens] [usd] | off"
+      }
+    },
+    "wizard": {
+      "title": "Setup  [%{step}/%{total}]",
+      "welcome": {
+        "title": "Welcome to Elai Code!",
+        "intro": "This wizard will configure:",
+        "bullet_model": "Default AI model",
+        "bullet_permissions": "Permission mode",
+        "bullet_defaults": "Optional preferences",
+        "auth_hint": "If you don't have auth yet, run `elai login` after setup.",
+        "start_hint": "Enter to start  ·  Esc to cancel"
+      },
+      "model": {
+        "title": "Choose the default model:",
+        "recommended": "(recommended)",
+        "fallback": "(fallback)"
+      },
+      "permissions": {
+        "title": "Permission mode:",
+        "read_only_desc": "Read only — no changes",
+        "workspace_write_desc": "Workspace write — writes inside the project",
+        "full_access_desc": "Full access — power users (recommended)"
+      },
+      "defaults": {
+        "title": "Optional preferences:",
+        "label_auto_update": "Auto-update",
+        "label_telemetry": "Telemetry  ",
+        "label_indexing": "Indexing   ",
+        "hint": "Tab/↑↓ navigate  ·  Space toggle  ·  Enter next  ·  Esc back"
+      },
+      "done": {
+        "title": "Setup complete!",
+        "label_model": "Model",
+        "label_permissions": "Permissions",
+        "label_auto_update": "Auto-update",
+        "label_telemetry": "Telemetry",
+        "label_indexing": "Indexing",
+        "start_hint": "Enter to close and start"
+      },
+      "nav": {
+        "up_down_enter_esc": "↑/↓ navigate  ·  Enter confirm  ·  Esc back"
+      },
+      "state": {
+        "on": "on",
+        "off": "off"
+      }
+    },
+    "auth": {
+      "title": "Authentication",
+      "claude_code_detected": "Detected Claude Code credentials — press Enter on 'Import' to use them",
+      "nav": {
+        "list": "↑/↓ navigate · Enter select · Esc cancel",
+        "enter_esc": "Enter confirm · Esc back",
+        "esc_cancel": "Esc cancel"
+      },
+      "email_input": {
+        "label": "E-mail for SSO (or Enter to skip):"
+      },
+      "paste": {
+        "api_key_label": "API key (sk-ant-...):",
+        "openai_key_label": "OpenAI key (sk-...):",
+        "token_label": "Auth Token (Bearer):"
+      },
+      "browser": {
+        "waiting": "Waiting for OAuth callback on port %{port}...",
+        "url_label": "URL (open manually if the browser does not open):"
+      },
+      "confirm3p": {
+        "title": "Save 3P method and set %{env_var}=1?",
+        "shell_rc": "After confirming, add to your shell RC:",
+        "hint": "Y/Enter confirm · N/Esc back"
+      },
+      "done": {
+        "close_hint": "Esc/Enter to close"
+      },
+      "failed": {
+        "title": "Authentication error",
+        "back_hint": "Esc/Enter to go back"
+      }
+    },
+    "setup": {
+      "title": "Configure API Key",
+      "provider_question": "Choose your AI provider:",
+      "provider_anthropic_note": "(Claude opus / sonnet / haiku)",
+      "provider_openai_note": "(gpt-4o, gpt-4o-mini, o3...)",
+      "provider_both": "Both",
+      "field_label": "%{provider} API key:",
+      "nav_select": "↑/↓ navigate · Enter confirm",
+      "nav_confirm": "Enter confirm · Esc cancel"
+    }
   }
 }
