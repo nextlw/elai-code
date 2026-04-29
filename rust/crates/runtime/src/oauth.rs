@@ -41,6 +41,13 @@ pub enum AuthMethod {
     AnthropicAuthToken {
         token: String,
     },
+    /// API key da OpenAI (sk-... ou sk-proj-...) colada pelo usuário no
+    /// AuthPicker. Persistida em `~/.config/elai/credentials.json` e usada
+    /// pelo `OpenAiCompatProvider` como fallback quando `OPENAI_API_KEY` não
+    /// está presente no ambiente.
+    OpenAiApiKey {
+        api_key: String,
+    },
     Bedrock,
     Vertex,
     Foundry,

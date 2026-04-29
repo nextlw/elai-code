@@ -78,10 +78,16 @@ A transactional filesystem write engine with three operating levels:
 
 ### Multi-Provider Support
 
-| Provider          | Models                                                                                             |
-| ----------------- | -------------------------------------------------------------------------------------------------- |
-| Anthropic         | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` (and aliases `opus`, `sonnet`, `haiku`) |
-| OpenAI-compatible | `gpt-4o-mini`, any OpenAI-compatible proxy                                                         |
+| Provider          | Models                                                                                             | Notes                                                  |
+| ----------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Anthropic         | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` (and aliases `opus`, `sonnet`, `haiku`) | OAuth (Pro/Max), Console, SSO, API key, Bearer token   |
+| OpenAI            | `gpt-4o`, `gpt-4o-mini`, `gpt-5*`, `o1*`, `o3*`, `o4*`, `chatgpt-*`, `ft:*`                        | API key via env or AuthPicker (`AuthMethod::OpenAiApiKey`) |
+| xAI (Grok)        | `grok-3`, `grok-3-mini`, `grok-2`                                                                  | API key via `XAI_API_KEY`                              |
+| Ollama (local)    | Any model loaded — use `ollama:NAME` (e.g. `ollama:llama3.1`, `ollama:qwen2.5-coder`)              | OpenAI-compatible API at `:11434/v1`, no auth needed   |
+| LM Studio (local) | Any model loaded — use `lmstudio:NAME` (e.g. `lmstudio:qwen2.5-coder`)                             | OpenAI-compatible API at `:1234/v1`, no auth needed    |
+| AWS Bedrock       | Claude models served by Bedrock                                                                    | `CLAUDE_CODE_USE_BEDROCK=1`, AWS standard creds        |
+| Google Vertex     | Claude models served by Vertex AI                                                                  | `CLAUDE_CODE_USE_VERTEX=1`                             |
+| Azure Foundry     | Claude models served by Azure                                                                      | `CLAUDE_CODE_USE_FOUNDRY=1`                            |
 
 ### MCP Integration
 
@@ -120,16 +126,44 @@ cargo build --release
 # binary: rust/target/release/elai
 ```
 
-### 2. Set your API key
+### 2. Pick a provider
 
+**Anthropic (cloud):**
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
 ```
 
-Or for OpenAI-compatible endpoints:
-
+**OpenAI (cloud):**
 ```bash
 export OPENAI_API_KEY=your_key_here
+# Or persist via the TUI AuthPicker — see "Authentication" below.
+```
+
+**xAI Grok (cloud):**
+```bash
+export XAI_API_KEY=your_key_here
+```
+
+**Ollama (local):**
+```bash
+# Start Ollama (default port 11434):
+ollama serve &
+ollama pull llama3.1
+
+# Tell Elai where it lives (only needed if non-default host/port):
+export OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Run a specific model with the explicit prefix:
+elai --model ollama:llama3.1
+```
+
+**LM Studio (local):**
+```bash
+# Inside LM Studio: Developer → Start Server (default port 1234).
+export LMSTUDIO_BASE_URL=http://localhost:1234/v1
+
+# Run any loaded model — use the model id LM Studio reports:
+elai --model lmstudio:qwen2.5-coder-7b-instruct
 ```
 
 ### 3. Run
@@ -141,27 +175,52 @@ elai
 Switch provider at runtime:
 
 ```bash
-elai --model gpt-4o-mini --api-base https://your-proxy/v1
+elai --model gpt-4o-mini
+elai --model ollama:llama3.1
+elai --model lmstudio:qwen2.5-coder-7b-instruct
+elai --model grok-3
 ```
+
+> **Local model defaults:** providers locais usam `ELAI_LOCAL_MAX_COMPLETION_TOKENS` (default `4096`) como limite de saída. Sobrescreva se o modelo suportar contextos maiores: `export ELAI_LOCAL_MAX_COMPLETION_TOKENS=8192`.
+
+> **Default model selection:** sem `--model` e sem credenciais cloud, mas com `OLLAMA_BASE_URL` setado, o Elai usa `ELAI_DEFAULT_OLLAMA_MODEL` (default `ollama:llama3.1`). Para LM Studio: `ELAI_DEFAULT_LMSTUDIO_MODEL` (default `lmstudio:local`).
 
 ---
 
 ## Authentication
 
-`elai login` supports 10 methods. Pick by environment.
+The TUI **AuthPicker** (first-run wizard or `elai login` with no flags) lists every supported method. Cloud providers persist creds in `~/.config/elai/credentials.json`; local providers (Ollama / LM Studio) need only the `*_BASE_URL` env var.
 
-| Flag                    | When to use                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| `--claudeai`            | Pro/Max/Team/Enterprise subscriber — OAuth via claude.ai                             |
-| `--console`             | Anthropic Console — OAuth that creates an API key for you                            |
-| `--sso`                 | Enterprise SSO — claude.ai flow with `login_method=sso`                              |
-| `--api-key`             | Paste an `sk-ant-…` API key (interactive prompt or `--stdin`)                        |
-| `--token`               | Paste a Bearer token (`ANTHROPIC_AUTH_TOKEN`)                                        |
-| `--use-bedrock`         | AWS Bedrock — sets `CLAUDE_CODE_USE_BEDROCK=1`; AWS creds via standard chain         |
-| `--use-vertex`          | Google Vertex AI — sets `CLAUDE_CODE_USE_VERTEX=1`                                   |
-| `--use-foundry`         | Azure Foundry — sets `CLAUDE_CODE_USE_FOUNDRY=1`                                     |
-| `--import-claude-code`  | Import credentials from `~/.claude/credentials.json` (no interaction)                |
-| `--legacy-elai`         | Legacy `elai.dev` OAuth (deprecated; kept for upgrade paths)                         |
+| Method (TUI label)            | Stored as `AuthMethod`            | When to use                                                              |
+| ----------------------------- | --------------------------------- | ------------------------------------------------------------------------ |
+| Claude.ai OAuth (Pro/Max)     | `ClaudeAiOAuth`                   | Anthropic subscribers — OAuth via claude.ai                              |
+| Console OAuth                 | `ConsoleApiKey`                   | Anthropic Console — OAuth that creates an API key for you                |
+| SSO OAuth                     | `ClaudeAiOAuth` w/ SSO            | Enterprise SSO — claude.ai flow with `login_method=sso`                  |
+| Colar API key (`sk-ant-...`)  | `ConsoleApiKey { origin: Pasted }` | Paste an Anthropic API key                                               |
+| Colar Auth Token (Bearer)     | `AnthropicAuthToken`              | Paste an `ANTHROPIC_AUTH_TOKEN` bearer                                   |
+| Colar OpenAI key (`sk-...`)   | `OpenAiApiKey`                    | Paste an OpenAI key — used as fallback when `OPENAI_API_KEY` is unset    |
+| AWS Bedrock                   | `Bedrock`                         | Sets `CLAUDE_CODE_USE_BEDROCK=1`; AWS creds via standard chain           |
+| Google Vertex AI              | `Vertex`                          | Sets `CLAUDE_CODE_USE_VERTEX=1`                                          |
+| Azure Foundry                 | `Foundry`                         | Sets `CLAUDE_CODE_USE_FOUNDRY=1`                                         |
+| Importar Claude Code creds    | `ClaudeAiOAuth`                   | Import from `~/.claude/credentials.json` (no interaction)                |
+| Elai OAuth legacy             | `ClaudeAiOAuth` (legacy issuer)   | Legacy `elai.dev` OAuth — kept for upgrade paths                         |
+
+**Local providers** (Ollama, LM Studio) don't appear in the AuthPicker — they're auto-detected when `OLLAMA_BASE_URL` or `LMSTUDIO_BASE_URL` is set, and accept requests without a real key (Elai sends the placeholder `"ollama"` / `"lm-studio"` as a no-op `Authorization` header).
+
+**CLI shortcuts:** `elai login` also accepts flags as shortcuts for the most common methods:
+
+| Flag                    | TUI equivalent                              |
+| ----------------------- | ------------------------------------------- |
+| `--claudeai`            | Claude.ai OAuth                             |
+| `--console`             | Console OAuth                               |
+| `--sso`                 | SSO OAuth                                   |
+| `--api-key`             | Colar API key (interactive prompt or `--stdin`) |
+| `--token`               | Colar Auth Token                            |
+| `--use-bedrock`         | AWS Bedrock                                 |
+| `--use-vertex`          | Google Vertex AI                            |
+| `--use-foundry`         | Azure Foundry                               |
+| `--import-claude-code`  | Importar Claude Code credentials            |
+| `--legacy-elai`         | Elai OAuth legacy                           |
 
 Useful flags for any method:
 

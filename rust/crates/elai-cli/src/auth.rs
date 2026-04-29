@@ -535,6 +535,19 @@ pub fn save_pasted_auth_token(value: &str) -> Result<(), AuthError> {
         .map_err(AuthError::Io)
 }
 
+/// Save an OpenAI API key (sk-... ou sk-proj-...) pasted directly by the user
+/// in the TUI. Persiste em `~/.config/elai/credentials.json` para que o
+/// `OpenAiCompatProvider` use como fallback quando `OPENAI_API_KEY` não está
+/// no ambiente.
+pub fn save_pasted_openai_key(value: &str) -> Result<(), AuthError> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(AuthError::InvalidInput("openai api key is empty".into()));
+    }
+    save_auth_method(&AuthMethod::OpenAiApiKey { api_key: v.to_string() })
+        .map_err(AuthError::Io)
+}
+
 /// Save a third-party auth method (Bedrock / Vertex / Foundry) from the TUI.
 pub fn save_3p(method: AuthMethod) -> Result<(), AuthError> {
     save_auth_method(&method).map_err(AuthError::Io)
@@ -882,6 +895,13 @@ fn auth_info_from_method(method: &AuthMethod) -> AuthInfo {
         },
         AuthMethod::Foundry => AuthInfo {
             method: "foundry".into(),
+            source: "credentials.json".into(),
+            subscription: None,
+            expires_at: None,
+            scopes: vec![],
+        },
+        AuthMethod::OpenAiApiKey { .. } => AuthInfo {
+            method: "openai_api_key".into(),
             source: "credentials.json".into(),
             subscription: None,
             expires_at: None,

@@ -32,6 +32,11 @@ pub enum ProviderClient {
     ElaiApi(ElaiApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    /// Servidor Ollama local. Mesmo wire-protocol do `OpenAi` — o variant
+    /// separado existe só para `provider_kind()` reportar a origem real.
+    Ollama(OpenAiCompatClient),
+    /// Servidor LM Studio local.
+    LmStudio(OpenAiCompatClient),
     Orchestrated(Arc<ProviderOrchestrator>),
 }
 
@@ -44,8 +49,10 @@ impl ProviderClient {
         model: &str,
         default_auth: Option<AuthSource>,
     ) -> Result<Self, ApiError> {
-        let resolved_model = providers::resolve_model_alias(model);
-        match providers::detect_provider_kind(&resolved_model) {
+        // Detecção precisa rodar no input ORIGINAL para reconhecer o prefixo
+        // `ollama:`/`lmstudio:` antes de ele ser stripado por resolve_model_alias.
+        let kind = providers::detect_provider_kind(model);
+        match kind {
             ProviderKind::ElaiApi => Ok(Self::ElaiApi(match default_auth {
                 Some(auth) => ElaiApiClient::from_auth(auth),
                 None => ElaiApiClient::from_env()?,
@@ -55,6 +62,12 @@ impl ProviderClient {
             )?)),
             ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::openai(),
+            )?)),
+            ProviderKind::Ollama => Ok(Self::Ollama(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::ollama(),
+            )?)),
+            ProviderKind::LmStudio => Ok(Self::LmStudio(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::lm_studio(),
             )?)),
         }
     }
@@ -109,6 +122,42 @@ impl ProviderClient {
                         max_concurrency: 4,
                     },
                 );
+                priority += 1;
+                registered_any = true;
+            }
+        }
+
+        // Providers locais: registrados apenas se o usuário sinalizou
+        // explicitamente via `OLLAMA_BASE_URL` / `LMSTUDIO_BASE_URL`. Não
+        // queremos um fallback automático para localhost se o servidor não
+        // estiver rodando — isso causaria timeouts inesperados.
+        if std::env::var_os("OLLAMA_BASE_URL").is_some() {
+            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::ollama()) {
+                orchestrator.register_provider(
+                    Box::new(OpenAiUnifiedAdapter::new(client, "ollama")),
+                    ProviderConfig {
+                        id: "ollama".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
+                priority += 1;
+                registered_any = true;
+            }
+        }
+
+        if std::env::var_os("LMSTUDIO_BASE_URL").is_some() {
+            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::lm_studio()) {
+                orchestrator.register_provider(
+                    Box::new(OpenAiUnifiedAdapter::new(client, "lmstudio")),
+                    ProviderConfig {
+                        id: "lmstudio".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
                 registered_any = true;
             }
         }
@@ -116,7 +165,13 @@ impl ProviderClient {
         if !registered_any {
             return Err(ApiError::missing_credentials(
                 "orchestrator",
-                &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY"],
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "OPENAI_API_KEY",
+                    "XAI_API_KEY",
+                    "OLLAMA_BASE_URL",
+                    "LMSTUDIO_BASE_URL",
+                ],
             ));
         }
 
@@ -129,6 +184,8 @@ impl ProviderClient {
             Self::ElaiApi(_) | Self::Orchestrated(_) => ProviderKind::ElaiApi,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::Ollama(_) => ProviderKind::Ollama,
+            Self::LmStudio(_) => ProviderKind::LmStudio,
         }
     }
 
@@ -138,7 +195,10 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::ElaiApi(client) => send_via_provider(client, request).await,
-            Self::Xai(client) | Self::OpenAi(client) => send_via_provider(client, request).await,
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::Ollama(client)
+            | Self::LmStudio(client) => send_via_provider(client, request).await,
             Self::Orchestrated(orchestrator) => {
                 orchestrator
                     .send_message(request, &RequestOptions::default())
@@ -155,7 +215,10 @@ impl ProviderClient {
             Self::ElaiApi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::ElaiApi),
-            Self::Xai(client) | Self::OpenAi(client) => stream_via_provider(client, request)
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::Ollama(client)
+            | Self::LmStudio(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
             Self::Orchestrated(orchestrator) => {

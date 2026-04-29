@@ -125,9 +125,14 @@ impl From<&runtime::AuthMethod> for AuthSource {
                 Self::BearerToken(token.clone())
             }
             // 3P: HTTP layer não envia auth — provider client (Bedrock/Vertex/Foundry) usa creds próprias.
+            // OpenAiApiKey: o ElaiApiClient (Anthropic) ignora — quem usa essa
+            // credencial é o `OpenAiCompatProvider`. Se o usuário tentar
+            // chamar um modelo Anthropic só com `OpenAiApiKey` salvo, a
+            // autenticação falha cedo (esperado).
             runtime::AuthMethod::Bedrock
             | runtime::AuthMethod::Vertex
-            | runtime::AuthMethod::Foundry => Self::None,
+            | runtime::AuthMethod::Foundry
+            | runtime::AuthMethod::OpenAiApiKey { .. } => Self::None,
         }
     }
 }
@@ -174,7 +179,13 @@ impl ElaiApiClient {
     }
 
     pub fn from_env() -> Result<Self, ApiError> {
-        let auth = AuthSource::from_env_or_saved()?;
+        // Usa `resolve_startup_auth_source` em vez do legado `from_env_or_saved`
+        // para enxergar o `AuthMethod::ClaudeAiOAuth` salvo em `credentials.json`
+        // pela chave nova `auth` (além das env vars e da chave legada `oauth`).
+        // A closure retorna `None`: refresh transparente de token expirado exige
+        // `OAuthConfig`, que vive no crate `runtime`/CLI; aqui só conseguimos
+        // usar tokens válidos. Token expirado → erro pedindo novo login.
+        let auth = resolve_startup_auth_source(|| Ok(None))?;
         let spoof = detect_spoof_mode_for_auth(&auth);
         Ok(Self::from_auth(auth).with_base_url(read_base_url()).with_spoof_mode(spoof))
     }
@@ -593,7 +604,8 @@ where
         runtime::AuthMethod::AnthropicAuthToken { token } => Ok(AuthSource::BearerToken(token)),
         runtime::AuthMethod::Bedrock
         | runtime::AuthMethod::Vertex
-        | runtime::AuthMethod::Foundry => Ok(AuthSource::None),
+        | runtime::AuthMethod::Foundry
+        | runtime::AuthMethod::OpenAiApiKey { .. } => Ok(AuthSource::None),
         runtime::AuthMethod::ClaudeAiOAuth {
             token_set,
             subscription,

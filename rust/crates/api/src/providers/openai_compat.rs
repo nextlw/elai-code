@@ -16,6 +16,8 @@ use super::{Provider, ProviderFuture};
 
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+pub const DEFAULT_LM_STUDIO_BASE_URL: &str = "http://localhost:1234/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -32,6 +34,8 @@ pub struct OpenAiCompatConfig {
 
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
+const OLLAMA_ENV_VARS: &[&str] = &["OLLAMA_API_KEY", "OLLAMA_BASE_URL"];
+const LM_STUDIO_ENV_VARS: &[&str] = &["LMSTUDIO_API_KEY", "LMSTUDIO_BASE_URL"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -53,12 +57,61 @@ impl OpenAiCompatConfig {
             default_base_url: DEFAULT_OPENAI_BASE_URL,
         }
     }
+
+    /// Ollama local server. Por padrão sem auth — `from_env` aceita API key
+    /// ausente e injeta o placeholder `"ollama"` no header `Authorization`.
+    /// Sobrescreva `OLLAMA_BASE_URL` se rodar Ollama em outro host/porta.
+    #[must_use]
+    pub const fn ollama() -> Self {
+        Self {
+            provider_name: "Ollama",
+            api_key_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: DEFAULT_OLLAMA_BASE_URL,
+        }
+    }
+
+    /// LM Studio local server. Por padrão sem auth — `from_env` aceita API key
+    /// ausente e injeta o placeholder `"lm-studio"` no header `Authorization`.
+    /// Sobrescreva `LMSTUDIO_BASE_URL` se rodar LM Studio em outro host/porta.
+    #[must_use]
+    pub const fn lm_studio() -> Self {
+        Self {
+            provider_name: "LM Studio",
+            api_key_env: "LMSTUDIO_API_KEY",
+            base_url_env: "LMSTUDIO_BASE_URL",
+            default_base_url: DEFAULT_LM_STUDIO_BASE_URL,
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
+            "Ollama" => OLLAMA_ENV_VARS,
+            "LM Studio" => LM_STUDIO_ENV_VARS,
             _ => &[],
+        }
+    }
+
+    /// Retorna `true` se o provider é local (Ollama / LM Studio) e portanto
+    /// NÃO exige API key — `from_env` deve usar um placeholder em vez de
+    /// retornar `missing_credentials`.
+    #[must_use]
+    pub fn is_local(self) -> bool {
+        matches!(self.provider_name, "Ollama" | "LM Studio")
+    }
+
+    /// Placeholder de API key usado por providers locais quando o usuário
+    /// não setou nenhum. Mantém a request bem-formada (header `Authorization`
+    /// presente) para servidores que rejeitam requests sem header.
+    #[must_use]
+    pub fn local_api_key_placeholder(self) -> &'static str {
+        match self.provider_name {
+            "Ollama" => "ollama",
+            "LM Studio" => "lm-studio",
+            _ => "",
         }
     }
 }
@@ -87,13 +140,31 @@ impl OpenAiCompatClient {
     }
 
     pub fn from_env(config: OpenAiCompatConfig) -> Result<Self, ApiError> {
-        let Some(api_key) = read_env_non_empty(config.api_key_env)? else {
-            return Err(ApiError::missing_credentials(
-                config.provider_name,
-                config.credential_env_vars(),
-            ));
-        };
-        Ok(Self::new(api_key, config))
+        if let Some(api_key) = read_env_non_empty(config.api_key_env)? {
+            return Ok(Self::new(api_key, config));
+        }
+        // Fallback: para OpenAI, tenta ler `AuthMethod::OpenAiApiKey` salvo em
+        // `~/.config/elai/credentials.json` (gravado pelo AuthPicker da TUI).
+        // xAI hoje não tem variant equivalente — só env var.
+        if config.provider_name == "OpenAI" {
+            if let Ok(Some(runtime::AuthMethod::OpenAiApiKey { api_key })) =
+                runtime::load_auth_method()
+            {
+                if !api_key.trim().is_empty() {
+                    return Ok(Self::new(api_key, config));
+                }
+            }
+        }
+        // Providers locais (Ollama / LM Studio) rodam sem auth por padrão —
+        // injetamos um placeholder para que o header `Authorization` esteja
+        // presente nas requests (alguns servidores rejeitam request sem header).
+        if config.is_local() {
+            return Ok(Self::new(config.local_api_key_placeholder(), config));
+        }
+        Err(ApiError::missing_credentials(
+            config.provider_name,
+            config.credential_env_vars(),
+        ))
     }
 
     #[must_use]
@@ -872,6 +943,20 @@ pub fn has_api_key(key: &str) -> bool {
         .ok()
         .and_then(std::convert::identity)
         .is_some()
+}
+
+/// Considera tanto `OPENAI_API_KEY` no ambiente quanto uma `AuthMethod::OpenAiApiKey`
+/// salva pelo AuthPicker da TUI. Use isso em vez de `has_api_key("OPENAI_API_KEY")`
+/// quando precisar saber se o usuário **pode** rodar OpenAI agora.
+#[must_use]
+pub fn has_openai_credentials() -> bool {
+    if has_api_key("OPENAI_API_KEY") {
+        return true;
+    }
+    matches!(
+        runtime::load_auth_method(),
+        Ok(Some(runtime::AuthMethod::OpenAiApiKey { api_key })) if !api_key.trim().is_empty()
+    )
 }
 
 #[must_use]
