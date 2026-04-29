@@ -51,11 +51,15 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v0.7.2
+## What's New — v0.7.3
 
-- feat: enhance TUI layout with rounded header and dynamic path shortening
-- feat: enhance README with authentication methods and indexing instructions; update logo and TUI layout
-- feat: add ELAI.md documentation and update .gitignore
+- chore: update swd.log with new tool outcomes for types.rs
+- feat: add extended thinking and effort configuration to MessageRequest
+- feat(i18n): rollout completo (PR2-PR5)
+- feat: enhance README and add batch analysis documentation
+- feat: integrate rust-i18n for multilingual support and enhance command localization
+- feat: add onboarding tips to TUI and enhance runtime error handling
+- chore: update .gitignore to include ELAI.md
 
 ---
 
