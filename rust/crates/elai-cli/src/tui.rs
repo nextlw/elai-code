@@ -425,6 +425,10 @@ pub struct UiApp {
     pub tips_cursor: usize,
     /// `false` após o usuário enviar a primeira mensagem; `true` novamente após `/clear`.
     pub show_tips: bool,
+    /// Mensagens digitadas enquanto `thinking = true`, aguardando envio.
+    pub message_queue: std::collections::VecDeque<String>,
+    /// Próxima mensagem a ser despachada logo que `thinking` voltar a `false`.
+    pub pending_outgoing: Option<String>,
 }
 
 impl UiApp {
@@ -467,6 +471,8 @@ impl UiApp {
             tips_order: Vec::new(),
             tips_cursor: 0,
             show_tips: true,
+            message_queue: std::collections::VecDeque::new(),
+            pending_outgoing: None,
         }
         .with_shuffled_tips()
     }
@@ -629,6 +635,9 @@ impl UiApp {
                 if let Some(ChatEntry::ThinkingBlock { finished, .. }) = self.chat.last_mut() {
                     *finished = true;
                 }
+                if let Some(next) = self.message_queue.pop_front() {
+                    self.pending_outgoing = Some(next);
+                }
             }
             TuiMsg::Error(msg) => {
                 self.thinking = false;
@@ -636,6 +645,9 @@ impl UiApp {
                     *finished = true;
                 }
                 self.push_chat(ChatEntry::SystemNote(format!("❌ Error: {msg}")));
+                if let Some(next) = self.message_queue.pop_front() {
+                    self.pending_outgoing = Some(next);
+                }
             }
             TuiMsg::SwdResult(tx) => {
                 let appended = matches!(
@@ -670,6 +682,9 @@ impl UiApp {
                 self.push_chat(ChatEntry::SystemNote(format!(
                     "🛑 Budget exhausted: {reason}"
                 )));
+                if let Some(next) = self.message_queue.pop_front() {
+                    self.pending_outgoing = Some(next);
+                }
             }
             TuiMsg::BudgetUpdate { pct, cost_usd } => {
                 self.budget_pct = pct;
@@ -1217,6 +1232,11 @@ pub fn poll_and_handle(
         }
     }
 
+    // Despacha mensagem enfileirada assim que thinking voltou a false.
+    if let Some(msg) = app.pending_outgoing.take() {
+        return TuiAction::SendMessage(msg);
+    }
+
     // Check for permission requests (non-blocking).
     if app.overlay.is_none() {
         if let Ok(req) = perm_rx.try_recv() {
@@ -1371,11 +1391,6 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
 
     // ── Input-level shortcuts ─────────────────────────────────────────────────
 
-    // Don't accept input while the runtime is thinking.
-    if app.thinking {
-        return TuiAction::None;
-    }
-
     match (key.modifiers, key.code) {
         // Submit
         (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -1384,6 +1399,17 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 return TuiAction::None;
             }
             app.push_history(text.clone());
+
+            // Se o runtime está processando, enfileira a mensagem para envio posterior.
+            if app.thinking {
+                app.clear_input();
+                let pos = app.message_queue.len() + 1;
+                app.message_queue.push_back(text);
+                app.push_chat(ChatEntry::SystemNote(format!(
+                    "📥 Mensagem adicionada à fila (posição {pos})"
+                )));
+                return TuiAction::None;
+            }
 
             if matches!(text.as_str(), "/exit" | "/quit") {
                 return TuiAction::Quit;
