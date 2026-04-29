@@ -2288,8 +2288,6 @@ fn handle_tui_slash_command(
                 if let Ok(handle) = resolve_session_reference(session_id) {
                     if let Ok(loaded) = Session::load_from_path(&handle.path) {
                         let msg_count = loaded.messages.len();
-                        // Sync session messages to chat UI
-                        sync_session_to_app_chat(&loaded, app);
                         *session.lock().unwrap() = loaded;
                         app.push_chat(tui::ChatEntry::SystemNote(
                             rust_i18n::t!(
