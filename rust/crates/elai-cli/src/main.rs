@@ -2266,9 +2266,9 @@ fn handle_tui_slash_command(
             if let Some(model_name) = arg {
                 let m = model_name.to_string();
                 app.model = m.clone();
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Modelo alterado para: {m}"
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.model_changed", model = m).to_string(),
+                ));
             } else {
                 app.open_model_picker();
             }
@@ -2276,9 +2276,9 @@ fn handle_tui_slash_command(
         "permissions" => {
             if let Some(perm) = arg {
                 app.permission_mode = perm.to_string();
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Permissões alteradas para: {perm}"
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.permissions_changed", mode = perm.to_string()).to_string(),
+                ));
             } else {
                 app.open_permission_picker();
             }
@@ -2289,9 +2289,13 @@ fn handle_tui_slash_command(
                     if let Ok(loaded) = Session::load_from_path(&handle.path) {
                         let msg_count = loaded.messages.len();
                         *session.lock().unwrap() = loaded;
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.session_resumed",
+                                id = session_id.to_string(),
+                                count = msg_count.to_string()
+                            ).to_string(),
+                        ));
                     }
                 }
             } else {
@@ -2300,15 +2304,19 @@ fn handle_tui_slash_command(
         }
         "cost" => {
             let cost = estimate_tui_cost(app);
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "💰 Custo estimado: ${cost:.4}  (in={} out={})",
-                app.input_tokens, app.output_tokens
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.cost_estimate",
+                    cost = format!("{cost:.4}"),
+                    tokens_in = app.input_tokens.to_string(),
+                    tokens_out = app.output_tokens.to_string()
+                ).to_string(),
+            ));
         }
         "version" => {
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "ELAI v{VERSION} · TUI mode · ratatui"
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.version_line", version = VERSION).to_string(),
+            ));
         }
         "diff" => {
             let diff = Command::new("git")
@@ -2317,7 +2325,7 @@ fn handle_tui_slash_command(
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_else(|_| "git diff failed".to_string());
             let out = if diff.trim().is_empty() {
-                "Nenhuma alteração no git.".to_string()
+                rust_i18n::t!("tui.repl.feedback.no_git_changes").to_string()
             } else {
                 diff
             };
@@ -2329,13 +2337,20 @@ fn handle_tui_slash_command(
             let keep = 20;
             if total > keep {
                 guard.messages.drain(0..total - keep);
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Sessão compactada: {total} → {keep} mensagens."
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!(
+                        "tui.repl.feedback.compact_done",
+                        from = total.to_string(),
+                        to = keep.to_string()
+                    ).to_string(),
+                ));
             } else {
-                app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "Sessão já está compacta ({total} mensagens)."
-                )));
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!(
+                        "tui.repl.feedback.compact_already",
+                        count = total.to_string()
+                    ).to_string(),
+                ));
             }
         }
         "export" => {
@@ -2366,12 +2381,12 @@ fn handle_tui_slash_command(
             }
             drop(guard);
             match fs::write(&filename, &content) {
-                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "✅ Conversa exportada para {filename}"
-                ))),
-                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "❌ Erro ao exportar: {e}"
-                ))),
+                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.export_ok", file = filename).to_string(),
+                )),
+                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
+                    rust_i18n::t!("tui.repl.feedback.export_err", error = e.to_string()).to_string(),
+                )),
             }
         }
         "memory" => {
@@ -2393,7 +2408,7 @@ fn handle_tui_slash_command(
                     Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}"))),
                 },
                 None => app.push_chat(tui::ChatEntry::SystemNote(
-                    "Nenhum ELAI.md ou CLAUDE.md encontrado no diretório atual.".into(),
+                    rust_i18n::t!("tui.repl.feedback.memory_not_found").to_string(),
                 )),
             }
         }
@@ -2415,7 +2430,7 @@ fn handle_tui_slash_command(
                 }
             });
             app.push_chat(tui::ChatEntry::SystemNote(
-                "Iniciando /init em background...".to_string(),
+                rust_i18n::t!("tui.repl.feedback.init_started").to_string(),
             ));
         }
         "verify" => {
@@ -2438,7 +2453,9 @@ fn handle_tui_slash_command(
                     }
                 }
             });
-            app.push_chat(tui::ChatEntry::SystemNote("Verificando codebase em background...".to_string()));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.verify_started").to_string(),
+            ));
         }
         "plugin" | "plugins" => {
             let tx = msg_tx.clone();
@@ -2467,7 +2484,9 @@ fn handle_tui_slash_command(
                     Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); }
                 }
             });
-            app.push_chat(tui::ChatEntry::SystemNote("Plugin: processando em background...".to_string()));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!("tui.repl.feedback.plugin_started").to_string(),
+            ));
         }
         "swd" => {
             use std::sync::atomic::Ordering;
@@ -2837,9 +2856,12 @@ fn handle_tui_slash_command(
             app.should_quit = true;
         }
         other => {
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "ℹ Comando /{other} desconhecido no modo TUI. Use /help ou Ctrl+K."
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.unknown_command",
+                    cmd = other.to_string()
+                ).to_string(),
+            ));
         }
     }
 }

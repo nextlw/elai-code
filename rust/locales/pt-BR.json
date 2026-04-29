@@ -214,6 +214,23 @@
         "tokens": "Tokens in",
         "tokens_out": "out",
         "cost_estimate": "Custo est."
+      },
+      "feedback": {
+        "model_changed": "✅ Modelo alterado para: %{model}",
+        "permissions_changed": "✅ Permissões alteradas para: %{mode}",
+        "session_resumed": "✅ Sessão %{id} retomada (%{count} mensagens)",
+        "cost_estimate": "💰 Custo estimado: $%{cost}  (in=%{tokens_in} out=%{tokens_out})",
+        "version_line": "ELAI v%{version} · TUI mode · ratatui",
+        "no_git_changes": "Nenhuma alteração no git.",
+        "compact_done": "✅ Sessão compactada: %{from} → %{to} mensagens.",
+        "compact_already": "Sessão já está compacta (%{count} mensagens).",
+        "export_ok": "✅ Conversa exportada para %{file}",
+        "export_err": "❌ Erro ao exportar: %{error}",
+        "memory_not_found": "Nenhum ELAI.md ou CLAUDE.md encontrado no diretório atual.",
+        "init_started": "Iniciando /init em background...",
+        "verify_started": "Verificando codebase em background...",
+        "plugin_started": "Plugin: processando em background...",
+        "unknown_command": "ℹ Comando /%{cmd} desconhecido no modo TUI. Use /help ou Ctrl+K."
       }
     },
     "wizard": {
