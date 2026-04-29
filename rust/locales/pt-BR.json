@@ -230,7 +230,13 @@
         "init_started": "Iniciando /init em background...",
         "verify_started": "Verificando codebase em background...",
         "plugin_started": "Plugin: processando em background...",
-        "unknown_command": "ℹ Comando /%{cmd} desconhecido no modo TUI. Use /help ou Ctrl+K."
+        "unknown_command": "ℹ Comando /%{cmd} desconhecido no modo TUI. Use /help ou Ctrl+K.",
+        "swd_invalid": "❌ SWD: nível inválido '%{level}'. Use: off | partial | full",
+        "swd_changed": "✅ SWD alterado: %{from} → %{to}",
+        "agents_skills_note": "ℹ Use `elai agents` ou `elai skills` fora do modo TUI para listar.",
+        "budget_off": "✅ Budget desativado",
+        "budget_set": "✅ Budget definido: tokens=%{tokens} usd=%{usd}",
+        "budget_usage_hint": "❓ Uso: /budget [tokens] [usd] | off"
       }
     },
     "wizard": {

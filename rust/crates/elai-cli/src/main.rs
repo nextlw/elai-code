@@ -2496,9 +2496,12 @@ fn handle_tui_slash_command(
                 match SwdLevel::from_str(level_str) {
                     Some(l) => l,
                     None => {
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "❌ SWD: nível inválido '{level_str}'. Use: off | partial | full"
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.swd_invalid",
+                                level = level_str.to_string()
+                            ).to_string(),
+                        ));
                         return;
                     }
                 }
@@ -2506,11 +2509,13 @@ fn handle_tui_slash_command(
                 current.cycle()
             };
             app.swd_level.store(new_level as u8, Ordering::Relaxed);
-            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                "✅ SWD alterado: {} → {}",
-                current.as_str(),
-                new_level.as_str()
-            )));
+            app.push_chat(tui::ChatEntry::SystemNote(
+                rust_i18n::t!(
+                    "tui.repl.feedback.swd_changed",
+                    from = current.as_str().to_string(),
+                    to = new_level.as_str().to_string()
+                ).to_string(),
+            ));
         }
         "keys" | "setup" => {
             app.open_auth_picker();
@@ -2520,7 +2525,7 @@ fn handle_tui_slash_command(
         }
         "agents" | "skills" => {
             app.push_chat(tui::ChatEntry::SystemNote(
-                "ℹ Use `elai agents` ou `elai skills` fora do modo TUI para listar.".to_string(),
+                rust_i18n::t!("tui.repl.feedback.agents_skills_note").to_string(),
             ));
         }
         "budget" => {
@@ -2529,7 +2534,7 @@ fn handle_tui_slash_command(
                     budget_tracker.lock().unwrap().disable();
                     app.budget_enabled = false;
                     app.push_chat(tui::ChatEntry::SystemNote(
-                        "✅ Budget desativado".to_string(),
+                        rust_i18n::t!("tui.repl.feedback.budget_off").to_string(),
                     ));
                 } else {
                     let parts: Vec<&str> = a.split_whitespace().collect();
@@ -2546,15 +2551,16 @@ fn handle_tui_slash_command(
                         let _ = save_budget_config(&cwd, &cfg);
                         budget_tracker.lock().unwrap().update_config(cfg.clone());
                         app.budget_enabled = true;
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "✅ Budget definido: tokens={} usd={}",
-                            cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
-                            cfg.max_cost_usd
-                                .map_or("∞".into(), |u| format!("${u:.2}")),
-                        )));
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            rust_i18n::t!(
+                                "tui.repl.feedback.budget_set",
+                                tokens = cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
+                                usd = cfg.max_cost_usd.map_or("∞".into(), |u| format!("${u:.2}"))
+                            ).to_string(),
+                        ));
                     } else {
                         app.push_chat(tui::ChatEntry::SystemNote(
-                            "❓ Uso: /budget [tokens] [usd] | off".to_string(),
+                            rust_i18n::t!("tui.repl.feedback.budget_usage_hint").to_string(),
                         ));
                     }
                 }
