@@ -85,6 +85,64 @@ pub fn get_compact_continuation_message(
     base
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ApiRound {
+    #[allow(dead_code)]
+    start: usize, // inclusive
+    end: usize,   // exclusive
+}
+
+fn group_into_rounds(messages: &[ConversationMessage]) -> Vec<ApiRound> {
+    let mut rounds = Vec::new();
+    let mut i = 0;
+    while i < messages.len() {
+        let msg = &messages[i];
+        let has_tool_use = msg.role == MessageRole::Assistant
+            && msg
+                .blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+
+        if has_tool_use && i + 1 < messages.len() {
+            let next = &messages[i + 1];
+            let next_has_tool_result = (next.role == MessageRole::Tool
+                || next.role == MessageRole::User)
+                && next
+                    .blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+            if next_has_tool_result {
+                rounds.push(ApiRound {
+                    start: i,
+                    end: i + 2,
+                });
+                i += 2;
+                continue;
+            }
+        }
+
+        rounds.push(ApiRound {
+            start: i,
+            end: i + 1,
+        });
+        i += 1;
+    }
+    rounds
+}
+
+fn find_safe_cut_point(messages: &[ConversationMessage], max_index: usize) -> Option<usize> {
+    let rounds = group_into_rounds(messages);
+    let mut safe_cut = None;
+    for round in &rounds {
+        if round.end <= max_index {
+            safe_cut = Some(round.end);
+        } else {
+            break;
+        }
+    }
+    safe_cut
+}
+
 #[must_use]
 pub fn compact_session(session: &Session, config: CompactionConfig) -> CompactionResult {
     if !should_compact(session, config) {
@@ -101,10 +159,27 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
         .first()
         .and_then(extract_existing_compacted_summary);
     let compacted_prefix_len = usize::from(existing_summary.is_some());
-    let keep_from = session
+    let naive_keep_from = session
         .messages
         .len()
         .saturating_sub(config.preserve_recent_messages);
+
+    let compactable = &session.messages[compacted_prefix_len..];
+    let compactable_max = naive_keep_from.saturating_sub(compacted_prefix_len);
+    let safe_cut_relative = find_safe_cut_point(compactable, compactable_max);
+
+    let keep_from = match safe_cut_relative {
+        Some(rel) => compacted_prefix_len + rel,
+        None => {
+            return CompactionResult {
+                summary: String::new(),
+                formatted_summary: String::new(),
+                compacted_session: session.clone(),
+                removed_message_count: 0,
+            };
+        }
+    };
+
     let removed = &session.messages[compacted_prefix_len..keep_from];
     let preserved = session.messages[keep_from..].to_vec();
     let summary =
@@ -502,10 +577,99 @@ fn extract_summary_timeline(summary: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_key_files, compact_session, estimate_session_tokens, format_compact_summary,
-        get_compact_continuation_message, infer_pending_work, should_compact, CompactionConfig,
+        collect_key_files, compact_session, estimate_session_tokens, find_safe_cut_point,
+        format_compact_summary, get_compact_continuation_message, group_into_rounds,
+        infer_pending_work, should_compact, CompactionConfig,
     };
     use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
+
+    fn assert_no_orphaned_tool_pairs(messages: &[ConversationMessage]) {
+        for (i, msg) in messages.iter().enumerate() {
+            // For each assistant message with ToolUse blocks, verify the next message
+            // has ToolResult for each ID.
+            if msg.role == MessageRole::Assistant {
+                let tool_use_ids: Vec<&str> = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if !tool_use_ids.is_empty() {
+                    let next = messages
+                        .get(i + 1)
+                        .expect("assistant ToolUse has no following message");
+                    assert!(
+                        next.role == MessageRole::Tool || next.role == MessageRole::User,
+                        "message after ToolUse assistant must be Tool or User"
+                    );
+                    for id in &tool_use_ids {
+                        assert!(
+                            next.blocks.iter().any(|b| matches!(
+                                b,
+                                ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == id
+                            )),
+                            "ToolResult missing for tool_use_id={id}"
+                        );
+                    }
+                }
+            }
+            // For each Tool/User message with ToolResult blocks, verify previous message
+            // has ToolUse with that ID.
+            if msg.role == MessageRole::Tool
+                || (msg.role == MessageRole::User
+                    && msg
+                        .blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolResult { .. })))
+            {
+                let result_ids: Vec<&str> = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if !result_ids.is_empty() {
+                    let prev = messages
+                        .get(i.wrapping_sub(1))
+                        .expect("ToolResult message has no preceding message");
+                    assert_eq!(
+                        prev.role,
+                        MessageRole::Assistant,
+                        "message before ToolResult must be Assistant"
+                    );
+                    for id in &result_ids {
+                        assert!(
+                            prev.blocks.iter().any(|b| matches!(
+                                b,
+                                ContentBlock::ToolUse { id: uid, .. } if uid == id
+                            )),
+                            "ToolUse missing for tool_use_id={id}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn assert_starts_with_non_tool_result_user(messages: &[ConversationMessage]) {
+        let first_non_system = messages
+            .iter()
+            .find(|m| m.role != MessageRole::System);
+        if let Some(msg) = first_non_system {
+            assert_eq!(msg.role, MessageRole::User, "first non-System must be User");
+            assert!(
+                !msg.blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                "first non-System User must not contain ToolResult blocks"
+            );
+        }
+    }
 
     #[test]
     fn formats_compact_summary_like_upstream() {
@@ -698,5 +862,211 @@ mod tests {
         ]);
         assert_eq!(pending.len(), 1);
         assert!(pending[0].contains("Next: update tests"));
+    }
+
+    #[test]
+    fn compact_never_splits_tool_use_tool_result_pair() {
+        // Layout (indices 0-4):
+        //   0: user "hello" (big)
+        //   1: assistant ToolUse id="t1"
+        //   2: tool ToolResult id="t1"   <- naive cut at index 2 would split 1 and 2
+        //   3: user "next" (big)
+        //   4: assistant "done"
+        //
+        // preserve_recent_messages=3 → naive keep_from = 5-3 = 2, cutting between 1 and 2.
+        // The fix must push keep_from to 3 (after the pair ends at index 2).
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::user_text("hello ".repeat(400)),
+                ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                    id: "t1".to_string(),
+                    name: "bash".to_string(),
+                    input: "{}".to_string(),
+                }]),
+                ConversationMessage::tool_result("t1", "bash", "ok", false),
+                ConversationMessage::user_text("next ".repeat(400)),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }]),
+            ],
+        };
+
+        let config = CompactionConfig {
+            preserve_recent_messages: 3,
+            max_estimated_tokens: 1,
+        };
+
+        let result = compact_session(&session, config);
+        // Some compaction must have occurred (not a no-op), and pairs must be intact.
+        assert_no_orphaned_tool_pairs(&result.compacted_session.messages);
+        // The compacted session should not contain the ToolUse without its ToolResult
+        // or vice-versa. If removed_message_count is 0 the session was left intact
+        // which is also acceptable (safe cut not possible without breaking pair).
+    }
+
+    #[test]
+    fn compact_skips_when_no_safe_cut_point_exists() {
+        // All messages are ToolUse/ToolResult pairs — no safe cut point exists.
+        // preserve_recent_messages=2, len=4, naive keep_from=2 which splits pair[1,2].
+        // pair[0,1] ends at index 2, which equals max_index=2, so safe_cut=Some(2).
+        // Actually with 2 pairs we should have a cut after pair 1. Let's make only 1 pair.
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                    id: "t1".to_string(),
+                    name: "bash".to_string(),
+                    input: "{}".to_string(),
+                }]),
+                ConversationMessage::tool_result("t1", "bash", "ok ".repeat(400), false),
+            ],
+        };
+
+        let config = CompactionConfig {
+            preserve_recent_messages: 1,
+            max_estimated_tokens: 1,
+        };
+
+        // With a single pair and preserve_recent_messages=1, naive keep_from=1 (inside pair).
+        // find_safe_cut_point on compactable=[msg0,msg1] with max_index=1:
+        //   group_into_rounds → [ApiRound{0..2}]
+        //   round.end=2 > max_index=1 → safe_cut=None → removed_message_count=0
+        let result = compact_session(&session, config);
+        assert_eq!(result.removed_message_count, 0);
+        assert_eq!(result.compacted_session, session);
+    }
+
+    #[test]
+    fn compact_still_works_for_plain_messages_without_tool_use() {
+        // Plain user/assistant alternation — no tool_use anywhere.
+        // Should compact exactly as before the boundary-aware fix.
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::user_text("msg1 ".repeat(200)),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "reply1 ".repeat(200),
+                }]),
+                ConversationMessage::user_text("msg2 ".repeat(200)),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "reply2 ".repeat(200),
+                }]),
+                ConversationMessage::user_text("recent".to_string()),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "recent reply".to_string(),
+                }]),
+            ],
+        };
+
+        let config = CompactionConfig {
+            preserve_recent_messages: 2,
+            max_estimated_tokens: 1,
+        };
+
+        let result = compact_session(&session, config);
+        assert!(result.removed_message_count > 0);
+        assert_eq!(
+            result.compacted_session.messages[0].role,
+            MessageRole::System
+        );
+        assert_no_orphaned_tool_pairs(&result.compacted_session.messages);
+    }
+
+    #[test]
+    fn compact_keeps_parallel_tool_use_batch_intact() {
+        // Assistant with 2 ToolUse blocks, followed by User with 2 ToolResult blocks.
+        // The pair is indivisible.
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::user_text("start ".repeat(300)),
+                ConversationMessage::assistant(vec![
+                    ContentBlock::ToolUse {
+                        id: "ta".to_string(),
+                        name: "read".to_string(),
+                        input: "{}".to_string(),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tb".to_string(),
+                        name: "write".to_string(),
+                        input: "{}".to_string(),
+                    },
+                ]),
+                ConversationMessage {
+                    role: MessageRole::User,
+                    blocks: vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "ta".to_string(),
+                            tool_name: "read".to_string(),
+                            output: "content".to_string(),
+                            is_error: false,
+                        },
+                        ContentBlock::ToolResult {
+                            tool_use_id: "tb".to_string(),
+                            tool_name: "write".to_string(),
+                            output: "ok".to_string(),
+                            is_error: false,
+                        },
+                    ],
+                    usage: None,
+                },
+                ConversationMessage::user_text("done ".repeat(300)),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "finished".to_string(),
+                }]),
+            ],
+        };
+
+        let config = CompactionConfig {
+            preserve_recent_messages: 3,
+            max_estimated_tokens: 1,
+        };
+
+        let result = compact_session(&session, config);
+        assert_no_orphaned_tool_pairs(&result.compacted_session.messages);
+
+        // Verify group_into_rounds treats the parallel pair as one indivisible round
+        let rounds = group_into_rounds(&session.messages);
+        // Round for index 1 (assistant with 2 ToolUse) + index 2 (User with 2 ToolResult)
+        // should be a single ApiRound spanning [1, 3)
+        let pair_round = rounds.iter().find(|r| r.start == 1);
+        assert!(pair_round.is_some());
+        assert_eq!(pair_round.unwrap().end, 3);
+    }
+
+    #[test]
+    fn find_safe_cut_point_returns_none_when_only_pair_fits() {
+        // [assistant_tool_use, tool_result] — pair ends at 2, max_index=1 → None
+        let messages = vec![
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "x".to_string(),
+                name: "bash".to_string(),
+                input: "{}".to_string(),
+            }]),
+            ConversationMessage::tool_result("x", "bash", "ok", false),
+        ];
+        assert_eq!(find_safe_cut_point(&messages, 1), None);
+    }
+
+    #[test]
+    fn find_safe_cut_point_returns_correct_index_after_complete_pair() {
+        // [user, assistant_tool_use, tool_result, user, assistant]
+        // max_index=3 → safe cut should be at 3 (after pair ends at index 2)
+        let messages = vec![
+            ConversationMessage::user_text("hello"),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "y".to_string(),
+                name: "bash".to_string(),
+                input: "{}".to_string(),
+            }]),
+            ConversationMessage::tool_result("y", "bash", "done", false),
+            ConversationMessage::user_text("next"),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "ok".to_string(),
+            }]),
+        ];
+        // pair [1,3) ends at 3 which equals max_index=3 → safe cut = Some(3)
+        assert_eq!(find_safe_cut_point(&messages, 3), Some(3));
     }
 }

@@ -4,6 +4,13 @@ use std::fmt::{Display, Formatter};
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
+
+/// Número máximo de falhas consecutivas de compactação automática antes do circuit breaker.
+const MAX_CONSECUTIVE_COMPACT_FAILURES: usize = 3;
+/// Número máximo de retentativas quando a API retorna prompt-too-long.
+const MAX_PTL_RETRIES: usize = 3;
+/// Substring que identifica erro de prompt-too-long da Anthropic API.
+const PROMPT_TOO_LONG_MARKER: &str = "prompt is too long:";
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookRunResult, HookRunner};
 use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
@@ -100,6 +107,8 @@ pub struct ConversationRuntime<C, T> {
     hook_runner: HookRunner,
     telemetry: TelemetryHandle,
     model_name: Option<String>,
+    /// Circuit breaker: interrompe tentativas de auto-compact após N falhas consecutivas.
+    consecutive_compact_failures: usize,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -146,6 +155,7 @@ where
             hook_runner: HookRunner::from_feature_config(feature_config),
             telemetry: TelemetryHandle::noop(),
             model_name: None,
+            consecutive_compact_failures: 0,
         }
     }
 
@@ -188,11 +198,34 @@ where
                 ));
             }
 
+            let mut api_messages = self.session.messages.clone();
+            let repairs = crate::message_repair::validate_and_repair(&mut api_messages);
+            if !repairs.is_empty() {
+                // Diagnóstico: em produção indica corrupção de sessão.
+                eprintln!(
+                    "[elai] message repair applied {} action(s) before API call: {:?}",
+                    repairs.len(),
+                    repairs
+                );
+            }
             let request = ApiRequest {
                 system_prompt: self.system_prompt.clone(),
-                messages: self.session.messages.clone(),
+                messages: api_messages,
             };
-            let events = self.api_client.stream(request)?;
+            let events = match self.api_client.stream(request) {
+                Ok(events) => events,
+                Err(err) if err.message.contains(PROMPT_TOO_LONG_MARKER) => {
+                    match self.try_compact_for_ptl_retry(&err) {
+                        Ok(true) => {
+                            // Sessão compactada com sucesso; reinicia a iteração com context menor.
+                            continue;
+                        }
+                        Ok(false) => return Err(err),
+                        Err(compact_err) => return Err(compact_err),
+                    }
+                }
+                Err(err) => return Err(err),
+            };
             let (assistant_message, usage) = match build_assistant_message(events) {
                 Ok(pair) => pair,
                 // After a tool_use in the previous iteration, some models (notably
@@ -306,6 +339,58 @@ where
     #[must_use]
     pub fn compact(&self, config: CompactionConfig) -> CompactionResult {
         compact_session(&self.session, config)
+    }
+
+    /// Tenta compactar a sessão após receber erro `prompt is too long`.
+    /// Retorna `Ok(true)` se compactou com sucesso (deve reiniciar o request),
+    /// `Ok(false)` se o circuit breaker está ativo ou não há como compactar mais,
+    /// `Err` se algo inesperado falhou.
+    fn try_compact_for_ptl_retry(&mut self, ptl_err: &RuntimeError) -> Result<bool, RuntimeError> {
+        if self.consecutive_compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES {
+            eprintln!(
+                "[elai] auto-compact circuit breaker open after {} consecutive failures; not retrying",
+                self.consecutive_compact_failures
+            );
+            return Ok(false);
+        }
+
+        eprintln!(
+            "[elai] prompt-too-long detected ({}); attempting auto-compact (attempt {}/{})",
+            ptl_err.message,
+            self.consecutive_compact_failures + 1,
+            MAX_PTL_RETRIES,
+        );
+
+        let result = compact_session(
+            &self.session,
+            CompactionConfig {
+                max_estimated_tokens: 0, // força compactação independente do threshold
+                ..CompactionConfig::default()
+            },
+        );
+
+        if result.removed_message_count == 0 {
+            // Nenhuma mensagem removida — sessão não pode ser compactada mais.
+            self.consecutive_compact_failures += 1;
+            eprintln!(
+                "[elai] auto-compact removed 0 messages; circuit breaker count now {}",
+                self.consecutive_compact_failures
+            );
+            return Ok(false);
+        }
+
+        eprintln!(
+            "[elai] auto-compact removed {} message(s); retrying request",
+            result.removed_message_count
+        );
+        self.session = result.compacted_session;
+        self.consecutive_compact_failures = 0;
+        Ok(true)
+    }
+
+    /// Reseta o circuit breaker de auto-compact (útil após compactação manual bem-sucedida).
+    pub fn reset_compact_failures(&mut self) {
+        self.consecutive_compact_failures = 0;
     }
 
     #[must_use]
@@ -829,6 +914,114 @@ mod tests {
             result.compacted_session.messages[0].role,
             MessageRole::System
         );
+    }
+
+    /// Cliente que retorna prompt-too-long na primeira chamada e sucesso na segunda.
+    struct PtlThenSuccessApiClient {
+        calls: usize,
+    }
+
+    impl ApiClient for PtlThenSuccessApiClient {
+        fn stream(&mut self, _request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.calls += 1;
+            if self.calls == 1 {
+                Err(RuntimeError::new(
+                    "prompt is too long: 250000 tokens > 200000 maximum",
+                ))
+            } else {
+                Ok(vec![
+                    AssistantEvent::TextDelta("ok after compact".to_string()),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+    }
+
+    #[test]
+    fn auto_compact_retries_after_prompt_too_long() {
+        // Sessão grande o suficiente para que compact_session remova algo.
+        let mut session = Session::new();
+        for i in 0..8 {
+            session
+                .messages
+                .push(crate::session::ConversationMessage::user_text(
+                    "large text ".repeat(200) + &i.to_string(),
+                ));
+            session
+                .messages
+                .push(crate::session::ConversationMessage::assistant(vec![
+                    ContentBlock::Text {
+                        text: "reply ".repeat(200) + &i.to_string(),
+                    },
+                ]));
+        }
+
+        let mut runtime = ConversationRuntime::new(
+            session,
+            PtlThenSuccessApiClient { calls: 0 },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        // Deve compactar automaticamente e obter sucesso na segunda chamada.
+        let result = runtime.run_turn("continuar", None);
+        assert!(result.is_ok(), "deve ter sucesso após auto-compact: {result:?}");
+        assert_eq!(runtime.consecutive_compact_failures, 0);
+    }
+
+    /// Cliente que sempre retorna prompt-too-long (para testar circuit breaker).
+    struct AlwaysPtlApiClient {
+        calls: usize,
+    }
+
+    impl ApiClient for AlwaysPtlApiClient {
+        fn stream(&mut self, _request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.calls += 1;
+            Err(RuntimeError::new(
+                "prompt is too long: 250000 tokens > 200000 maximum",
+            ))
+        }
+    }
+
+    #[test]
+    fn circuit_breaker_stops_after_max_consecutive_failures() {
+        // Sessão pequena que compact_session não consegue compactar (removed_message_count=0).
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            AlwaysPtlApiClient { calls: 0 },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        // Cada run_turn bate no PTL e tenta compactar (mas a sessão pequena não compacta).
+        // Após MAX_CONSECUTIVE_COMPACT_FAILURES tentativas, o circuit breaker abre.
+        for attempt in 1..=super::MAX_CONSECUTIVE_COMPACT_FAILURES {
+            let result = runtime.run_turn("mensagem", None);
+            assert!(result.is_err(), "deve falhar na tentativa {attempt}");
+        }
+
+        // Com circuit breaker aberto, a próxima tentativa falha imediatamente sem chamar compact.
+        let before = runtime.consecutive_compact_failures;
+        let result = runtime.run_turn("mensagem com circuit breaker aberto", None);
+        assert!(result.is_err());
+        // O contador não deve ter aumentado além do máximo (o breaker parou cedo).
+        assert!(runtime.consecutive_compact_failures <= before + 1);
+    }
+
+    #[test]
+    fn reset_compact_failures_reopens_circuit_breaker() {
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            AlwaysPtlApiClient { calls: 0 },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+        runtime.consecutive_compact_failures = super::MAX_CONSECUTIVE_COMPACT_FAILURES;
+        runtime.reset_compact_failures();
+        assert_eq!(runtime.consecutive_compact_failures, 0);
     }
 
     #[cfg(windows)]

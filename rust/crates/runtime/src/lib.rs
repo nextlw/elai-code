@@ -10,6 +10,7 @@ pub mod budget;
 mod compact;
 mod config;
 mod conversation;
+pub mod message_repair;
 mod file_ops;
 mod hooks;
 mod json;
@@ -120,6 +121,7 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use message_repair::{validate_and_repair, RepairAction};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
