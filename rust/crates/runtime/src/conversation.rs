@@ -5,11 +5,8 @@ use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
 
-/// Número máximo de falhas consecutivas de compactação automática antes do circuit breaker.
 const MAX_CONSECUTIVE_COMPACT_FAILURES: usize = 3;
-/// Número máximo de retentativas quando a API retorna prompt-too-long.
 const MAX_PTL_RETRIES: usize = 3;
-/// Substring que identifica erro de prompt-too-long da Anthropic API.
 const PROMPT_TOO_LONG_MARKER: &str = "prompt is too long:";
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookRunResult, HookRunner};
@@ -107,7 +104,6 @@ pub struct ConversationRuntime<C, T> {
     hook_runner: HookRunner,
     telemetry: TelemetryHandle,
     model_name: Option<String>,
-    /// Circuit breaker: interrompe tentativas de auto-compact após N falhas consecutivas.
     consecutive_compact_failures: usize,
 }
 
@@ -189,6 +185,7 @@ where
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
         let mut iterations = 0;
+        let mut ptl_retries = 0;
 
         loop {
             iterations += 1;
@@ -201,7 +198,6 @@ where
             let mut api_messages = self.session.messages.clone();
             let repairs = crate::message_repair::validate_and_repair(&mut api_messages);
             if !repairs.is_empty() {
-                // Diagnóstico: em produção indica corrupção de sessão.
                 eprintln!(
                     "[elai] message repair applied {} action(s) before API call: {:?}",
                     repairs.len(),
@@ -215,11 +211,15 @@ where
             let events = match self.api_client.stream(request) {
                 Ok(events) => events,
                 Err(err) if err.message.contains(PROMPT_TOO_LONG_MARKER) => {
+                    ptl_retries += 1;
+                    if ptl_retries > MAX_PTL_RETRIES {
+                        return Err(RuntimeError::new(format!(
+                            "prompt too long after {} compaction attempts: {}",
+                            MAX_PTL_RETRIES, err.message
+                        )));
+                    }
                     match self.try_compact_for_ptl_retry(&err) {
-                        Ok(true) => {
-                            // Sessão compactada com sucesso; reinicia a iteração com context menor.
-                            continue;
-                        }
+                        Ok(true) => continue,
                         Ok(false) => return Err(err),
                         Err(compact_err) => return Err(compact_err),
                     }
@@ -341,10 +341,6 @@ where
         compact_session(&self.session, config)
     }
 
-    /// Tenta compactar a sessão após receber erro `prompt is too long`.
-    /// Retorna `Ok(true)` se compactou com sucesso (deve reiniciar o request),
-    /// `Ok(false)` se o circuit breaker está ativo ou não há como compactar mais,
-    /// `Err` se algo inesperado falhou.
     fn try_compact_for_ptl_retry(&mut self, ptl_err: &RuntimeError) -> Result<bool, RuntimeError> {
         if self.consecutive_compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES {
             eprintln!(
@@ -355,22 +351,19 @@ where
         }
 
         eprintln!(
-            "[elai] prompt-too-long detected ({}); attempting auto-compact (attempt {}/{})",
+            "[elai] prompt-too-long detected ({}); attempting auto-compact",
             ptl_err.message,
-            self.consecutive_compact_failures + 1,
-            MAX_PTL_RETRIES,
         );
 
         let result = compact_session(
             &self.session,
             CompactionConfig {
-                max_estimated_tokens: 0, // força compactação independente do threshold
+                max_estimated_tokens: 0,
                 ..CompactionConfig::default()
             },
         );
 
         if result.removed_message_count == 0 {
-            // Nenhuma mensagem removida — sessão não pode ser compactada mais.
             self.consecutive_compact_failures += 1;
             eprintln!(
                 "[elai] auto-compact removed 0 messages; circuit breaker count now {}",
@@ -388,7 +381,6 @@ where
         Ok(true)
     }
 
-    /// Reseta o circuit breaker de auto-compact (útil após compactação manual bem-sucedida).
     pub fn reset_compact_failures(&mut self) {
         self.consecutive_compact_failures = 0;
     }
@@ -916,7 +908,6 @@ mod tests {
         );
     }
 
-    /// Cliente que retorna prompt-too-long na primeira chamada e sucesso na segunda.
     struct PtlThenSuccessApiClient {
         calls: usize,
     }
@@ -939,7 +930,6 @@ mod tests {
 
     #[test]
     fn auto_compact_retries_after_prompt_too_long() {
-        // Sessão grande o suficiente para que compact_session remova algo.
         let mut session = Session::new();
         for i in 0..8 {
             session
@@ -964,13 +954,11 @@ mod tests {
             vec!["system".to_string()],
         );
 
-        // Deve compactar automaticamente e obter sucesso na segunda chamada.
-        let result = runtime.run_turn("continuar", None);
-        assert!(result.is_ok(), "deve ter sucesso após auto-compact: {result:?}");
+        let result = runtime.run_turn("continue", None);
+        assert!(result.is_ok(), "should succeed after auto-compact: {result:?}");
         assert_eq!(runtime.consecutive_compact_failures, 0);
     }
 
-    /// Cliente que sempre retorna prompt-too-long (para testar circuit breaker).
     struct AlwaysPtlApiClient {
         calls: usize,
     }
@@ -986,7 +974,6 @@ mod tests {
 
     #[test]
     fn circuit_breaker_stops_after_max_consecutive_failures() {
-        // Sessão pequena que compact_session não consegue compactar (removed_message_count=0).
         let mut runtime = ConversationRuntime::new(
             Session::new(),
             AlwaysPtlApiClient { calls: 0 },
@@ -995,18 +982,14 @@ mod tests {
             vec!["system".to_string()],
         );
 
-        // Cada run_turn bate no PTL e tenta compactar (mas a sessão pequena não compacta).
-        // Após MAX_CONSECUTIVE_COMPACT_FAILURES tentativas, o circuit breaker abre.
         for attempt in 1..=super::MAX_CONSECUTIVE_COMPACT_FAILURES {
-            let result = runtime.run_turn("mensagem", None);
-            assert!(result.is_err(), "deve falhar na tentativa {attempt}");
+            let result = runtime.run_turn("message", None);
+            assert!(result.is_err(), "should fail on attempt {attempt}");
         }
 
-        // Com circuit breaker aberto, a próxima tentativa falha imediatamente sem chamar compact.
         let before = runtime.consecutive_compact_failures;
-        let result = runtime.run_turn("mensagem com circuit breaker aberto", None);
+        let result = runtime.run_turn("message with open circuit breaker", None);
         assert!(result.is_err());
-        // O contador não deve ter aumentado além do máximo (o breaker parou cedo).
         assert!(runtime.consecutive_compact_failures <= before + 1);
     }
 

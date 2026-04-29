@@ -11,8 +11,6 @@ pub enum RepairAction {
     RemovedOrphanedToolResult { tool_use_id: String },
     /// First message was not User — inserted placeholder.
     PrependedUserPlaceholder,
-    /// Assistant message became empty after removals — inserted placeholder.
-    InsertedAssistantPlaceholder,
 }
 
 /// Validates and repairs a message sequence to guarantee Anthropic API invariants.
@@ -168,60 +166,45 @@ fn repair_missing_tool_results(messages: &mut Vec<ConversationMessage>, actions:
     }
 }
 
-/// Ensures the first non-System message is a User message. If it starts with
-/// ToolResult blocks (orphaned), strips those blocks. If the message becomes
-/// empty or the sequence still doesn't start with User, prepends a placeholder.
+/// Ensures the first non-System message is a valid User message.
+///
+/// Iteratively removes leading Tool messages and User messages that contain
+/// only ToolResult blocks (both are invalid as the first API message). After
+/// draining any such messages, prepends a placeholder User message if needed.
+/// Uses a loop instead of recursion to avoid duplicate action entries.
 fn repair_first_message_role(messages: &mut Vec<ConversationMessage>, actions: &mut Vec<RepairAction>) {
-    // Find index of first non-System message.
-    let first_non_system = messages
-        .iter()
-        .position(|msg| msg.role != MessageRole::System);
+    loop {
+        let idx = match messages.iter().position(|m| m.role != MessageRole::System) {
+            Some(i) => i,
+            None => return,
+        };
 
-    let idx = match first_non_system {
-        Some(i) => i,
-        None => return,
-    };
+        let msg = &messages[idx];
 
-    if messages[idx].role == MessageRole::User {
-        // Check that it's not just a ToolResult-only User message (that would be invalid).
-        let has_non_tool_result = messages[idx].blocks.iter().any(|b| {
-            !matches!(b, ContentBlock::ToolResult { .. })
-        });
-        if has_non_tool_result {
-            return;
+        // A User message that has at least one non-ToolResult block is valid — stop.
+        if msg.role == MessageRole::User {
+            let has_non_tool_result = msg.blocks.iter().any(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+            if has_non_tool_result {
+                return;
+            }
         }
-    }
 
-    // If first non-System message is Tool or contains only ToolResult blocks, clean it.
-    let first_msg = &messages[idx];
-    let all_tool_results = !first_msg.blocks.is_empty()
-        && first_msg.blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. }));
+        // Tool messages and User messages with only ToolResult blocks are invalid as first.
+        let is_invalid_first = msg.role == MessageRole::Tool
+            || (!msg.blocks.is_empty()
+                && msg.blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })));
 
-    if all_tool_results || messages[idx].role == MessageRole::Tool {
-        messages.remove(idx);
-        // Re-run check in case there are more ToolResult-only messages at the start.
-        repair_first_message_role(messages, actions);
-        // Add placeholder if we removed something and now need a User start.
-        let still_needs_user = messages
-            .iter()
-            .find(|msg| msg.role != MessageRole::System)
-            .map(|msg| msg.role != MessageRole::User)
-            .unwrap_or(true);
-        if still_needs_user {
-            let insert_pos = messages
-                .iter()
-                .position(|msg| msg.role != MessageRole::System)
-                .unwrap_or(messages.len());
-            messages.insert(insert_pos, ConversationMessage::user_text("[Conversation resumed]"));
+        if is_invalid_first {
+            messages.remove(idx);
+            continue;
+        }
+
+        // First non-System message has wrong role (e.g. Assistant) — prepend placeholder.
+        if msg.role != MessageRole::User {
+            messages.insert(idx, ConversationMessage::user_text("[Conversation resumed]"));
             actions.push(RepairAction::PrependedUserPlaceholder);
         }
         return;
-    }
-
-    // First non-System message is not User role — prepend placeholder.
-    if messages[idx].role != MessageRole::User {
-        messages.insert(idx, ConversationMessage::user_text("[Conversation resumed]"));
-        actions.push(RepairAction::PrependedUserPlaceholder);
     }
 }
 
