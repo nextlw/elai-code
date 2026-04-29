@@ -1,0 +1,223 @@
+[
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/01_edital.pdf",
+    "pages": 21,
+    "words": 10608,
+    "estimated_input_tokens": 14321,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 134,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 14321,
+        "output_tokens": 0,
+        "cost_usd": 0.000286
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 14321,
+        "output_tokens": 1145,
+        "cost_usd": 0.016037
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 5012,
+        "output_tokens": 1754,
+        "cost_usd": 0.041346
+      }
+    ],
+    "total_cogs_usd": 0.0577,
+    "total_cogs_brl": 0.3,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.97
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/02_minuta_contrato.pdf",
+    "pages": 12,
+    "words": 6156,
+    "estimated_input_tokens": 8311,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 159,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 8311,
+        "output_tokens": 0,
+        "cost_usd": 0.000166
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 8311,
+        "output_tokens": 664,
+        "cost_usd": 0.009305
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 2908,
+        "output_tokens": 1017,
+        "cost_usd": 0.023979
+      }
+    ],
+    "total_cogs_usd": 0.0335,
+    "total_cogs_brl": 0.17,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.98
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/03_termo_referencia.pdf",
+    "pages": 32,
+    "words": 12351,
+    "estimated_input_tokens": 16674,
+    "specials_detected": [
+      "inflamavel",
+      "valor_agregado"
+    ],
+    "complexity_hits": 164,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 16674,
+        "output_tokens": 0,
+        "cost_usd": 0.000333
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 16674,
+        "output_tokens": 1333,
+        "cost_usd": 0.018671
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 5835,
+        "output_tokens": 2042,
+        "cost_usd": 0.048135
+      }
+    ],
+    "total_cogs_usd": 0.0671,
+    "total_cogs_brl": 0.35,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.96
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/04_anexo_b_carregamento_total.pdf",
+    "pages": 1,
+    "words": 500,
+    "estimated_input_tokens": 675,
+    "specials_detected": [],
+    "complexity_hits": 0,
+    "tier": "light",
+    "recommended_model": "gpt_4o_mini",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 675,
+        "output_tokens": 0,
+        "cost_usd": 1.4e-05
+      },
+      {
+        "name": "extract+answer",
+        "model": "gpt_4o_mini",
+        "input_tokens": 675,
+        "output_tokens": 168,
+        "cost_usd": 0.000202
+      }
+    ],
+    "total_cogs_usd": 0.0002,
+    "total_cogs_brl": 0.0,
+    "list_price_brl": 149.0,
+    "gross_margin_pct": 100.0
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/05_anexo_c_carregamento_parcial.pdf",
+    "pages": 3,
+    "words": 854,
+    "estimated_input_tokens": 1153,
+    "specials_detected": [],
+    "complexity_hits": 0,
+    "tier": "light",
+    "recommended_model": "gpt_4o_mini",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 1153,
+        "output_tokens": 0,
+        "cost_usd": 2.3e-05
+      },
+      {
+        "name": "extract+answer",
+        "model": "gpt_4o_mini",
+        "input_tokens": 1153,
+        "output_tokens": 288,
+        "cost_usd": 0.000346
+      }
+    ],
+    "total_cogs_usd": 0.0004,
+    "total_cogs_brl": 0.0,
+    "list_price_brl": 149.0,
+    "gross_margin_pct": 100.0
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_pe_90008_2025/06_etp.pdf",
+    "pages": 23,
+    "words": 7405,
+    "estimated_input_tokens": 9997,
+    "specials_detected": [
+      "alimentos",
+      "farmaceutico",
+      "inflamavel",
+      "perigosa",
+      "valor_agregado"
+    ],
+    "complexity_hits": 51,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 9997,
+        "output_tokens": 0,
+        "cost_usd": 0.0002
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 9997,
+        "output_tokens": 799,
+        "cost_usd": 0.011194
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 3498,
+        "output_tokens": 1224,
+        "cost_usd": 0.028854
+      }
+    ],
+    "total_cogs_usd": 0.0402,
+    "total_cogs_brl": 0.21,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.98
+  }
+]

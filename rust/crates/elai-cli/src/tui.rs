@@ -1688,6 +1688,26 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                         app.clear_input();
                         return TuiAction::SlashCommand(format!("/{cmd}"));
                     }
+                    // Se o filtro contém espaço, tenta "/<cmd> <arg>" — suporte a argumentos inline.
+                    let stripped = filter.trim_start_matches('/');
+                    if let Some((cmd_name, arg)) = stripped.split_once(' ') {
+                        let arg = arg.trim();
+                        if !arg.is_empty() {
+                            let cmd_rows = build_palette_rows(&items, cmd_name);
+                            let exact = cmd_rows.iter().find_map(|r| {
+                                if let PaletteRow::Command { cmd, .. } = r {
+                                    if cmd.as_str() == cmd_name { Some(cmd.clone()) } else { None }
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(cmd) = exact {
+                                app.overlay = None;
+                                app.clear_input();
+                                return TuiAction::SlashCommand(format!("/{cmd} {arg}"));
+                            }
+                        }
+                    }
                     // Header selecionado ou lista vazia → no-op (não fecha overlay).
                     app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
                 }

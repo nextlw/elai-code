@@ -1,0 +1,82 @@
+[
+  {
+    "path": "docs/editais_exemplo/exercito_sp_90015_2024/pdfs/01_edital_srp.pdf",
+    "pages": 76,
+    "words": 35948,
+    "estimated_input_tokens": 48530,
+    "specials_detected": [
+      "alimentos",
+      "farmaceutico",
+      "valor_agregado"
+    ],
+    "complexity_hits": 439,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 48530,
+        "output_tokens": 0,
+        "cost_usd": 0.000971
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 48530,
+        "output_tokens": 3882,
+        "cost_usd": 0.054352
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 16985,
+        "output_tokens": 5944,
+        "cost_usd": 0.140115
+      }
+    ],
+    "total_cogs_usd": 0.1954,
+    "total_cogs_brl": 1.02,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.89
+  },
+  {
+    "path": "docs/editais_exemplo/exercito_sp_90015_2024/pdfs/02_relacao_itens.pdf",
+    "pages": 8,
+    "words": 3722,
+    "estimated_input_tokens": 5025,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 0,
+    "tier": "standard",
+    "recommended_model": "haiku_3_5+sonnet_3_7",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 5025,
+        "output_tokens": 0,
+        "cost_usd": 0.000101
+      },
+      {
+        "name": "extract",
+        "model": "haiku_3_5",
+        "input_tokens": 5025,
+        "output_tokens": 502,
+        "cost_usd": 0.006028
+      },
+      {
+        "name": "reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 2512,
+        "output_tokens": 753,
+        "cost_usd": 0.018831
+      }
+    ],
+    "total_cogs_usd": 0.025,
+    "total_cogs_brl": 0.13,
+    "list_price_brl": 390.0,
+    "gross_margin_pct": 99.97
+  }
+]

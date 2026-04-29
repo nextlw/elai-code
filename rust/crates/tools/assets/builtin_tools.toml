@@ -430,6 +430,40 @@ input_schema_json = '''
 }
 '''
 
+[[tool]]
+id = "DeepResearch"
+title = "Deep Research"
+description = "Performs deep internet research using an AI agent that searches and reasons about multiple web sources. On first use, requires activation with api_key. Returns the full reasoning process, visited URLs, and final answer with citations."
+category = "research"
+priority = 75
+required_permission = "DangerFullAccess"
+embedding_hints = ["research", "search", "web", "internet", "deep", "investigate", "sources", "citations", "current", "news", "activate"]
+input_schema_json = '''
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "The research question or topic to investigate deeply. Required for research mode."
+    },
+    "api_key": {
+      "type": "string",
+      "description": "API key to activate the DeepResearch tool (one-time setup). Provide this if DEEP_RESEARCH_API_KEY is not configured."
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Depth of research: low (fast), medium (balanced, default), high (thorough)"
+    },
+    "language_code": {
+      "type": "string",
+      "description": "BCP-47 language code for the research output (e.g. pt-BR, en-US). Defaults to pt-BR."
+    }
+  },
+  "additionalProperties": false
+}
+'''
+
 [aliases]
 read = "read_file"
 write = "write_file"

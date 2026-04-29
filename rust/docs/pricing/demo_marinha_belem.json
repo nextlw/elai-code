@@ -1,0 +1,150 @@
+{
+  "identificacao": {
+    "edital_numero": "26/2025",
+    "pregao_numero": "90019/2025"
+  },
+  "documentos_analisados": [
+    {
+      "arquivo": "01_edital.pdf",
+      "pages": 20,
+      "words": 10833
+    },
+    {
+      "arquivo": "02_termo_referencia.pdf",
+      "pages": 53,
+      "words": 23063
+    },
+    {
+      "arquivo": "03_etp.pdf",
+      "pages": 6,
+      "words": 1989
+    },
+    {
+      "arquivo": "04_minuta_contrato.pdf",
+      "pages": 10,
+      "words": 4628
+    },
+    {
+      "arquivo": "05_relacao_itens.pdf",
+      "pages": 64,
+      "words": 16888
+    }
+  ],
+  "modais_solicitados": [
+    "aereo",
+    "rodoviario_fracionado"
+  ],
+  "modais_fora_de_escopo": [
+    "aereo"
+  ],
+  "cargas_especiais": [
+    {
+      "tipo": "perigosa",
+      "evidencias": [
+        "ser demandado o transporte de carga perigosa, tais como: álcool, aerossol,"
+      ],
+      "sugestao_acrescimo_pct": 40.0
+    },
+    {
+      "tipo": "alimentos",
+      "evidencias": [
+        "os seguintes tipos de carga: Alimentos industrializados, m   ateria"
+      ],
+      "sugestao_acrescimo_pct": 15.0
+    }
+  ],
+  "trechos": [
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Brasília/DF",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Belém/PA",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Janeiro/RJ",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Natal/RN",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "São Pedro da Aldeia/RJ",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Rio Grande do Sul/RS",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Instrução Normativa SEGES/ME",
+      "destino": "Salvador/BA",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    }
+  ],
+  "sinais_complexidade": {
+    "penalidades_e_sla": [
+      "autoridade que aplicou a penalidade.    14.3. Na aplicação das sanções serão consider",
+      "umulativamente ou não, à penalidade de multa.    14.6. Na aplicação da sanção de mult",
+      "tificar a imposição de   penalidade mais grave, e impedirá o responsável de licitar e",
+      "stifiquem a imposição de penalidade   mais grave que a sanção de impedimento de licit",
+      "ssumida e o sujeitará às penalidades e à imediata perda da garantia de proposta   em",
+      "feridos, e a   eventuais penalidades aplicadas, devendo constar do cadastro de atesto",
+      "hece que as hipóteses de rescisão são aquelas previstas nos artigos 137 e 138 da",
+      "​​O adjudicatário terá o prazo de 10 dias, contado a partir da data de sua convocação, para"
+    ]
+  },
+  "valores_detectados_brl": [
+    "R$ 166.778,61",
+    "R$ 35,89",
+    "R$ 35,89",
+    "R$ 31,67",
+    "R$ 31,67",
+    "R$ 30,23",
+    "R$ 30,23",
+    "R$ 28,43",
+    "R$ 28,43",
+    "R$ 26,96"
+  ],
+  "vigencia_detectada": null,
+  "preco_base_estimado_brl": 36620.05,
+  "recomendacao": "NO-GO",
+  "justificativa": "Edital exige modal(is) aereo — fora do escopo da malha Lauto. Edital com cláusulas de SLA/penalidade complexas — revisar exposição contratual.",
+  "draft_resposta_para_thiago": "Olá Thiago,\n\nConsolidei o diagnóstico inicial do BID 26/2025.\n\n📋 Visão geral\n  • 5 documento(s) analisado(s) — 153 págs no total.\n  • Modal(is) solicitado(s): aereo, rodoviario_fracionado\n  • Vigência: não detectada\n\n🚛 Cobertura\n  • 7 trecho(s) candidato(s) identificado(s) — validar contra malha antes de bater o martelo.\n\n⚠️  Cargas especiais\n  • perigosa, alimentos\n  • Acréscimos sugeridos pela tabela travada — Max precisa revisar se houver mais de 2.\n\n💰 Preço-base estimado (sem refinamento): R$ 36.620,05\n\n🚦 Recomendação automática: NO-GO\n  Justificativa: Edital exige modal(is) aereo — fora do escopo da malha Lauto. Edital com cláusulas de SLA/penalidade complexas — revisar exposição contratual.\n\nO draft completo está no JSON anexo. Os campos abaixo precisam de validação humana antes de envio:\n  - distâncias reais por trecho\n  - cobertura final (atende/parcial/não atende)\n  - % de acréscimo final por carga especial\n\n-- Nokk-Chat (assistente de precificação)"
+}

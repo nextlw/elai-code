@@ -2710,6 +2710,39 @@ fn handle_tui_slash_command(
                 }
             }
         }
+        "deepresearch" | "dr" => {
+            if let Some(key) = arg {
+                let tx = msg_tx.clone();
+                let key_owned = key.trim().to_string();
+                // JoinHandle descartado: thread de ativação do DeepResearch; encerra ao concluir.
+                let _dr_handle = std::thread::spawn(move || {
+                    let input = serde_json::json!({ "api_key": key_owned });
+                    match tools::execute_tool("DeepResearch", &input) {
+                        Ok(msg) => {
+                            let _ = tx.send(tui::TuiMsg::SystemNote(msg));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(tui::TuiMsg::Error(format!("deepresearch: {e}")));
+                        }
+                    }
+                });
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "🔍 Testando conexão com o serviço DeepResearch...".to_string(),
+                ));
+            } else {
+                let status = if std::env::var("DEEP_RESEARCH_API_KEY").is_ok() {
+                    "✅ DeepResearch está ativa.\n\
+                     Uso: peça ao modelo para pesquisar algo e ele usará a tool automaticamente.\n\
+                     Exemplo: \"Pesquise sobre os últimos avanços em modelos de linguagem\""
+                } else {
+                    "⚠️  DeepResearch não está ativada.\n\
+                     Para ativar: /deepresearch <sua-api-key>\n\n\
+                     Não tem a key? Solicite acesso enviando email para adm@nexcode.live\n\
+                     (Custo do serviço: $99)"
+                };
+                app.push_chat(tui::ChatEntry::SystemNote(status.to_string()));
+            }
+        }
         "stats" => {
             use commands::stats::render_stats_report;
             use runtime::{default_telemetry_path, load_entries};
@@ -7455,7 +7488,7 @@ mod tests {
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
                 "version", "export", "agents", "skills", "budget", "tools", "stats", "providers",
-                "verify", "locale",
+                "verify", "locale", "deepresearch",
             ]
         );
     }

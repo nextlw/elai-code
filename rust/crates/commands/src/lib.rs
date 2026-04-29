@@ -569,6 +569,17 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         hidden: false,
         user_facing_name: None,
     },
+    SlashCommandSpec {
+        name: "deepresearch",
+        aliases: &["dr"],
+        summary_key: "commands.deepresearch.summary",
+        argument_hint_key: Some("commands.deepresearch.argument_hint"),
+        resume_supported: true,
+        category: SlashCategory::Project,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

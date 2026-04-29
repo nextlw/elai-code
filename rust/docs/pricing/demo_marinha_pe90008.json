@@ -1,0 +1,172 @@
+{
+  "identificacao": {
+    "edital_numero": "-",
+    "pregao_numero": "90008/2025"
+  },
+  "documentos_analisados": [
+    {
+      "arquivo": "01_edital.pdf",
+      "pages": 21,
+      "words": 10608
+    },
+    {
+      "arquivo": "02_minuta_contrato.pdf",
+      "pages": 12,
+      "words": 6156
+    },
+    {
+      "arquivo": "03_termo_referencia.pdf",
+      "pages": 32,
+      "words": 12351
+    },
+    {
+      "arquivo": "04_anexo_b_carregamento_total.pdf",
+      "pages": 1,
+      "words": 500
+    },
+    {
+      "arquivo": "05_anexo_c_carregamento_parcial.pdf",
+      "pages": 3,
+      "words": 854
+    },
+    {
+      "arquivo": "06_etp.pdf",
+      "pages": 23,
+      "words": 7405
+    }
+  ],
+  "modais_solicitados": [
+    "rodoviario_dedicado",
+    "rodoviario_fracionado"
+  ],
+  "modais_fora_de_escopo": [],
+  "cargas_especiais": [
+    {
+      "tipo": "inflamavel",
+      "evidencias": [
+        "combustível renovável (etanol, gás natura",
+        "combustível renovável (etanol, gás natura"
+      ],
+      "sugestao_acrescimo_pct": 35.0
+    },
+    {
+      "tipo": "farmaceutico",
+      "evidencias": [
+        "ecificações determinadas pela ANVISA;",
+        "ecificações determinadas pela ANVISA;"
+      ],
+      "sugestao_acrescimo_pct": 25.0
+    },
+    {
+      "tipo": "perigosa",
+      "evidencias": [
+        "deverá estar em carga perigosa não",
+        "materiais classificados como carga perigosa não"
+      ],
+      "sugestao_acrescimo_pct": 40.0
+    },
+    {
+      "tipo": "alimentos",
+      "evidencias": [
+        "material             de alimentos             custo/benefício.",
+        "lubrificantes,         alimentos",
+        "ombate a incêndio, uniformes, alimentos"
+      ],
+      "sugestao_acrescimo_pct": 15.0
+    }
+  ],
+  "trechos": [
+    {
+      "origem": "Brasília/DF",
+      "destino": "IN SEGES/ME",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "Portaria MB/MD",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "CNPJ/MF",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "DD/MM",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "Instrução\nNormativa SEGES/ME",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "Rio de Janeiro/RJ",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    },
+    {
+      "origem": "Brasília/DF",
+      "destino": "Belo Horizonte/MG",
+      "distancia_estimada_km": null,
+      "status_atendimento": "verificar",
+      "modal_inferido": "rodoviario",
+      "preco_base_brl": 0.0,
+      "observacao": "Distância e cobertura precisam ser validadas contra a malha Lauto."
+    }
+  ],
+  "sinais_complexidade": {
+    "penalidades_e_sla": [
+      "ridade que     aplicou a penalidade. 10.3.     Na aplicação das sanções serão conside",
+      "umulativamente ou não, à penalidade de multa. 10.6. Na aplicação da sanção de multa s",
+      "ustificar a imposição de penalidade mais grave, e impedirá o responsável de licitar e",
+      "stifiquem a imposição de penalidade mais grave que a sanção de impedimento de licitar",
+      "ssumida e o sujeitará às penalidades e à imediata perda da garantia de proposta em fa",
+      "ustificar a imposição de penalidade mais grave (art. 156, §2º, da Lei nº 14.133, de 2",
+      "hece que as hipóteses de rescisão são aquelas previstas nos artigos 137     e 138 d",
+      "A Administração terá o prazo de 30 dias, a contar da data do protocolo do requerimento"
+    ]
+  },
+  "valores_detectados_brl": [
+    "R$ 3.168.452,94",
+    "R$ 13.262,50",
+    "R$ 132.625,00",
+    "R$ 14.930,00",
+    "R$ 89.580,00",
+    "R$ 22.237,50",
+    "R$ 222.375,00",
+    "R$ 13.867,50",
+    "R$ 27.735,00",
+    "R$ 15.505,00"
+  ],
+  "vigencia_detectada": null,
+  "preco_base_estimado_brl": 50795.56,
+  "recomendacao": "GO COM RESSALVA",
+  "justificativa": "Múltiplas categorias de carga especial detectadas (4) — exige aprovação do Max para consolidar % de acréscimo. Edital com cláusulas de SLA/penalidade complexas — revisar exposição contratual.",
+  "draft_resposta_para_thiago": "Olá Thiago,\n\nConsolidei o diagnóstico inicial do BID -.\n\n📋 Visão geral\n  • 6 documento(s) analisado(s) — 92 págs no total.\n  • Modal(is) solicitado(s): rodoviario_dedicado, rodoviario_fracionado\n  • Vigência: não detectada\n\n🚛 Cobertura\n  • 7 trecho(s) candidato(s) identificado(s) — validar contra malha antes de bater o martelo.\n\n⚠️  Cargas especiais\n  • inflamavel, farmaceutico, perigosa, alimentos\n  • Acréscimos sugeridos pela tabela travada — Max precisa revisar se houver mais de 2.\n\n💰 Preço-base estimado (sem refinamento): R$ 50.795,56\n\n🚦 Recomendação automática: GO COM RESSALVA\n  Justificativa: Múltiplas categorias de carga especial detectadas (4) — exige aprovação do Max para consolidar % de acréscimo. Edital com cláusulas de SLA/penalidade complexas — revisar exposição contratual.\n\nO draft completo está no JSON anexo. Os campos abaixo precisam de validação humana antes de envio:\n  - distâncias reais por trecho\n  - cobertura final (atende/parcial/não atende)\n  - % de acréscimo final por carga especial\n\n-- Nokk-Chat (assistente de precificação)"
+}

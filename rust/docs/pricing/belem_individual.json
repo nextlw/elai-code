@@ -1,0 +1,199 @@
+[
+  {
+    "path": "docs/editais_exemplo/marinha_belem_90019_2025/pdfs/01_edital.pdf",
+    "pages": 20,
+    "words": 10833,
+    "estimated_input_tokens": 14625,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 116,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 14625,
+        "output_tokens": 0,
+        "cost_usd": 0.000293
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 14625,
+        "output_tokens": 1170,
+        "cost_usd": 0.01638
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 5118,
+        "output_tokens": 1791,
+        "cost_usd": 0.042219
+      }
+    ],
+    "total_cogs_usd": 0.0589,
+    "total_cogs_brl": 0.31,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.97
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_belem_90019_2025/pdfs/02_termo_referencia.pdf",
+    "pages": 53,
+    "words": 23063,
+    "estimated_input_tokens": 31135,
+    "specials_detected": [
+      "alimentos",
+      "perigosa",
+      "valor_agregado"
+    ],
+    "complexity_hits": 197,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 31135,
+        "output_tokens": 0,
+        "cost_usd": 0.000623
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 31135,
+        "output_tokens": 2490,
+        "cost_usd": 0.034868
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 10897,
+        "output_tokens": 3813,
+        "cost_usd": 0.089886
+      }
+    ],
+    "total_cogs_usd": 0.1254,
+    "total_cogs_brl": 0.65,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.93
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_belem_90019_2025/pdfs/03_etp.pdf",
+    "pages": 6,
+    "words": 1989,
+    "estimated_input_tokens": 2685,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 6,
+    "tier": "standard",
+    "recommended_model": "haiku_3_5+sonnet_3_7",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 2685,
+        "output_tokens": 0,
+        "cost_usd": 5.4e-05
+      },
+      {
+        "name": "extract",
+        "model": "haiku_3_5",
+        "input_tokens": 2685,
+        "output_tokens": 268,
+        "cost_usd": 0.00322
+      },
+      {
+        "name": "reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 1342,
+        "output_tokens": 402,
+        "cost_usd": 0.010056
+      }
+    ],
+    "total_cogs_usd": 0.0133,
+    "total_cogs_brl": 0.07,
+    "list_price_brl": 390.0,
+    "gross_margin_pct": 99.98
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_belem_90019_2025/pdfs/04_minuta_contrato.pdf",
+    "pages": 10,
+    "words": 4628,
+    "estimated_input_tokens": 6248,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 111,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 6248,
+        "output_tokens": 0,
+        "cost_usd": 0.000125
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 6248,
+        "output_tokens": 499,
+        "cost_usd": 0.006994
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 2186,
+        "output_tokens": 765,
+        "cost_usd": 0.018033
+      }
+    ],
+    "total_cogs_usd": 0.0252,
+    "total_cogs_brl": 0.13,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.99
+  },
+  {
+    "path": "docs/editais_exemplo/marinha_belem_90019_2025/pdfs/05_relacao_itens.pdf",
+    "pages": 64,
+    "words": 16888,
+    "estimated_input_tokens": 22799,
+    "specials_detected": [
+      "valor_agregado"
+    ],
+    "complexity_hits": 0,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 22799,
+        "output_tokens": 0,
+        "cost_usd": 0.000456
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 22799,
+        "output_tokens": 1823,
+        "cost_usd": 0.025531
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 7979,
+        "output_tokens": 2792,
+        "cost_usd": 0.065817
+      }
+    ],
+    "total_cogs_usd": 0.0918,
+    "total_cogs_brl": 0.48,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.95
+  }
+]

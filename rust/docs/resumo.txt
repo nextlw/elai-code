@@ -1,0 +1,547 @@
+P rocesso deP recificaç ão deF ret
+                                 es— N ex code
+
+         F on te: R eun ião in icial com T hiago 2(2 /0 4 /2 0 2 6 )+ tran scrição d a reun ião d efluxo d e
+          p recificação
+         P articip an tes m ap ead os: Ven d ed or,A n alista d eP recificação (
+                                                                               Thiago)
+                                                                                     ,D iretorC om ercial
+         (M ax) ,C lien te
+
+
+
+
+V isão G eral
+O p r o cesso d e p r ecificação d a L au to p o ssu itr êsm o d alid ad es, o r d en ad asp o r co m p lexid ad e
+cr escen te:
+
+
+ M o d alid ad e                            C o m p lexid ad e            V o lu m e         T em p o m éd io
+
+ C o tação P ad r ão                        B aixa                        A lto              H o r as
+
+ P r o p o sta C o m er cial                M éd ia                       M éd io            D ias
+
+ B I D                                      A lta                         B aixo             ~ 1 sem an a
+
+
+
+
+F lux o 1 —        Cot
+                     aç ão P adrão
+P r o cesso m aisco m u m e r á p id o .U tilizad o p ar a so licitaçõesp o n tu aisvia p o r tal (B R U D A M )
+                                                                                                               ,
+tabela o u e- m ail.
+                       V endedor
+
+                           Início
+
+
+
+
+                   Receberdemandado
+                           cliente
+
+
+
+
+                    Enviarsolicitaçãoao
+                         Analista
+                   pore-mailouWhatsApp
+
+
+
+
+              AnalistadePrecificação(Thiago)
+
+                    Analisartrechoe
+                   coberturadamalha
+
+
+
+
+                        Modal?
+
+
+
+
+     Fracionado                             Dedicado
+
+
+
+A valiarpeso,tipodecarga
+    econdiçõesde                       Calculardistâncias:
+    carregamento
+                                    baseWorigemWdestinoWbase
+                                                                   Preencherplanilhade
+           Consultartabelapadrão
+                                                                         custos
+           eaplicaracréscimospor                                   Margem+GRIS+ Ad
+               tipodecarga
+                                                                    Valorem+Impostos
+
+
+
+
+                                       Definireenviarcotação
+                                         paraovendedor
+
+
+
+
+                                               Cliente
+
+                                       Fim—Cotaçãorecebida
+
+
+
+
+D escriç ão dasA ti
+                  vidades— Cota
+                              ç ão P adrão
+1 . R eceberdem andado client
+                            e
+
+     R esp o n sá vel: V en d ed o r
+     D escr ição : O ven d ed o r r ecebe o u p r o sp ecta a d em an d a d o clien te, co letan d o tip o d e car ga,
+     p eso , o r igem e d estin o .
+     E n tr ad as: C o n tato d o clien te co m n ecessid ad e d e fr ete
+     S aíd as: D ad o sbá sico sd a o p er ação
+
+2 . E nviarsolicit
+                 aç ão ao A nalist
+                                 a
+
+     R esp o n sá vel: V en d ed o r
+     D escr ição : E n cam in ha a so licitação ao A n alista d e P r ecificação , p r efer en cialm en te p o r e-
+      m ail.W hatsA p p o co r r e m asn ão é o can al o ficial.
+     E n tr ad as: D ad o sd a o p er ação d o clien te
+     S aíd as: So licitação en viad a ao an alista
+3 . A nalisart
+             recho ecobert
+                         uradam alha
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : V er ifica se o tr echo so licitad o está d en tr o d a m alha aten d id a p ela L au to .
+      E n tr ad as: Or igem e d estin o in fo r m ad o sp elo ven d ed o r
+      S aíd as: C o n fir m ação d e aten d im en to (to tal, p ar cial o u n ão aten d im en to )
+
+4 a. A valiarcarg aecarreg am ent
+                                o ( F racionado)
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : A valia p eso , tip o d e m er cad o r ia e co n d içõesd e car r egam en to p ar a
+      en q u ad r am en to n a tabela p ad r ão .
+      E n tr ad as: D ad o sd e car ga d a so licitação
+      S aíd as: C ar ga classificad a
+
+4 b. Calculardist
+                â nciasdarot
+                           a( D edicado)
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : C alcu la o p er cu r so co m p leto d a o p er ação d ed icad a: base d e o r igem : co leta :
+      d estin o : r eto r n o à base.
+      E n tr ad as: Or igem , d estin o e base o p er acio n al
+      S aíd as: D istân cia to tal calcu lad a
+
+5 a. Consult
+           art
+             abelapadrão ( F racionado)
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : U sa a tabela p ad r ão co m o r efer ên cia d e p r eço base (calibr ad a p ar a car ga ger al)
+       e ap lica acr éscim o sco n fo r m e o tip o d e m er cad o r ia.
+      E n tr ad as: T r echo e classificação d a car ga
+      S aíd as: V alo r d e fr ete co m acr éscim o s
+
+5 b. P reencherplanilhadecust
+                            os( D edicado)
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : P r een che a p lan ilha d e cu sto sso m an d o m ar gem , G R I S, A d V alo r em e
+      im p o sto s.
+      E n tr ad as: D istân cias, tip o d e veícu lo e esp ecificid ad esd a car ga
+      S aíd as: P lan ilha d e cu sto sco m valo r fin al
+6 . D efinireenviarcot
+                     aç ão
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : C o n so lid a o valo r e en via a co tação p o r e- m ail o u p elo p o r tal B R U D A M .
+      E n tr ad as: T abela o u p lan ilha co m valo r calcu lad o
+      S aíd as: C o tação en viad a ao clien te
+
+G ate
+    w ay s— Cota
+               ç ão P adrão
+M odal?
+
+      T ip o : E xclu sivo (X OR )
+      C o n d ição : T ip o d e o p er ação lo gística so licitad a
+      C am in ho s:
+              F r acio n ad o : C ar ga co m p ar tilha veícu lo : co n su lta tabela p ad r ão d ir etam en te
+              D ed icad o : V eícu lo exclu sivo : p lan ilha d e cu sto sco m cá lcu lo d e r o ta co m p leta
+
+
+
+F lux o 2 —     P ropost
+                       aCom ercial
+U tilizad a q u an d o o ven d ed o r visita o clien te e tr az o sd ad o sd a o p er ação p ar a elabo r ar u m a
+p r o p o sta p er so n alizad a.E ven tu alm en te in clu ir efer ên cia d e p r eço d e co n co r r en tes.
+                      V endedor
+
+                        Início
+
+
+
+
+                 V isitarclienteecoletar
+                  dadosdaoperação
+
+
+
+
+                   Enviarsolicitaçãoao
+                    Analista
+             comdadoseexpectativade
+                       volume
+
+
+
+
+          AnalistadePrecificação(Thiago)
+
+             Analisardadosdaoperação
+                 eavaliaraderênciaàmalha
+
+
+
+
+                       Modal?
+
+
+
+
+    Fracionado                       Dedicado
+
+
+
+Usartabelapadrãocomo
+                                  Preencherplanilhade
+    referência
+                                         custos
+               eaplicaracréscimospor                                       custos
+                                                                      daoperaçãodedicada
+                      tipodecarga
+
+
+
+
+                                            Definireenviar
+                                          propostacomercial
+
+
+
+
+                                                  Cliente
+
+                                        Fim—Propostarecebida
+
+
+
+
+D escriç ão dasA ti
+                  vidades— P roposta
+                                   Com ercial
+1 . V isit
+         arclient
+                eecolet
+                      ardadosdaoperaç ão
+
+     R esp o n sá vel: V en d ed o r
+     D escr ição : O ven d ed o r p r o sp ecta o clien te, co n ver sa so br e a d em an d a e co leta
+     in fo r m açõesd a o p er ação (tip o d e car ga, vo lu m e esp er ad o , o r igem , d estin o )
+                                                                                                    .E m algu n s
+     caso so clien te fo r n ece r efer ên cia d e p r eço d e co n co r r en te.
+     E n tr ad as: I n ter esse d o clien te em co n tr atar fr ete
+     S aíd as: D ad o sd a o p er ação e exp ectativa d e vo lu m e d o clien te
+
+2 . E nviarsolicit
+                 aç ão ao A nalist
+                                 a
+
+     R esp o n sá vel: V en d ed o r
+     D escr ição : E n cam in ha ao A n alista d e P r ecificação o sd ad o sco letad o s, in clu in d o
+     exp ectativa d e vo lu m e e, q u an d o d isp o n ível, r efer ên cia d e m er cad o .
+     E n tr ad as: D ad o sd a o p er ação d o clien te
+     S aíd as: So licitação en viad a co m co n texto d e d em an d a
+3 . A nalisardadosdaoperaç ão eavaliaraderê nciaà m alha
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : A n alisa o str echo sso licitad o sem r elação à m alha d a L au to , ver ifica
+     exp ectativa d e p eso e tip o d e car ga, e avalia se a d em an d a é ad er en te à o p er ação atu al.
+     E n tr ad as: D ad o sd a o p er ação + exp ectativa d e vo lu m e
+     S aíd as: A valiação d e ad er ên cia e d efin ição d o esco p o d a p r o p o sta
+
+4 a. U sart
+          abelapadrão com o referê ncia( F racionado)
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : A p lica a tabela p ad r ão so br e a exp ectativa d e vo lu m e d eclar ad a.A cr éscim o s
+     p o r tip o d e car ga são ap licad o sd a m esm a fo r m a q u e n a co tação p ad r ão .
+     E n tr ad as: T abela p ad r ão + d ad o sd a o p er ação esp er ad a
+     S aíd as: V alo r estim ad o d e p r o p o sta
+
+4 b. P reencherplanilhadecust
+                            os( D edicado)
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : C alcu la o cu sto d e o p er acio n alizar a d em an d a d ed icad a co m base n as
+      d istân ciase n o tip o d e veícu lo n ecessá r io .
+     E n tr ad as: D em an d a d a o p er ação d ed icad a
+     S aíd as: P lan ilha d e cu sto sd a p r o p o sta
+
+5 . D efinireenviarpropost
+                         acom ercial
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : C o n so lid a o valo r d a p r o p o sta e en cam in ha ao clien te via e- m ail.
+     E n tr ad as: P lan ilha o u tabela co m valo r escalcu lad o s
+     S aíd as: P r o p o sta co m er cial en viad a
+
+G ate
+    w ay s— P roposta
+                    Com ercial
+M odal?
+
+     T ip o : E xclu sivo (X OR )
+     C o n d ição : T ip o d e o p er ação lo gística so licitad a p elo clien te
+     C am in ho s:
+           F r acio n ad o : U sa tabela p ad r ão co m acr éscim o sso br e exp ectativa d e vo lu m e
+           D ed icad o : U sa p lan ilha d e cu sto sco m base n asd istân ciase tip o d e veícu lo
+F lux o 3 —    BID
+P r o cesso m aisco m p lexo .Oco r r e q u an d o o clien te lan ça u m a co n co r r ên cia fo r m al, ger alm en te
+p ar a o p er açõesd ed icad asd e gr an d e p o r te.P o d e levar até u m a sem an a p ar a ser r esp o n d id o .
+                                 V endedor
+
+                                   Início
+
+
+
+
+                            RecebereditaldeBIDdo
+                                   cliente
+
+
+
+
+                             EncaminharBIDao
+                           AnalistadePrecificação
+
+
+
+
+                         AnalistadePrecificação(Thiago)
+
+                            Analisarinformaçõesdo
+                                  BID:
+                           volumetria,trechos,tipode
+                                   veículo,
+                             especificidadesevalor
+                                 agregado
+
+
+
+
+                                Cargacom
+                               especificidade?
+
+
+
+
+                        Sim—inflamável,
+                           fármacos,
+                        perigosa,alimentos,
+                           refrigerada
+
+
+
+
+DiretorComercial(Max)
+
+Discutirpercentualde
+   acréscimo                        Não—cargageral
+paracargaespecial
+
+
+
+
+                                   Definiráreasatendidas:
+                                   Completo/Parcial/Não
+                                       atendimento
+
+
+
+
+                                    Calcularpreçobase:
+                                 tabelapadrão+acréscimos
+                                      portrecho
+                                                A valiaraderênciaao
+                                                    mercado:
+                                                volume,capacidadee
+                                                  tabeladecustos
+
+
+
+
+                                         Preçocondizente
+                                          commercado?
+
+
+
+
+                                         Sim     Não
+
+
+        Cliente
+
+ Fim—BIDrespondido                               Negociarreduçãodevalor
+   viaformsoue-mail
+
+
+
+
+D escriç ão dasA ti
+                  vidades— BID
+1 . R eceberedit
+               aldeBID do client
+                               e
+
+      R esp o n sá vel: V en d ed o r
+      D escr ição : O ven d ed o r r ecebe o ed ital o u q u estio n á r io d e B I D d o clien te.O d o cu m en to
+       n o r m alm en te d etalha tr echo s, vo lu m etr ia, tip o d e o p er ação e esp ecificid ad esr egu latór ias.
+      E n tr ad as: E d ital d e B I D en viad o p elo clien te
+      S aíd as: D o cu m en to d e B I D em m ão s
+
+2 . E ncam inharBID ao A nalist
+                              adeP recificaç ão
+
+      R esp o n sá vel: V en d ed o r
+      D escr ição : R ep assa o d o cu m en to ao A n alista p o r e- m ail, even tu alm en te co m co n texto
+      estr atégico so br e o clien te.
+      E n tr ad as: E d ital d e B I D
+      S aíd as: B I D en cam in had o ao an alista
+
+3 . A nalisarinform aç õ esdo BID
+
+      R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+      D escr ição : L eitu r a e in ter p r etação d etalhad a d o ed ital.A valia vo lu m etr ia, tr echo s
+      r eq u er id o s, tip o d e veícu lo , esp ecificid ad esd a car ga e valo r agr egad o .
+     E n tr ad as: D o cu m en to d e B I D
+     S aíd as: I n fo r m açõesd a o p er ação m ap ead ase classificad as
+
+E sp ecificid ad esavaliad as:
+
+     I n flam á vel
+     F á r m aco s/ m ed icam en to s(r egu lação A N V I SA )
+     C ar ga p er igo sa
+     A lim en to s(r estr ição d e m ix d e car gas)
+     R efr iger ad a (veícu lo esp ecial, cu sto m aio r )
+     V alo r agr egad o alto (im p acto n o segu r o / G R I S)
+
+4 . D iscut
+          irpercent
+                  ualdeacréscim o com D iret
+                                           orCom ercial( soment
+                                                              esehouverespecificidade)
+
+     R esp o n sá vel: D ir eto r C o m er cial (M ax)
+     D escr ição : P ar a car gasesp eciais, o an alista d iscu te co m o D ir eto r C o m er cial o p er cen tu al
+     a ser ap licad o so br e a tabela p ad r ão .H o je essesp er cen tu aisn ão estão fixad o s— são
+     d efin id o scaso a caso .
+     E n tr ad as: T ip o d e esp ecificid ad e id en tificad o n a car ga
+     S aíd as: P er cen tu al d e acr éscim o aco r d ad o
+
+5 . D efiniráreasat
+                  endidas
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : C o m base n a m alha d a L au to , d efin e q u aisr egiõesd o B I D ser ão aten d id as
+      co m p letam en te, p ar cialm en te o u n ão aten d id as.B I D sn acio n aisr ar am en te são aten d id o s
+     in tegr alm en te.
+     E n tr ad as: M alha d e co ber tu r a d a L au to + tr echo sd o B I D
+     S aíd as: M ap a d e aten d im en to (co m p leto / p ar cial / n ão aten d im en to )p o r r egião
+
+6 . Calcularpreç o baseport
+                          recho
+
+     R esp o n sá vel: A n alista d e P r ecificação (T hiago )
+     D escr ição : A p lica a tabela p ad r ão so br e o str echo saten d id o s, aju stan d o p o r
+      esp ecificid ad esd e car ga.O m o d al já vem d efin id o p elo clien te (r o d o viá r io , m ar ítim o o u
+     aér eo — p ar a aér eo r eq u er co tação exter n a, ex.: A zu l C ar go )
+                                                                              .
+     E n tr ad as: T abela p ad r ão + m ap a d e aten d im en to + acr éscim o sd efin id o s
+     S aíd as: P r o p o sta d e p r eço calcu lad a p o r tr echo / á r ea
+7 . A valiaraderê nciaao m ercado
+
+     R esp o n sá vel: D ir eto r C o m er cial (M ax)
+     D escr ição : A n alisa se o p r eço calcu lad o está co n d izen te co m o m er cad o .C o n sid er a o
+     vo lu m e p o ten cial d o clien te, a cap acid ad e o p er acio n al d a L au to n a r o ta e a p o ssibilid ad e
+     d e aju star a tabela d e cu sto sp ar a gan har co m p etitivid ad e.
+     E n tr ad as: P r o p o sta d e p r eço + d ad o sd e m er cad o + vo lu m etr ia d o clien te
+     S aíd as: D ecisão so br e co m p etitivid ad e d o p r eço
+
+8 . N eg ociarreduç ão devalor
+
+     R esp o n sá vel: D ir eto r C o m er cial (M ax)+ A n alista d e P r ecificação (T hiago )
+     D escr ição : Q u an d o o p r eço está acim a d o m er cad o , d iscu tem a viabilid ad e d e r ed u zir o
+      valo r co n sid er an d o : vo lu m e d o clien te, sin er gia co m o u tr o sclien tesn a m esm a r o ta e
+     im p acto n a m ar gem .Se ho u ver m ar gem , aju sta e r een via p ar a avaliação .C aso co n tr á r io ,
+     p o d e- se o p tar p o r n ão p ar ticip ar d o B I D .
+     E n tr ad as: P r eço calcu lad o + r efer ên cia d e m er cad o + vo lu m etr ia
+     S aíd as: N o vo valo r n ego ciad o o u d ecisão d e n ão p ar ticip ar
+
+G ate
+    w ay s— BID
+Carg acom especificidade?
+
+     T ip o : E xclu sivo (X OR )
+     C o n d ição : P r esen ça d e car acter ísticasesp eciaisn a car ga q u e im p actam cu sto e r egu lação
+     C am in ho s:
+            S im : D iscu tir p er cen tu al d e acr éscim o co m D ir eto r C o m er cial an tesd e d efin ir p r eço
+            N ão (car ga ger al)
+                               : Segu ir d ir eto p ar a d efin ição d e á r easaten d id as
+
+P reç o condiz ent
+                 ecom m ercado?
+
+     T ip o : E xclu sivo (X OR )
+     C o n d ição : A valiação d o D ir eto r C o m er cial so br e co m p etitivid ad e d o p r eço calcu lad o
+     C am in ho s:
+            S im : P r o p o sta en viad a ao clien te (via e- m ail o u fo r m u lá r io co n fo r m e exigid o n o
+            ed ital)
+            N ão : N ego ciação d e r ed u ção d e valo r — se viá vel, aju sta e r eavalia; se in viá vel, n ão
+            p ar ticip a d o B I D
+O bservaç õ esG erai
+                   s
+    C an al p r in cip al: E - m ail é o can al o ficial p ar a to d asasm o d alid ad es.W hatsA p p o co r r e m as
+    n ão é o p ad r ão — há esfo r ço p ar a cen tr alizar n o e- m ail.
+    T abela p ad r ão : É a r efer ên cia cen tr al p ar a co tação p ad r ão e p r o p o sta co m er cial
+    fr acio n ad a.P ar a car gasesp eciais, p er cen tu aisd e acr éscim o ain d a são d efin id o scaso a
+    caso .
+    P er cen tu aisd e acr éscim o n ão fixad o s: N ão existe r egr a exp lícita d o tip o "in flam á vel =
+    + 2 0 %   ".E ssa p ad r o n ização é u m a evo lu ção im p o r tan te p ar a viabilizar au to m atização .
+    B I D tem m aio r p o ten cial d e au to m ação : A p esar d e ser o m aistr abalho so (~ 1 sem an a)
+                                                                                                        ,
+    tem m aio r gan ho p o ten cial co m au to m ação — esp ecialm en te n a leitu r a d o d o cu m en to ,
+    d iagn óstico in icial d e co ber tu r a e co m p ar ação co m clien tessin ér gico s.
+    D iagn ó stico in icial d e B I D (visão d e au to m ação )
+                                                              : A n tesd e r esp o n d er fo r m alm en te,
+    existe valo r em u m agen te in ter p r etar o d o cu m en to e en tr egar : (a)q u aisr egiõesa L au to
+    aten d e o u n ão , (b)clien tesexisten tesco m sin er gia d e r o ta, (c)estim ativa d e
+    co m p etitivid ad e p o r tr echo .
+    M o d al n o B I D : O clien te já d efin e o m o d al.P ar a aér eo , é n ecessá r ia co tação exter n a (ex.:
+    A zu l C ar go )— fo r a d o esco p o atu al d e au to m ação .
+    C o ber tu r a p ar cial d e B I D : Q u an d o o B I D exige co ber tu r a n acio n al, a p r o p o sta é
+    ap r esen tad a ap en asp ar a asr egiõesefetivam en te aten d id as.
+

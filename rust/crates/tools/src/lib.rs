@@ -351,6 +351,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         }
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
+        "DeepResearch" => from_value::<DeepResearchInput>(input).and_then(run_deep_research),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -2865,6 +2866,304 @@ fn parse_skill_description(contents: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ─── DeepResearch Tool ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DeepResearchInput {
+    query: Option<String>,
+    api_key: Option<String>,
+    #[serde(default = "default_dr_effort")]
+    reasoning_effort: String,
+    language_code: Option<String>,
+}
+
+fn default_dr_effort() -> String {
+    "medium".to_string()
+}
+
+const DR_BASE_URL: &str = "https://elai-deepresearch-rs-production.up.railway.app";
+
+fn dr_base_url() -> String {
+    let candidates = [
+        std::env::var("DEEP_RESEARCH_URL").ok(),
+        std::env::var("DEEP_RESEARCH_BASE_URL").ok(),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        let trimmed = candidate.trim().trim_matches('"');
+        if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+            return trimmed.to_string();
+        }
+    }
+    DR_BASE_URL.to_string()
+}
+
+fn dr_api_key() -> Option<String> {
+    std::env::var("DEEP_RESEARCH_API_KEY")
+        .or_else(|_| std::env::var("VITE_DEEP_RESEARCH_SECRET"))
+        .ok()
+        .filter(|k| !k.is_empty())
+}
+
+fn run_deep_research(input: DeepResearchInput) -> Result<String, String> {
+    if let Some(key) = input.api_key {
+        return dr_activate(&key);
+    }
+
+    let api_key = dr_api_key().ok_or_else(|| {
+        concat!(
+            "DeepResearch não está ativada.\n\n",
+            "Para ativar:\n",
+            "1. Peça ao usuário a API key do serviço de deep research\n",
+            "2. Chame: DeepResearch({\"api_key\": \"<key-fornecida>\"})\n",
+            "   A tool testará a conexão e salvará a key automaticamente.\n\n",
+            "Se o usuário não tiver a key:\n",
+            "Informe que ele pode solicitar acesso enviando um email para adm@nexcode.live.\n",
+            "Mencione que o serviço custa $99 e inclua no email a solicitação de acesso ao DeepResearch."
+        )
+        .to_string()
+    })?;
+
+    let query = input.query.ok_or("Campo 'query' é obrigatório para pesquisa.")?;
+    dr_research(&query, &api_key, &input.reasoning_effort, input.language_code.as_deref())
+}
+
+fn dr_activate(key: &str) -> Result<String, String> {
+    let base_url = dr_base_url();
+    let base = base_url.trim_end_matches('/');
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // 1. Verifica se o serviço está no ar
+    let health_url = format!("{}/health", base);
+    let resp = client
+        .get(&health_url)
+        .send()
+        .map_err(|e| format!("Serviço inacessível: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Serviço retornou HTTP {}. Verifique se o Railway está rodando.",
+            resp.status()
+        ));
+    }
+
+    // 2. Valida a key contra um endpoint autenticado (/v1/models é público,
+    //    então usamos um POST mínimo para checar auth real).
+    let test_url = format!("{}/v1/chat/completions", base);
+    let test_body = serde_json::json!({
+        "model": "jina-deepsearch-v1",
+        "messages": [{"role": "user", "content": "ping"}],
+        "stream": false,
+        "budget_tokens": 1
+    });
+    let auth_resp = client
+        .post(&test_url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", key))
+        .json(&test_body)
+        .send()
+        .map_err(|e| format!("Teste de autenticação falhou: {}", e))?;
+
+    let status = auth_resp.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err(format!(
+            "API key inválida (HTTP {}). A key fornecida não é reconhecida pelo serviço.\n\
+             Verifique a key correta nas configurações do Railway.",
+            status
+        ));
+    }
+
+    // Auth passou (200, 400, 422 ou outro — qualquer coisa que não seja 401/403)
+    dr_save_env_key("DEEP_RESEARCH_API_KEY", key)?;
+    std::env::set_var("DEEP_RESEARCH_API_KEY", key);
+
+    Ok(format!(
+        "✓ DeepResearch ativada com sucesso!\n\
+         API key salva no .env local.\n\
+         URL do serviço: {}\n\
+         Agora use: DeepResearch({{\"query\": \"sua pergunta de pesquisa\"}})",
+        base_url
+    ))
+}
+
+fn dr_save_env_key(key: &str, value: &str) -> Result<(), String> {
+    let env_path = std::env::current_dir()
+        .map_err(|e| e.to_string())?
+        .join(".env");
+
+    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let key_prefix = format!("{}=", key);
+
+    let new_content = if existing.lines().any(|l| l.starts_with(&key_prefix)) {
+        existing
+            .lines()
+            .map(|l| {
+                if l.starts_with(&key_prefix) {
+                    format!("{}={}", key, value)
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        let sep = if existing.ends_with('\n') || existing.is_empty() { "" } else { "\n" };
+        format!("{}{}{}={}\n", existing, sep, key, value)
+    };
+
+    std::fs::write(&env_path, new_content).map_err(|e| e.to_string())
+}
+
+fn dr_research(
+    query: &str,
+    api_key: &str,
+    effort: &str,
+    language: Option<&str>,
+) -> Result<String, String> {
+    let base_url = dr_base_url();
+    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let lang = language.unwrap_or("pt-BR");
+
+    let body = serde_json::json!({
+        "model": "jina-deepsearch-v1",
+        "messages": [{"role": "user", "content": query}],
+        "stream": true,
+        "reasoning_effort": effort,
+        "language_code": lang
+    });
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("Falha na requisição: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    use std::io::{BufRead, BufReader};
+
+    let reader = BufReader::new(response);
+    let mut thinking = String::new();
+    let mut answer = String::new();
+    let mut visited_urls: Vec<String> = Vec::new();
+    let mut citations: Vec<(String, String)> = Vec::new();
+    let mut in_thinking = false;
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(|e| e.to_string())?;
+
+        if !line.starts_with("data: ") {
+            continue;
+        }
+        let data = &line["data: ".len()..];
+        if data == "[DONE]" {
+            break;
+        }
+
+        let chunk: serde_json::Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let delta = &chunk["choices"][0]["delta"];
+        let content = delta["content"].as_str().unwrap_or("");
+        let event_type = delta["type"].as_str().unwrap_or("");
+        let finish_reason = chunk["choices"][0]["finish_reason"].as_str();
+
+        if let Some(visited_url) = delta["url"].as_str() {
+            if !visited_url.is_empty() && !visited_urls.contains(&visited_url.to_string()) {
+                visited_urls.push(visited_url.to_string());
+                eprint!("\r[DeepResearch] {} URLs visitadas...", visited_urls.len());
+            }
+        }
+
+        match event_type {
+            "think" => {
+                if content == "<think>" {
+                    in_thinking = true;
+                } else if content.contains("</think>") {
+                    in_thinking = false;
+                } else if in_thinking && !content.is_empty() {
+                    thinking.push_str(content);
+                }
+            }
+            "text" => {
+                answer.push_str(content);
+                if let Some(anns) = delta["annotations"].as_array() {
+                    for ann in anns {
+                        if ann["type"].as_str() == Some("url_citation") {
+                            let c = &ann["url_citation"];
+                            let title = c["title"].as_str().unwrap_or("").to_string();
+                            let cit_url = c["url"].as_str().unwrap_or("").to_string();
+                            if !cit_url.is_empty() {
+                                citations.push((title, cit_url));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if finish_reason == Some("stop") {
+            if let Some(urls) = chunk["visitedURLs"].as_array() {
+                for u in urls {
+                    if let Some(s) = u.as_str() {
+                        if !visited_urls.contains(&s.to_string()) {
+                            visited_urls.push(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eprintln!();
+
+    let mut out = format!("=== Deep Research: {} ===\n\n", query);
+
+    if !thinking.is_empty() {
+        out.push_str("[Raciocínio do Agente de Pesquisa]\n");
+        out.push_str(&thinking);
+        out.push_str("\n\n");
+    }
+
+    if !visited_urls.is_empty() {
+        out.push_str(&format!("[URLs Visitadas: {}]\n", visited_urls.len()));
+        for u in &visited_urls {
+            out.push_str(&format!("- {}\n", u));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("[Resposta da Pesquisa]\n");
+    out.push_str(if answer.is_empty() { "(sem resposta)" } else { &answer });
+    out.push('\n');
+
+    if !citations.is_empty() {
+        out.push_str("\n[Citações]\n");
+        for (i, (title, u)) in citations.iter().enumerate() {
+            out.push_str(&format!("{}. {} — {}\n", i + 1, title, u));
+        }
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]

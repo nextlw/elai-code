@@ -1,0 +1,73 @@
+[
+  {
+    "path": "docs/resumo.pdf",
+    "pages": 14,
+    "words": 4318,
+    "estimated_input_tokens": 5829,
+    "specials_detected": [
+      "alimentos",
+      "inflamavel",
+      "refrigerada"
+    ],
+    "complexity_hits": 15,
+    "tier": "heavy",
+    "recommended_model": "haiku_map+sonnet_reduce",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 5829,
+        "output_tokens": 0,
+        "cost_usd": 0.000117
+      },
+      {
+        "name": "map_extract",
+        "model": "haiku_3_5",
+        "input_tokens": 5829,
+        "output_tokens": 466,
+        "cost_usd": 0.006527
+      },
+      {
+        "name": "reduce_reason",
+        "model": "sonnet_3_7",
+        "input_tokens": 2040,
+        "output_tokens": 714,
+        "cost_usd": 0.01683
+      }
+    ],
+    "total_cogs_usd": 0.0235,
+    "total_cogs_brl": 0.12,
+    "list_price_brl": 890.0,
+    "gross_margin_pct": 99.99
+  },
+  {
+    "path": "docs/nokk-shopify-proposta.pdf",
+    "pages": 8,
+    "words": 0,
+    "estimated_input_tokens": 0,
+    "specials_detected": [],
+    "complexity_hits": 0,
+    "tier": "light",
+    "recommended_model": "gpt_4o_mini",
+    "stages": [
+      {
+        "name": "jina_reader",
+        "model": "jina_reader",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0
+      },
+      {
+        "name": "extract+answer",
+        "model": "gpt_4o_mini",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0
+      }
+    ],
+    "total_cogs_usd": 0.0,
+    "total_cogs_brl": 0.0,
+    "list_price_brl": 149.0,
+    "gross_margin_pct": 100.0
+  }
+]
