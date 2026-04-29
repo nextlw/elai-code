@@ -155,7 +155,7 @@
       "session_msgs": "%{count} msgs"
     },
     "nav": {
-      "next_prev": "Ctrl+→ next  ·  Ctrl+← previous"
+      "next_prev": "→ next  ·  ← previous"
     },
     "tool_approval": {
       "title": "⚠  Approve tool?",
