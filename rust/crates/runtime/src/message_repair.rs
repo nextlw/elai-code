@@ -108,23 +108,23 @@ fn repair_missing_tool_results(messages: &mut Vec<ConversationMessage>, actions:
             continue;
         }
 
-        // Collect tool_use_ids that are already covered by the next message.
-        let covered: HashSet<String> = messages
-            .get(i + 1)
-            .map(|next_msg| {
-                next_msg
-                    .blocks
-                    .iter()
-                    .filter_map(|block| {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                            Some(tool_use_id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+        // Collect tool_use_ids already covered by any subsequent message up to
+        // (but not including) the next Assistant message. Each tool result may
+        // live in its own separate message when results come from parallel tool
+        // calls stored individually, so checking only i+1 would miss them and
+        // inject synthetic duplicates.
+        let covered: HashSet<String> = messages[i + 1..]
+            .iter()
+            .take_while(|m| m.role != MessageRole::Assistant)
+            .flat_map(|m| m.blocks.iter())
+            .filter_map(|block| {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = block {
+                    Some(tool_use_id.clone())
+                } else {
+                    None
+                }
             })
-            .unwrap_or_default();
+            .collect();
 
         // Find ids that need synthetic results.
         let missing_ids: Vec<String> = tool_use_ids
@@ -409,5 +409,57 @@ mod tests {
         let actions = validate_and_repair(&mut messages);
         assert!(actions.is_empty(), "expected no repairs: {actions:?}");
         assert_eq!(messages.len(), 3);
+    }
+
+    #[test]
+    fn no_synthetic_injection_when_results_are_in_separate_messages() {
+        // Reproduces the "Found multiple tool_result blocks" 400 error:
+        // assistant uses tool-1 and tool-2; their results live in two separate
+        // Tool messages (as the runtime stores them). The repair must scan past
+        // i+1 and find both results, injecting nothing.
+        let mut messages = vec![
+            make_user("hello"),
+            ConversationMessage::assistant(vec![
+                ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "glob_search".to_string(),
+                    input: "*.rs".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "tool-2".to_string(),
+                    name: "glob_search".to_string(),
+                    input: "*.toml".to_string(),
+                },
+            ]),
+            // tool-1 result in its own message (as runtime pushes them individually)
+            ConversationMessage {
+                role: MessageRole::Tool,
+                blocks: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    tool_name: "glob_search".to_string(),
+                    output: "src/main.rs".to_string(),
+                    is_error: false,
+                }],
+                usage: None,
+            },
+            // tool-2 result in a separate message
+            ConversationMessage {
+                role: MessageRole::Tool,
+                blocks: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool-2".to_string(),
+                    tool_name: "glob_search".to_string(),
+                    output: "Cargo.toml".to_string(),
+                    is_error: false,
+                }],
+                usage: None,
+            },
+            make_assistant_text("found the files"),
+        ];
+        let actions = validate_and_repair(&mut messages);
+        assert!(
+            actions.is_empty(),
+            "expected no synthetic injection when results are in separate messages: {actions:?}"
+        );
+        assert_eq!(messages.len(), 5, "message count should remain unchanged");
     }
 }
