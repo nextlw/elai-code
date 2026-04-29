@@ -3335,8 +3335,12 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                             flush(&mut lines, &mut spans);
                         }
                         first = false;
-                        for chunk in wrap_text(raw_line, wrap_width) {
-                            spans.push(Span::styled(chunk, style));
+                        // Preserva o texto inline exatamente como veio do parser,
+                        // incluindo espaços nas bordas. `wrap_text` usa
+                        // `split_whitespace` que descarta esses espaços e cola
+                        // palavras de spans adjacentes (ex: bold/italic com texto).
+                        if !raw_line.is_empty() {
+                            spans.push(Span::styled(raw_line.to_string(), style));
                         }
                     }
                 }
