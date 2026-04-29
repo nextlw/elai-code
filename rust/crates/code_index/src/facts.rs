@@ -172,6 +172,7 @@ fn lang_label(l: Lang) -> &'static str {
         Lang::Toml => "toml",
         Lang::Json => "json",
         Lang::Plain => "plain",
+        Lang::Pdf => "pdf",
     }
 }
 

@@ -2,6 +2,8 @@ pub mod chunker;
 pub mod embed;
 pub mod facts;
 pub mod indexer;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 pub mod progress;
 pub mod store;
 pub mod walker;
@@ -9,11 +11,15 @@ pub mod walker;
 pub use chunker::{Chunker, DefaultChunker, WindowChunker};
 #[cfg(feature = "tree-sitter-langs")]
 pub use chunker::SemanticChunker;
-pub use embed::{EmbedError, Embedder, MockEmbedder};
+pub use embed::{EmbedError, Embedder, MockEmbedder, MultimodalEmbedder};
 #[cfg(feature = "embed-fastembed")]
 pub use embed::LocalFastEmbedder;
 #[cfg(feature = "embed-http")]
 pub use embed::OllamaEmbedder;
+#[cfg(feature = "embed-jina")]
+pub use embed::JinaClipEmbedder;
+#[cfg(feature = "pdf")]
+pub use pdf::{PdfChunker, PdfIndexer, PdfIndexerStats};
 pub use facts::{collect_facts, DirSummary, ProjectFacts, TopSymbol};
 pub use indexer::{IndexError, IndexPhase, IndexProgress, Indexer};
 pub use progress::{progress_bar, progress_bar_labeled, NoopReporter, ProgressReporter};
@@ -34,6 +40,7 @@ pub enum Lang {
     Toml,
     Json,
     Plain,
+    Pdf,
 }
 
 impl Lang {
@@ -49,6 +56,7 @@ impl Lang {
             "md" | "markdown" => Self::Markdown,
             "toml" => Self::Toml,
             "json" => Self::Json,
+            "pdf" => Self::Pdf,
             _ => Self::Plain,
         }
     }
@@ -64,6 +72,8 @@ pub enum ChunkKind {
     Module,
     Window,
     Plain,
+    PdfPage,
+    PdfImage,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

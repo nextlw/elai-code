@@ -44,6 +44,11 @@ pub trait Embedder: Send + Sync {
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError>;
 }
 
+/// Extension for embedders that also support image inputs (base64-encoded).
+pub trait MultimodalEmbedder: Embedder {
+    fn embed_images(&self, base64_images: &[String]) -> Result<Vec<Vec<f32>>, EmbedError>;
+}
+
 /// Deterministic embedder via `xxh3(text)` — used in tests and offline fallback.
 pub struct MockEmbedder {
     pub dim: usize,
@@ -92,6 +97,11 @@ pub use local::LocalFastEmbedder;
 pub mod ollama;
 #[cfg(feature = "embed-http")]
 pub use ollama::OllamaEmbedder;
+
+#[cfg(feature = "embed-jina")]
+pub mod jina;
+#[cfg(feature = "embed-jina")]
+pub use jina::JinaClipEmbedder;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 

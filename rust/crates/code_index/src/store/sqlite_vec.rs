@@ -166,6 +166,7 @@ fn lang_to_str(l: Lang) -> &'static str {
         Lang::Toml => "toml",
         Lang::Json => "json",
         Lang::Plain => "plain",
+        Lang::Pdf => "pdf",
     }
 }
 
@@ -180,6 +181,7 @@ fn lang_from_str(s: &str) -> Lang {
         "markdown" => Lang::Markdown,
         "toml" => Lang::Toml,
         "json" => Lang::Json,
+        "pdf" => Lang::Pdf,
         _ => Lang::Plain,
     }
 }
@@ -193,6 +195,8 @@ fn kind_to_str(k: ChunkKind) -> &'static str {
         ChunkKind::Module => "module",
         ChunkKind::Window => "window",
         ChunkKind::Plain => "plain",
+        ChunkKind::PdfPage => "pdf_page",
+        ChunkKind::PdfImage => "pdf_image",
     }
 }
 
@@ -204,6 +208,8 @@ fn kind_from_str(s: &str) -> ChunkKind {
         "impl" => ChunkKind::Impl,
         "module" => ChunkKind::Module,
         "window" => ChunkKind::Window,
+        "pdf_page" => ChunkKind::PdfPage,
+        "pdf_image" => ChunkKind::PdfImage,
         _ => ChunkKind::Plain,
     }
 }

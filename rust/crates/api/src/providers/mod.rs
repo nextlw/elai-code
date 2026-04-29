@@ -81,6 +81,15 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
         },
     ),
     (
+        "claude-opus-4-7",
+        ProviderMetadata {
+            provider: ProviderKind::ElaiApi,
+            auth_env: "ANTHROPIC_API_KEY",
+            base_url_env: "ANTHROPIC_BASE_URL",
+            default_base_url: elai_provider::DEFAULT_BASE_URL,
+        },
+    ),
+    (
         "claude-sonnet-4-6",
         ProviderMetadata {
             provider: ProviderKind::ElaiApi,

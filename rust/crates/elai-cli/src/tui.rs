@@ -352,7 +352,7 @@ pub struct WizardState {
 impl Default for WizardState {
     fn default() -> Self {
         Self {
-            model: "claude-opus-4-7".into(),
+            model: "claude-opus-4-6".into(),
             permission_mode: "workspace-write".into(),
             features: runtime::FeatureFlags::default(),
         }
@@ -856,10 +856,10 @@ impl UiApp {
 
     fn filtered_model_list(filter: &str) -> Vec<String> {
         let all = [
+            "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
-            "claude-opus-4-7-thinking",
             "gpt-4o",
             "gpt-4o-mini",
             "gpt-4.5",
@@ -2409,6 +2409,7 @@ pub fn drain_auth_events(app: &mut UiApp) {
 
 const WIZARD_MODELS: &[&str] = &[
     "claude-opus-4-7",
+    "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
     "gpt-4o-mini",
@@ -2477,7 +2478,7 @@ fn handle_first_run_wizard_key(
                 let model = WIZARD_MODELS
                     .get(selected)
                     .copied()
-                    .unwrap_or("claude-opus-4-7")
+                    .unwrap_or("claude-opus-4-6")
                     .to_string();
                 let new_state = WizardState { model, ..state };
                 app.overlay = Some(OverlayKind::FirstRunWizard {
@@ -4772,6 +4773,7 @@ fn draw_first_run_wizard(
             let fallback = rust_i18n::t!("tui.wizard.model.fallback");
             let labels = [
                 format!("claude-opus-4-7        {recommended}"),
+                "claude-opus-4-6".to_string(),
                 "claude-sonnet-4-6".to_string(),
                 "claude-haiku-4-5-20251001".to_string(),
                 format!("gpt-4o-mini            {fallback}"),
@@ -5921,7 +5923,8 @@ mod tests {
         app.open_first_run_wizard();
         wizard_enter(&mut app); // -> Model
 
-        // Navigate down once to select index 1 (claude-sonnet-4-6)
+        // Navigate down twice to select index 2 (claude-sonnet-4-6)
+        handle_overlay_key(&mut app, make_key(KeyCode::Down));
         handle_overlay_key(&mut app, make_key(KeyCode::Down));
         wizard_enter(&mut app); // -> Permissions
 

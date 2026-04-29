@@ -9,6 +9,8 @@ publish.workspace = true
 default = ["tree-sitter-langs", "vec-sqlite", "embed-fastembed", "embed-http"]
 embed-fastembed = ["dep:fastembed"]
 embed-http = ["dep:reqwest"]
+embed-jina = ["dep:reqwest"]
+pdf = ["embed-jina", "dep:lopdf", "dep:base64"]
 vec-sqlite = ["dep:rusqlite"]
 vec-qdrant = ["dep:qdrant-client"]
 tree-sitter-langs = [
@@ -44,6 +46,8 @@ fastembed = { version = "5", default-features = false, features = [
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 qdrant-client = { version = "1.11", optional = true }
+lopdf = { version = "0.34", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
