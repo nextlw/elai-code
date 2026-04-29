@@ -16,6 +16,7 @@ mod json;
 mod mcp;
 mod mcp_client;
 mod mcp_stdio;
+pub mod message_repair;
 mod oauth;
 pub mod oneshot;
 mod permissions;
@@ -120,6 +121,7 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use message_repair::{validate_and_repair, RepairAction};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
