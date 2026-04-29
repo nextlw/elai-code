@@ -15,3 +15,6 @@ archive/
 .elai.json
 .elai/index/
 ELAI.md
+rust/.elai-todos.json
+rust/.elai/swd.log
+**/.elai/swd.log

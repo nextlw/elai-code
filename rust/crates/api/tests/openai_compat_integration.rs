@@ -381,6 +381,8 @@ fn sample_request(stream: bool) -> MessageRequest {
         }]),
         tool_choice: Some(ToolChoice::Auto),
         stream,
+        thinking: None,
+        output_config: None,
     }
 }
 

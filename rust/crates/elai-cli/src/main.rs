@@ -5392,6 +5392,8 @@ impl ApiClient for DefaultRuntimeClient {
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref(), &runtime::ToolCatalog::default(), None)),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
+            thinking: None,
+            output_config: None,
         };
 
         // Clone sender before moving into async block.
@@ -5631,6 +5633,8 @@ impl ApiClient for DefaultRuntimeClient {
                 .client
                 .send_message(&MessageRequest {
                     stream: false,
+                    thinking: None,
+                    output_config: None,
                     ..message_request.clone()
                 })
                 .await

@@ -192,6 +192,8 @@ impl OpenAiCompatClient {
     ) -> Result<MessageResponse, ApiError> {
         let request = MessageRequest {
             stream: false,
+            thinking: None,
+            output_config: None,
             ..request.clone()
         };
         let response = self.send_with_retry(&request).await?;
@@ -1073,6 +1075,8 @@ mod tests {
             }]),
             tool_choice: Some(ToolChoice::Auto),
             stream: false,
+            thinking: None,
+            output_config: None,
         });
 
         assert_eq!(payload["messages"][0]["role"], json!("system"));
@@ -1119,6 +1123,8 @@ mod tests {
             }]),
             tool_choice: Some(ToolChoice::Auto),
             stream: false,
+            thinking: None,
+            output_config: None,
         });
 
         let assistant = &payload["messages"][1];

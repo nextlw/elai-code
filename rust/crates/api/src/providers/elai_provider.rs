@@ -268,6 +268,8 @@ impl ElaiApiClient {
     ) -> Result<MessageResponse, ApiError> {
         let request = MessageRequest {
             stream: false,
+            thinking: None,
+            output_config: None,
             ..request.clone()
         };
         let (response, modified_tools) = self.send_with_retry(&request).await?;
@@ -1232,6 +1234,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: false,
+            thinking: None,
+            output_config: None,
         };
 
         assert!(request.with_streaming().stream);
@@ -1684,6 +1688,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: false,
+            thinking: None,
+            output_config: None,
         };
 
         let client = ElaiApiClient::from_auth(AuthSource::ApiKey("sk-test".to_string()))
@@ -1717,6 +1723,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: false,
+            thinking: None,
+            output_config: None,
         };
 
         let client = ElaiApiClient::from_auth(AuthSource::ApiKey("sk-test".to_string()))
@@ -1749,6 +1757,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: false,
+            thinking: None,
+            output_config: None,
         };
 
         let client = ElaiApiClient::from_auth(AuthSource::ApiKey("sk-test".to_string()))
@@ -1783,6 +1793,8 @@ mod tests {
             }]),
             tool_choice: None,
             stream: false,
+            thinking: None,
+            output_config: None,
         };
 
         let client = ElaiApiClient::from_auth(AuthSource::ApiKey("sk-test".to_string()))

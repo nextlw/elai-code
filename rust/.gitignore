@@ -6,3 +6,5 @@ target/
 .elai/settings.local.json
 .elai/sessions/
 .elai/index/
+.sandbox-home/
+.sandbox-tmp/

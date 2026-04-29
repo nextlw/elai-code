@@ -1,6 +1,41 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// ── Thinking / Effort Configuration ──────────────────────────
+// Mirrors the Anthropic Messages API `thinking` parameter.
+// - `Adaptive`: the model decides when and how much to think.
+// - `Enabled { budget_tokens }`: always think, with an explicit token budget.
+// - `Disabled`: suppress extended thinking entirely.
+//
+// See: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingConfig {
+    /// The model dynamically decides thinking depth per turn.
+    Adaptive,
+    /// Always think, capped at `budget_tokens` thinking tokens.
+    Enabled { budget_tokens: u32 },
+    /// No extended thinking.
+    Disabled,
+}
+
+/// Controls the overall effort level the model applies to the response.
+/// Maps to `output_config.effort` in the Anthropic API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffortLevel {
+    High,
+    Medium,
+    Low,
+}
+
+/// Wrapper for the `output_config` request field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    pub effort: EffortLevel,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageRequest {
     pub model: String,
@@ -14,6 +49,14 @@ pub struct MessageRequest {
     pub tool_choice: Option<ToolChoice>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
+    /// Extended thinking configuration. When `Some`, the API is asked to
+    /// expose its chain-of-thought reasoning before producing the final answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+    /// Output effort configuration. When `Some`, controls how much effort
+    /// the model applies (high = thorough, low = fast/cheap).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<OutputConfig>,
 }
 
 impl MessageRequest {
@@ -220,4 +263,96 @@ pub enum StreamEvent {
     ContentBlockDelta(ContentBlockDeltaEvent),
     ContentBlockStop(ContentBlockStopEvent),
     MessageStop(MessageStopEvent),
+}
+
+// ── Tests ────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn thinking_config_adaptive_serializes_correctly() {
+        let config = ThinkingConfig::Adaptive;
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json, json!({"type": "adaptive"}));
+    }
+
+    #[test]
+    fn thinking_config_enabled_serializes_correctly() {
+        let config = ThinkingConfig::Enabled { budget_tokens: 10_000 };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json, json!({"type": "enabled", "budget_tokens": 10000}));
+    }
+
+    #[test]
+    fn thinking_config_disabled_serializes_correctly() {
+        let config = ThinkingConfig::Disabled;
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json, json!({"type": "disabled"}));
+    }
+
+    #[test]
+    fn thinking_config_round_trips() {
+        for config in [
+            ThinkingConfig::Adaptive,
+            ThinkingConfig::Enabled { budget_tokens: 32_000 },
+            ThinkingConfig::Disabled,
+        ] {
+            let json = serde_json::to_string(&config).unwrap();
+            let parsed: ThinkingConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, config);
+        }
+    }
+
+    #[test]
+    fn effort_level_serializes_as_snake_case() {
+        assert_eq!(serde_json::to_value(EffortLevel::High).unwrap(), json!("high"));
+        assert_eq!(serde_json::to_value(EffortLevel::Medium).unwrap(), json!("medium"));
+        assert_eq!(serde_json::to_value(EffortLevel::Low).unwrap(), json!("low"));
+    }
+
+    #[test]
+    fn output_config_serializes_correctly() {
+        let config = OutputConfig { effort: EffortLevel::High };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json, json!({"effort": "high"}));
+    }
+
+    #[test]
+    fn message_request_omits_thinking_when_none() {
+        let request = MessageRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+            thinking: None,
+            output_config: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("thinking").is_none());
+        assert!(json.get("output_config").is_none());
+    }
+
+    #[test]
+    fn message_request_includes_thinking_when_set() {
+        let request = MessageRequest {
+            model: "claude-opus-4-6".to_string(),
+            max_tokens: 8192,
+            messages: vec![],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+            thinking: Some(ThinkingConfig::Adaptive),
+            output_config: Some(OutputConfig { effort: EffortLevel::High }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(json["output_config"], json!({"effort": "high"}));
+    }
 }

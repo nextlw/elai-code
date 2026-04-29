@@ -368,6 +368,116 @@ pub fn suggested_default_model() -> String {
     "claude-haiku-4-5-20251001".to_string()
 }
 
+// ── Thinking / Effort Awareness ──────────────────────────────
+// These functions decide when to request extended thinking from the API,
+// mirroring the logic from `thinking.ts` in Claude Code and the Mythos
+// Router's `anthropic.ts`.  Local providers (Ollama, LM Studio) and
+// OpenAI-compat providers that don't support thinking always get `None`.
+
+use crate::types::{EffortLevel, OutputConfig, ThinkingConfig};
+
+/// Returns `true` when the model supports extended thinking at all.
+/// Claude 4+ (including Haiku 4.5) on first-party.  Local and OpenAI
+/// providers do not.
+#[must_use]
+pub fn model_supports_thinking(model: &str) -> bool {
+    // Local providers never support Anthropic-style thinking.
+    if parse_local_provider_prefix(model).is_some() {
+        return false;
+    }
+    let canonical = resolve_model_alias(model);
+    let lower = canonical.to_ascii_lowercase();
+    // Non-Anthropic models.
+    if lower.starts_with("gpt")
+        || lower.starts_with("grok")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.starts_with("deepseek")
+        || lower.starts_with("chatgpt")
+        || lower.starts_with("ft:")
+    {
+        return false;
+    }
+    // Claude 3.x does not support thinking.
+    if lower.contains("claude-3-") {
+        return false;
+    }
+    // Everything else from Anthropic (claude-4+, haiku-4-5, etc.) does.
+    true
+}
+
+/// Returns `true` when the model supports *adaptive* thinking (type=adaptive).
+/// Only Claude 4-6 / 4-7 sonnet & opus qualify today.
+#[must_use]
+pub fn model_supports_adaptive_thinking(model: &str) -> bool {
+    if !model_supports_thinking(model) {
+        return false;
+    }
+    let canonical = resolve_model_alias(model);
+    let lower = canonical.to_ascii_lowercase();
+    lower.contains("opus-4-6")
+        || lower.contains("sonnet-4-6")
+        || lower.contains("opus-4-7")
+        || lower.contains("sonnet-4-7")
+        || lower.contains("opus-4.6")
+        || lower.contains("sonnet-4.6")
+        || lower.contains("opus-4.7")
+        || lower.contains("sonnet-4.7")
+}
+
+/// Default thinking budget for models that support thinking but NOT adaptive.
+/// Overridable via `MAX_THINKING_TOKENS` env var.
+#[must_use]
+pub fn thinking_budget_for_model(model: &str) -> u32 {
+    if let Ok(raw) = std::env::var("MAX_THINKING_TOKENS") {
+        if let Ok(v) = raw.trim().parse::<u32>() {
+            if v > 0 {
+                return v;
+            }
+        }
+    }
+    let canonical = resolve_model_alias(model);
+    let lower = canonical.to_ascii_lowercase();
+    if lower.contains("opus") {
+        32_000
+    } else if lower.contains("sonnet") {
+        16_000
+    } else {
+        10_000
+    }
+}
+
+/// Build the appropriate `ThinkingConfig` for a model.
+/// Returns `None` for models that don't support thinking.
+#[must_use]
+pub fn default_thinking_config(model: &str) -> Option<ThinkingConfig> {
+    if !model_supports_thinking(model) {
+        return None;
+    }
+    // Check if user explicitly disabled thinking.
+    if let Ok(val) = std::env::var("MAX_THINKING_TOKENS") {
+        if val.trim() == "0" {
+            return Some(ThinkingConfig::Disabled);
+        }
+    }
+    if model_supports_adaptive_thinking(model) {
+        Some(ThinkingConfig::Adaptive)
+    } else {
+        Some(ThinkingConfig::Enabled {
+            budget_tokens: thinking_budget_for_model(model),
+        })
+    }
+}
+
+/// Build the appropriate `OutputConfig` from an optional CLI/env effort override.
+/// Returns `None` when no override is set (API uses its own default).
+#[must_use]
+pub fn resolve_output_config(effort_override: Option<EffortLevel>) -> Option<OutputConfig> {
+    effort_override.map(|effort| OutputConfig { effort })
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::{
