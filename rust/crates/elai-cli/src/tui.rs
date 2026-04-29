@@ -4275,7 +4275,7 @@ fn draw_setup_wizard(
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Configurar API Key ")
+        .title(format!(" {} ", rust_i18n::t!("tui.setup.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4283,15 +4283,18 @@ fn draw_setup_wizard(
     frame.render_widget(block, popup);
 
     let lines: Vec<Line> = if step == 0 {
-        let providers = [
-            ("Anthropic", "(Claude opus / sonnet / haiku)"),
-            ("OpenAI", "(gpt-4o, gpt-4o-mini, o3...)"),
-            ("Ambos", ""),
+        let anthropic_note = rust_i18n::t!("tui.setup.provider_anthropic_note").to_string();
+        let openai_note = rust_i18n::t!("tui.setup.provider_openai_note").to_string();
+        let both_label = rust_i18n::t!("tui.setup.provider_both").to_string();
+        let providers: [(&str, &str); 3] = [
+            ("Anthropic", anthropic_note.as_str()),
+            ("OpenAI", openai_note.as_str()),
+            (both_label.as_str(), ""),
         ];
         let mut v: Vec<Line> = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Escolha seu provedor de IA:",
+                format!("  {}", rust_i18n::t!("tui.setup.provider_question")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
@@ -4314,7 +4317,7 @@ fn draw_setup_wizard(
         }
         v.push(Line::from(""));
         v.push(Line::from(Span::styled(
-            "  \u{2191}/\u{2193} navegar \u{00b7} Enter confirmar",
+            format!("  {}", rust_i18n::t!("tui.setup.nav_select")),
             Style::default().fg(theme().text_secondary),
         )));
         v
@@ -4324,7 +4327,10 @@ fn draw_setup_wizard(
             1 => "OpenAI",
             _ => if step == 1 { "Anthropic" } else { "OpenAI" },
         };
-        let field_label = format!("  {} API key:", provider_name);
+        let field_label = format!(
+            "  {}",
+            rust_i18n::t!("tui.setup.field_label", provider = provider_name.to_string())
+        );
         let masked: String = "\u{2022}".repeat(input.chars().count());
         let display = format!("  > {masked}");
         vec![
@@ -4337,7 +4343,7 @@ fn draw_setup_wizard(
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Enter confirmar \u{00b7} Esc cancelar",
+                format!("  {}", rust_i18n::t!("tui.setup.nav_confirm")),
                 Style::default().fg(theme().text_secondary),
             )),
         ]
@@ -4369,7 +4375,10 @@ fn draw_first_run_wizard(
     };
 
     let block = Block::default()
-        .title(format!(" Setup  [{step_label}/{total_steps}] "))
+        .title(format!(
+            " {} ",
+            rust_i18n::t!("tui.wizard.title", step = step_label, total = total_steps)
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4380,34 +4389,34 @@ fn draw_first_run_wizard(
         WizardStep::Welcome => vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Bem-vindo ao Elai Code!",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.title")),
                 Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Este assistente vai configurar:",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.intro")),
                 Style::default().fg(theme().text_secondary),
             )),
             Line::from(Span::styled(
-                "   • Modelo de IA padrão",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_model")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
-                "   • Modo de permissões",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_permissions")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(Span::styled(
-                "   • Preferências opcionais",
+                format!("   • {}", rust_i18n::t!("tui.wizard.welcome.bullet_defaults")),
                 Style::default().fg(theme().text_primary),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Se ainda não tem auth, use `elai login` após o setup.",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.auth_hint")),
                 Style::default().fg(theme().warn),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Enter para começar  ·  Esc para cancelar",
+                format!("  {}", rust_i18n::t!("tui.wizard.welcome.start_hint")),
                 Style::default().fg(theme().text_secondary),
             )),
         ],
@@ -4416,16 +4425,18 @@ fn draw_first_run_wizard(
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Escolha o modelo padrão:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.model.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
+            let recommended = rust_i18n::t!("tui.wizard.model.recommended");
+            let fallback = rust_i18n::t!("tui.wizard.model.fallback");
             let labels = [
-                "claude-opus-4-7        (recommended)",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001",
-                "gpt-4o-mini            (fallback)",
+                format!("claude-opus-4-7        {recommended}"),
+                "claude-sonnet-4-6".to_string(),
+                "claude-haiku-4-5-20251001".to_string(),
+                format!("gpt-4o-mini            {fallback}"),
             ];
             for (i, label) in labels.iter().enumerate() {
                 if i == *selected {
@@ -4445,7 +4456,7 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.nav.up_down_enter_esc")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
@@ -4455,15 +4466,18 @@ fn draw_first_run_wizard(
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Modo de permissões:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.permissions.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
-            let labels = [
-                ("read-only", "Apenas leitura — sem alterações"),
-                ("workspace-write", "Workspace write — escreve no projeto"),
-                ("danger-full-access", "Full access — power users (recomendado)"),
+            let read_only = rust_i18n::t!("tui.wizard.permissions.read_only_desc").to_string();
+            let workspace_write = rust_i18n::t!("tui.wizard.permissions.workspace_write_desc").to_string();
+            let full_access = rust_i18n::t!("tui.wizard.permissions.full_access_desc").to_string();
+            let labels: [(&str, &str); 3] = [
+                ("read-only", read_only.as_str()),
+                ("workspace-write", workspace_write.as_str()),
+                ("danger-full-access", full_access.as_str()),
             ];
             for (i, (mode, desc)) in labels.iter().enumerate() {
                 if i == *selected {
@@ -4483,22 +4497,25 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  ↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.nav.up_down_enter_esc")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
         }
 
         WizardStep::Defaults { focused } => {
-            let toggles: &[(&str, bool)] = &[
-                ("Auto-update", state.features.auto_update),
-                ("Telemetry  ", state.features.telemetry),
-                ("Indexing   ", state.features.indexing),
+            let auto_update = rust_i18n::t!("tui.wizard.defaults.label_auto_update").to_string();
+            let telemetry = rust_i18n::t!("tui.wizard.defaults.label_telemetry").to_string();
+            let indexing = rust_i18n::t!("tui.wizard.defaults.label_indexing").to_string();
+            let toggles: [(&str, bool); 3] = [
+                (auto_update.as_str(), state.features.auto_update),
+                (telemetry.as_str(), state.features.telemetry),
+                (indexing.as_str(), state.features.indexing),
             ];
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Preferências opcionais:",
+                    format!("  {}", rust_i18n::t!("tui.wizard.defaults.title")),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
@@ -4536,57 +4553,77 @@ fn draw_first_run_wizard(
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  Tab/↑↓ navegar  ·  Space alternar  ·  Enter próximo  ·  Esc voltar",
+                format!("  {}", rust_i18n::t!("tui.wizard.defaults.hint")),
                 Style::default().fg(theme().text_secondary),
             )));
             lines
         }
 
-        WizardStep::Done => vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Configuração concluída!",
-                Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Modelo       ", Style::default().fg(theme().text_secondary)),
-                Span::styled(state.model.clone(), Style::default().fg(theme().info)),
-            ]),
-            Line::from(vec![
-                Span::styled("  Permissões   ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    state.permission_mode.clone(),
-                    Style::default().fg(theme().warn),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Auto-update  ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.auto_update { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Telemetry    ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.telemetry { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  Indexing     ", Style::default().fg(theme().text_secondary)),
-                Span::styled(
-                    if state.features.indexing { "on" } else { "off" },
-                    Style::default().fg(theme().text_primary),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Enter para fechar e iniciar",
-                Style::default().fg(theme().text_secondary),
-            )),
-        ],
+        WizardStep::Done => {
+            let on = rust_i18n::t!("tui.wizard.state.on").to_string();
+            let off = rust_i18n::t!("tui.wizard.state.off").to_string();
+            let bool_str = |v: bool| -> String { if v { on.clone() } else { off.clone() } };
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.wizard.done.title")),
+                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_model")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(state.model.clone(), Style::default().fg(theme().info)),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_permissions")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        state.permission_mode.clone(),
+                        Style::default().fg(theme().warn),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_auto_update")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.auto_update),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_telemetry")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.telemetry),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<13}", rust_i18n::t!("tui.wizard.done.label_indexing")),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                    Span::styled(
+                        bool_str(state.features.indexing),
+                        Style::default().fg(theme().text_primary),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.wizard.done.start_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
+            ]
+        },
     };
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -4602,7 +4639,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Authentication ")
+        .title(format!(" {} ", rust_i18n::t!("tui.auth.title")))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_active));
 
@@ -4616,7 +4653,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
 
             if *claude_code_detected {
                 lines.push(Line::from(Span::styled(
-                    "  Detected Claude Code credentials — press Enter on 'Import' to use them",
+                    format!("  {}", rust_i18n::t!("tui.auth.claude_code_detected")),
                     Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -4639,7 +4676,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
 
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  Up/Down navegar · Enter selecionar · Esc cancelar",
+                format!("  {}", rust_i18n::t!("tui.auth.nav.list")),
                 Style::default().fg(theme().text_secondary),
             )));
 
@@ -4652,7 +4689,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let after: String = input.chars().skip(*cursor + 1).collect();
             let lines = vec![
                 Line::from(""),
-                Line::from(Span::styled("  E-mail para SSO (ou Enter para pular):", Style::default().fg(theme().text_primary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.email_input.label")),
+                    Style::default().fg(theme().text_primary),
+                )),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("  > ", Style::default().fg(theme().primary_accent)),
@@ -4661,7 +4701,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Span::raw(after),
                 ]),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.enter_esc")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4673,9 +4716,9 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 input.clone()
             };
             let label = match method {
-                AuthMethodChoice::PasteApiKey => "API key (sk-ant-...):",
-                AuthMethodChoice::PasteOpenAiKey => "OpenAI key (sk-...):",
-                _ => "Auth Token (Bearer):",
+                AuthMethodChoice::PasteApiKey => rust_i18n::t!("tui.auth.paste.api_key_label").to_string(),
+                AuthMethodChoice::PasteOpenAiKey => rust_i18n::t!("tui.auth.paste.openai_key_label").to_string(),
+                _ => rust_i18n::t!("tui.auth.paste.token_label").to_string(),
             };
             let lines = vec![
                 Line::from(""),
@@ -4686,7 +4729,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Style::default().fg(theme().primary_accent),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Enter confirmar · Esc voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.enter_esc")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4699,14 +4745,23 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  {spin} Aguardando callback OAuth na porta {port}..."),
+                    format!(
+                        "  {spin} {}",
+                        rust_i18n::t!("tui.auth.browser.waiting", port = port.to_string())
+                    ),
                     Style::default().fg(theme().thinking).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  URL (abra manualmente se o browser nao abrir):", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.browser.url_label")),
+                    Style::default().fg(theme().text_secondary),
+                )),
                 Line::from(Span::styled(short_url, Style::default().fg(theme().info))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc cancelar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.nav.esc_cancel")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4715,12 +4770,15 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  Salvar metodo 3P e definir {env_var}=1?"),
+                    format!(
+                        "  {}",
+                        rust_i18n::t!("tui.auth.confirm3p.title", env_var = env_var.to_string())
+                    ),
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  Apos confirmar, adicione ao shell RC:"),
+                    format!("  {}", rust_i18n::t!("tui.auth.confirm3p.shell_rc")),
                     Style::default().fg(theme().text_secondary),
                 )),
                 Line::from(Span::styled(
@@ -4729,7 +4787,7 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Y/Enter confirmar · N/Esc voltar",
+                    format!("  {}", rust_i18n::t!("tui.auth.confirm3p.hint")),
                     Style::default().fg(theme().text_secondary),
                 )),
             ];
@@ -4744,7 +4802,10 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
                     Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para fechar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.done.close_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -4754,13 +4815,16 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  \u{2717} Erro na autenticacao",
+                    format!("  \u{2717} {}", rust_i18n::t!("tui.auth.failed.title")),
                     Style::default().fg(theme().error).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(short, Style::default().fg(theme().warn))),
                 Line::from(""),
-                Line::from(Span::styled("  Esc/Enter para voltar", Style::default().fg(theme().text_secondary))),
+                Line::from(Span::styled(
+                    format!("  {}", rust_i18n::t!("tui.auth.failed.back_hint")),
+                    Style::default().fg(theme().text_secondary),
+                )),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }

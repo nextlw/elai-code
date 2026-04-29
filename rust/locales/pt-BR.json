@@ -215,6 +215,95 @@
         "tokens_out": "out",
         "cost_estimate": "Custo est."
       }
+    },
+    "wizard": {
+      "title": "Setup  [%{step}/%{total}]",
+      "welcome": {
+        "title": "Bem-vindo ao Elai Code!",
+        "intro": "Este assistente vai configurar:",
+        "bullet_model": "Modelo de IA padrão",
+        "bullet_permissions": "Modo de permissões",
+        "bullet_defaults": "Preferências opcionais",
+        "auth_hint": "Se ainda não tem auth, use `elai login` após o setup.",
+        "start_hint": "Enter para começar  ·  Esc para cancelar"
+      },
+      "model": {
+        "title": "Escolha o modelo padrão:",
+        "recommended": "(recommended)",
+        "fallback": "(fallback)"
+      },
+      "permissions": {
+        "title": "Modo de permissões:",
+        "read_only_desc": "Apenas leitura — sem alterações",
+        "workspace_write_desc": "Workspace write — escreve no projeto",
+        "full_access_desc": "Full access — power users (recomendado)"
+      },
+      "defaults": {
+        "title": "Preferências opcionais:",
+        "label_auto_update": "Auto-update",
+        "label_telemetry": "Telemetry  ",
+        "label_indexing": "Indexing   ",
+        "hint": "Tab/↑↓ navegar  ·  Space alternar  ·  Enter próximo  ·  Esc voltar"
+      },
+      "done": {
+        "title": "Configuração concluída!",
+        "label_model": "Modelo",
+        "label_permissions": "Permissões",
+        "label_auto_update": "Auto-update",
+        "label_telemetry": "Telemetry",
+        "label_indexing": "Indexing",
+        "start_hint": "Enter para fechar e iniciar"
+      },
+      "nav": {
+        "up_down_enter_esc": "↑/↓ navegar  ·  Enter confirmar  ·  Esc voltar"
+      },
+      "state": {
+        "on": "on",
+        "off": "off"
+      }
+    },
+    "auth": {
+      "title": "Authentication",
+      "claude_code_detected": "Credenciais do Claude Code detectadas — pressione Enter em 'Import' para usá-las",
+      "nav": {
+        "list": "↑/↓ navegar · Enter selecionar · Esc cancelar",
+        "enter_esc": "Enter confirmar · Esc voltar",
+        "esc_cancel": "Esc cancelar"
+      },
+      "email_input": {
+        "label": "E-mail para SSO (ou Enter para pular):"
+      },
+      "paste": {
+        "api_key_label": "API key (sk-ant-...):",
+        "openai_key_label": "OpenAI key (sk-...):",
+        "token_label": "Auth Token (Bearer):"
+      },
+      "browser": {
+        "waiting": "Aguardando callback OAuth na porta %{port}...",
+        "url_label": "URL (abra manualmente se o browser não abrir):"
+      },
+      "confirm3p": {
+        "title": "Salvar método 3P e definir %{env_var}=1?",
+        "shell_rc": "Após confirmar, adicione ao shell RC:",
+        "hint": "Y/Enter confirmar · N/Esc voltar"
+      },
+      "done": {
+        "close_hint": "Esc/Enter para fechar"
+      },
+      "failed": {
+        "title": "Erro na autenticação",
+        "back_hint": "Esc/Enter para voltar"
+      }
+    },
+    "setup": {
+      "title": "Configurar API Key",
+      "provider_question": "Escolha seu provedor de IA:",
+      "provider_anthropic_note": "(Claude opus / sonnet / haiku)",
+      "provider_openai_note": "(gpt-4o, gpt-4o-mini, o3...)",
+      "provider_both": "Ambos",
+      "field_label": "%{provider} API key:",
+      "nav_select": "↑/↓ navegar · Enter confirmar",
+      "nav_confirm": "Enter confirmar · Esc cancelar"
     }
   }
 }
