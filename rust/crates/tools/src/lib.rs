@@ -2938,22 +2938,8 @@ fn dr_activate(key: &str) -> Result<String, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    // 1. Verifica se o serviço está no ar
-    let health_url = format!("{}/health", base);
-    let resp = client
-        .get(&health_url)
-        .send()
-        .map_err(|e| format!("Serviço inacessível: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Serviço retornou HTTP {}. Verifique se o Railway está rodando.",
-            resp.status()
-        ));
-    }
-
-    // 2. Valida a key contra um endpoint autenticado (/v1/models é público,
-    //    então usamos um POST mínimo para checar auth real).
+    // Valida a key contra o endpoint autenticado com uma request mínima.
+    // 401/403 = key errada; qualquer outra resposta = auth OK (serviço up).
     let test_url = format!("{}/v1/chat/completions", base);
     let test_body = serde_json::json!({
         "model": "jina-deepsearch-v1",
@@ -2967,7 +2953,7 @@ fn dr_activate(key: &str) -> Result<String, String> {
         .header("Authorization", format!("Bearer {}", key))
         .json(&test_body)
         .send()
-        .map_err(|e| format!("Teste de autenticação falhou: {}", e))?;
+        .map_err(|e| format!("Serviço inacessível ({}): {}", base, e))?;
 
     let status = auth_resp.status().as_u16();
     if status == 401 || status == 403 {
