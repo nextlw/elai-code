@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 // ─── Binary extensions to skip ────────────────────────────────────────────────
 
 const BINARY_EXTENSIONS: &[&str] = &[
-    ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".tar", ".gz", ".lock",
+    ".png", ".jpg", ".jpeg", ".gif", ".zip", ".tar", ".gz", ".lock",
 ];
 
 // ─── IgnoreRules ──────────────────────────────────────────────────────────────
