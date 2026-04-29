@@ -1472,11 +1472,11 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         }
 
         // History
-        (KeyModifiers::NONE, KeyCode::Up) => {
+        (KeyModifiers::SHIFT, KeyCode::Up) => {
             app.history_up();
             TuiAction::None
         }
-        (KeyModifiers::NONE, KeyCode::Down) => {
+        (KeyModifiers::SHIFT, KeyCode::Down) => {
             app.history_down();
             TuiAction::None
         }
