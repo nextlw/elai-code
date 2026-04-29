@@ -2123,6 +2123,7 @@ fn run_tui_repl(
                     if let Ok(handle) = resolve_session_reference(&session_id) {
                         if let Ok(loaded) = Session::load_from_path(&handle.path) {
                             let msg_count = loaded.messages.len();
+                            sync_session_to_app_chat(&loaded, &mut app);
                             *session.lock().unwrap() = loaded;
                             app.push_chat(tui::ChatEntry::SystemNote(format!(
                                 "✅ Sessão {session_id} retomada ({msg_count} mensagens)"
