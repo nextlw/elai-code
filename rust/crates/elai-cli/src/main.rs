@@ -2288,6 +2288,7 @@ fn handle_tui_slash_command(
                 if let Ok(handle) = resolve_session_reference(session_id) {
                     if let Ok(loaded) = Session::load_from_path(&handle.path) {
                         let msg_count = loaded.messages.len();
+                        sync_session_to_app_chat(&loaded, app);
                         *session.lock().unwrap() = loaded;
                         app.push_chat(tui::ChatEntry::SystemNote(
                             rust_i18n::t!(
@@ -6698,6 +6699,89 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
 
 fn print_help() {
     let _ = print_help_to(&mut io::stdout());
+}
+
+fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
+    use std::collections::HashMap;
+
+    app.chat.clear();
+
+    // Pre-build tool_use_id → is_error map from all ToolResult blocks.
+    let mut tool_statuses: HashMap<&str, bool> = HashMap::new();
+    for msg in &session.messages {
+        for block in &msg.blocks {
+            if let runtime::ContentBlock::ToolResult { tool_use_id, is_error, .. } = block {
+                tool_statuses.insert(tool_use_id.as_str(), *is_error);
+            }
+        }
+    }
+
+    for msg in &session.messages {
+        match msg.role {
+            runtime::MessageRole::System => {}
+            runtime::MessageRole::User => {
+                let text: String = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| {
+                        if let runtime::ContentBlock::Text { text } = b {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    app.push_chat(tui::ChatEntry::UserMessage(text));
+                }
+            }
+            runtime::MessageRole::Assistant => {
+                let text: String = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| {
+                        if let runtime::ContentBlock::Text { text } = b {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    app.push_chat(tui::ChatEntry::AssistantText(text));
+                }
+
+                let items: Vec<tui::ToolBatchItem> = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| {
+                        if let runtime::ContentBlock::ToolUse { id, name, input } = b {
+                            let status = match tool_statuses.get(id.as_str()) {
+                                Some(true) => tui::ToolItemStatus::Err,
+                                _ => tui::ToolItemStatus::Ok,
+                            };
+                            Some(tui::ToolBatchItem {
+                                name: name.clone(),
+                                input_summary: tool_input_one_line(name, input),
+                                status,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !items.is_empty() {
+                    app.push_chat(tui::ChatEntry::ToolBatchEntry { items, closed: true });
+                }
+            }
+            runtime::MessageRole::Tool => {}
+        }
+    }
+
+    app.chat_scroll = usize::MAX;
 }
 
 #[cfg(test)]
