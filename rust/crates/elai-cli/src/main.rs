@@ -2729,18 +2729,21 @@ fn handle_tui_slash_command(
                 app.push_chat(tui::ChatEntry::SystemNote(
                     "🔍 Testando conexão com o serviço DeepResearch...".to_string(),
                 ));
-            } else {
-                let status = if std::env::var("DEEP_RESEARCH_API_KEY").is_ok() {
+            } else if std::env::var("DEEP_RESEARCH_API_KEY").is_ok() {
+                app.push_chat(tui::ChatEntry::SystemNote(
                     "✅ DeepResearch está ativa.\n\
                      Uso: peça ao modelo para pesquisar algo e ele usará a tool automaticamente.\n\
                      Exemplo: \"Pesquise sobre os últimos avanços em modelos de linguagem\""
-                } else {
-                    "⚠️  DeepResearch não está ativada.\n\
-                     Para ativar: /deepresearch <sua-api-key>\n\n\
-                     Não tem a key? Solicite acesso enviando email para adm@nexcode.live\n\
-                     (Custo do serviço: $99)"
-                };
-                app.push_chat(tui::ChatEntry::SystemNote(status.to_string()));
+                        .to_string(),
+                ));
+            } else {
+                // Não ativado: abre modal pra colar a key (mascarado).
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "⚠️  DeepResearch não está ativada. Cole sua API key no modal.\n\
+                     Não tem a key? Solicite acesso em adm@nexcode.live (custo: $99)"
+                        .to_string(),
+                ));
+                app.open_deepresearch_key_input();
             }
         }
         "stats" => {

@@ -38,10 +38,11 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file, write_file,
-    ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock, ConversationMessage,
-    ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode, PermissionPolicy,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file, with_task_default,
+    write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock,
+    ConversationMessage, ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode,
+    PermissionPolicy, ProgressReporter, RuntimeError, Session, TaskType, TokenUsage, ToolError,
+    ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -2885,6 +2886,19 @@ fn default_dr_effort() -> String {
 
 const DR_BASE_URL: &str = "https://elai-deepresearch-rs-production.up.railway.app";
 
+/// Pega os últimos `max` caracteres de `s` em uma única linha (newlines viram espaço).
+fn dr_tail(s: &str, max: usize) -> String {
+    let cleaned: String = s.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
+    let trimmed = cleaned.trim();
+    let count = trimmed.chars().count();
+    if count <= max {
+        trimmed.to_string()
+    } else {
+        let skip = count - max;
+        format!("…{}", trimmed.chars().skip(skip).collect::<String>())
+    }
+}
+
 fn dr_base_url() -> String {
     let candidates = [
         std::env::var("DEEP_RESEARCH_URL").ok(),
@@ -2929,27 +2943,35 @@ fn run_deep_research(input: DeepResearchInput) -> Result<String, String> {
     dr_research(&query, &api_key, &input.reasoning_effort, input.language_code.as_deref())
 }
 
+fn dr_client(timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .use_native_tls()
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 fn dr_activate(key: &str) -> Result<String, String> {
     let base_url = dr_base_url();
     let base = base_url.trim_end_matches('/');
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = dr_client(30)?;
 
-    // Valida a key contra o endpoint autenticado com uma request mínima.
-    // 401/403 = key errada; qualquer outra resposta = auth OK (serviço up).
+    // Testa o caminho real (SSE streaming) com request mínimo.
+    // 401/403 = key errada; qualquer outra resposta = auth OK.
+    // Lê o primeiro byte do stream pra confirmar que o SSE funciona,
+    // depois fecha a conexão (não consome a pesquisa completa).
     let test_url = format!("{}/v1/chat/completions", base);
     let test_body = serde_json::json!({
         "model": "jina-deepsearch-v1",
         "messages": [{"role": "user", "content": "ping"}],
-        "stream": false,
+        "stream": true,
         "budget_tokens": 1
     });
     let auth_resp = client
         .post(&test_url)
         .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
         .header("Authorization", format!("Bearer {}", key))
         .json(&test_body)
         .send()
@@ -2963,6 +2985,25 @@ fn dr_activate(key: &str) -> Result<String, String> {
             status
         ));
     }
+    if !auth_resp.status().is_success() {
+        let s = auth_resp.status();
+        let body = auth_resp.text().unwrap_or_default();
+        return Err(format!("Serviço retornou HTTP {}: {}", s, body));
+    }
+
+    // Confirma que o stream SSE realmente entrega dados (não buffer da response inteira).
+    use std::io::{BufRead, BufReader};
+    let mut reader = BufReader::new(auth_resp);
+    let mut first_line = String::new();
+    let n = reader
+        .read_line(&mut first_line)
+        .map_err(|e| format!("Falha ao ler stream SSE: {}", e))?;
+
+    if n == 0 {
+        return Err("Conexão SSE fechou sem dados — stream não funcionou.".to_string());
+    }
+    // Conexão fica aberta com o servidor; drop encerra do lado do cliente.
+    drop(reader);
 
     // Auth passou (200, 400, 422 ou outro — qualquer coisa que não seja 401/403)
     dr_save_env_key("DEEP_RESEARCH_API_KEY", key)?;
@@ -3011,9 +3052,32 @@ fn dr_research(
     effort: &str,
     language: Option<&str>,
 ) -> Result<String, String> {
+    let api_key = api_key.to_string();
+    let effort = effort.to_string();
+    let language = language.map(str::to_string);
+    let query_owned = query.to_string();
+
+    with_task_default(
+        TaskType::LocalWorkflow,
+        format!("DeepResearch: {}", query),
+        "DeepResearch",
+        None,
+        |reporter| dr_run_with_reporter(&query_owned, &api_key, &effort, language.as_deref(), reporter),
+    )
+}
+
+fn dr_run_with_reporter(
+    query: &str,
+    api_key: &str,
+    effort: &str,
+    language: Option<&str>,
+    reporter: &runtime::TaskProgressReporter,
+) -> Result<String, String> {
     let base_url = dr_base_url();
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let lang = language.unwrap_or("pt-BR");
+
+    reporter.report("🔍 Conectando ao serviço…");
 
     let body = serde_json::json!({
         "model": "jina-deepsearch-v1",
@@ -3023,10 +3087,7 @@ fn dr_research(
         "language_code": lang
     });
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = dr_client(300)?;
 
     let response = client
         .post(&url)
@@ -3043,14 +3104,22 @@ fn dr_research(
         return Err(format!("HTTP {}: {}", status, text));
     }
 
+    reporter.report("📡 Stream aberto, recebendo eventos…");
+
     use std::io::{BufRead, BufReader};
 
     let reader = BufReader::new(response);
     let mut thinking = String::new();
     let mut answer = String::new();
+    let mut error_msg: Option<String> = None;
     let mut visited_urls: Vec<String> = Vec::new();
     let mut citations: Vec<(String, String)> = Vec::new();
     let mut in_thinking = false;
+    let mut answer_started = false;
+
+    // Throttle de thinking pro reporter: emite no máximo a cada ~250ms.
+    let mut last_think_emit = std::time::Instant::now();
+    let mut think_buffer = String::new();
 
     for line_result in reader.lines() {
         let line = line_result.map_err(|e| e.to_string())?;
@@ -3076,7 +3145,24 @@ fn dr_research(
         if let Some(visited_url) = delta["url"].as_str() {
             if !visited_url.is_empty() && !visited_urls.contains(&visited_url.to_string()) {
                 visited_urls.push(visited_url.to_string());
-                eprint!("\r[DeepResearch] {} URLs visitadas...", visited_urls.len());
+                let host = visited_url
+                    .split("://")
+                    .nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .unwrap_or(visited_url);
+                reporter.report(&format!("🌐 [{}] {}", visited_urls.len(), host));
+            }
+        }
+
+        if let Some(q) = delta["query"].as_str() {
+            if !q.is_empty() {
+                let trimmed = if q.chars().count() > 80 {
+                    let s: String = q.chars().take(77).collect();
+                    format!("{}…", s)
+                } else {
+                    q.to_string()
+                };
+                reporter.report(&format!("🔎 Query: {}", trimmed));
             }
         }
 
@@ -3086,11 +3172,28 @@ fn dr_research(
                     in_thinking = true;
                 } else if content.contains("</think>") {
                     in_thinking = false;
+                    if !think_buffer.is_empty() {
+                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 90)));
+                        think_buffer.clear();
+                    }
                 } else if in_thinking && !content.is_empty() {
                     thinking.push_str(content);
+                    think_buffer.push_str(content);
+                    if last_think_emit.elapsed().as_millis() > 250 && !think_buffer.is_empty() {
+                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 90)));
+                        think_buffer.clear();
+                        last_think_emit = std::time::Instant::now();
+                    }
                 }
             }
             "text" => {
+                if !answer_started && !content.is_empty() {
+                    answer_started = true;
+                    reporter.report(&format!(
+                        "✍️  Compilando resposta… ({} URLs lidas)",
+                        visited_urls.len()
+                    ));
+                }
                 answer.push_str(content);
                 if let Some(anns) = delta["annotations"].as_array() {
                     for ann in anns {
@@ -3105,10 +3208,16 @@ fn dr_research(
                     }
                 }
             }
+            "error" => {
+                if !content.is_empty() {
+                    error_msg = Some(content.to_string());
+                    reporter.report(&format!("❌ Erro: {}", dr_tail(content, 80)));
+                }
+            }
             _ => {}
         }
 
-        if finish_reason == Some("stop") {
+        if finish_reason == Some("stop") || finish_reason == Some("error") {
             if let Some(urls) = chunk["visitedURLs"].as_array() {
                 for u in urls {
                     if let Some(s) = u.as_str() {
@@ -3120,7 +3229,21 @@ fn dr_research(
             }
         }
     }
-    eprintln!();
+
+    reporter.report(&format!(
+        "✅ Concluído · {} URLs · {} citações",
+        visited_urls.len(),
+        citations.len()
+    ));
+
+    // Se o serviço retornou erro explícito, propaga.
+    if let Some(err) = error_msg {
+        return Err(format!(
+            "Pesquisa falhou: {}\n\nURLs visitadas antes do erro: {}",
+            err,
+            visited_urls.len()
+        ));
+    }
 
     let mut out = format!("=== Deep Research: {} ===\n\n", query);
 
@@ -3138,9 +3261,20 @@ fn dr_research(
         out.push('\n');
     }
 
-    out.push_str("[Resposta da Pesquisa]\n");
-    out.push_str(if answer.is_empty() { "(sem resposta)" } else { &answer });
-    out.push('\n');
+    if answer.is_empty() {
+        // Resposta vazia: sinaliza claramente para o modelo que o serviço não
+        // produziu síntese, mas as informações coletadas no raciocínio podem
+        // ser úteis. Sem isso o modelo descarta o resultado e busca por outros meios.
+        out.push_str("[Resposta da Pesquisa]\n");
+        out.push_str(
+            "⚠️  O agente não produziu uma síntese final. \
+             Use o raciocínio acima e as URLs visitadas como fonte primária.\n",
+        );
+    } else {
+        out.push_str("[Resposta da Pesquisa]\n");
+        out.push_str(&answer);
+        out.push('\n');
+    }
 
     if !citations.is_empty() {
         out.push_str("\n[Citações]\n");

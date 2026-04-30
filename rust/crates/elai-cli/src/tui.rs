@@ -265,6 +265,11 @@ pub enum OverlayKind {
         step: WizardStep,
         state: WizardState,
     },
+    /// Modal para colar a API key do DeepResearch (input mascarado).
+    DeepResearchKeyInput {
+        input: String,
+        cursor: usize,
+    },
 }
 
 /// Which authentication method the user selected in the AuthPicker.
@@ -984,6 +989,13 @@ impl UiApp {
 
     pub fn open_uninstall_confirm(&mut self) {
         self.overlay = Some(OverlayKind::UninstallConfirm);
+    }
+
+    pub fn open_deepresearch_key_input(&mut self) {
+        self.overlay = Some(OverlayKind::DeepResearchKeyInput {
+            input: String::new(),
+            cursor: 0,
+        });
     }
 }
 
@@ -2074,6 +2086,74 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
 
         Some(OverlayKind::FirstRunWizard { step, state }) => {
             handle_first_run_wizard_key(app, key, step, state)
+        }
+
+        Some(OverlayKind::DeepResearchKeyInput { mut input, mut cursor }) => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let trimmed = input.trim().to_string();
+                    if trimmed.is_empty() {
+                        app.overlay =
+                            Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                        TuiAction::None
+                    } else {
+                        app.overlay = None;
+                        TuiAction::SlashCommand(format!("/deepresearch {}", trimmed))
+                    }
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace)
+                | (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                        let idx = input
+                            .char_indices()
+                            .nth(cursor)
+                            .map(|(i, _)| i)
+                            .unwrap_or(input.len());
+                        let next = input
+                            .char_indices()
+                            .nth(cursor + 1)
+                            .map(|(i, _)| i)
+                            .unwrap_or(input.len());
+                        input.replace_range(idx..next, "");
+                    }
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Left) => {
+                    cursor = cursor.saturating_sub(1);
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    TuiAction::None
+                }
+                (KeyModifiers::NONE, KeyCode::Right) => {
+                    if cursor < input.chars().count() {
+                        cursor += 1;
+                    }
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    TuiAction::None
+                }
+                (mods, KeyCode::Char(c))
+                    if !mods.contains(KeyModifiers::CONTROL) && !mods.contains(KeyModifiers::ALT) =>
+                {
+                    let idx = input
+                        .char_indices()
+                        .nth(cursor)
+                        .map(|(i, _)| i)
+                        .unwrap_or(input.len());
+                    input.insert(idx, c);
+                    cursor += 1;
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    TuiAction::None
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    TuiAction::None
+                }
+            }
         }
 
         None => TuiAction::None,
@@ -4278,6 +4358,9 @@ fn draw_overlay(
         OverlayKind::FirstRunWizard { step, state } => {
             draw_first_run_wizard(frame, area, step, state);
         }
+        OverlayKind::DeepResearchKeyInput { input, cursor } => {
+            draw_deepresearch_key_input(frame, area, input, *cursor);
+        }
         OverlayKind::FileMentionPicker {
             items,
             filter,
@@ -4650,6 +4733,72 @@ fn draw_uninstall_confirm(frame: &mut ratatui::Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             format!("  {}", rust_i18n::t!("tui.uninstall.confirm_hint")),
+            Style::default().fg(theme().text_secondary),
+        )),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_deepresearch_key_input(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    input: &str,
+    cursor: usize,
+) {
+    let width = 64u16.min(area.width.saturating_sub(4));
+    let height = 11u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(height)) / 2 + area.y;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Ativar DeepResearch ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme().primary_accent));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let n_chars = input.chars().count();
+    let masked: String = "\u{2022}".repeat(n_chars);
+
+    // Reconstrói a linha do input com cursor visual em bloco invertido.
+    let before: String = masked.chars().take(cursor).collect();
+    let cur_char = if cursor < n_chars { "\u{2022}" } else { " " };
+    let after: String = if cursor < n_chars {
+        masked.chars().skip(cursor + 1).collect()
+    } else {
+        String::new()
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Cole sua API key do serviço de deep research:",
+            Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  > ", Style::default().fg(theme().primary_accent)),
+            Span::raw(before),
+            Span::styled(
+                cur_char.to_string(),
+                Style::default()
+                    .fg(theme().accent_on_primary_bg)
+                    .bg(theme().primary_accent),
+            ),
+            Span::raw(after),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {} caracteres", n_chars),
+            Style::default().fg(theme().text_secondary),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter: salvar e testar  ·  Esc: cancelar",
             Style::default().fg(theme().text_secondary),
         )),
     ];

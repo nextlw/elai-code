@@ -9,7 +9,7 @@ publish.workspace = true
 api = { path = "../api" }
 plugins = { path = "../plugins" }
 runtime = { path = "../runtime" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "native-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 toml = "0.8"
