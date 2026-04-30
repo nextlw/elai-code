@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::types::ProviderCapability;
 use crate::error::ApiError;
-use crate::providers::{elai_provider, openai_compat};
+use crate::providers::{codex_bridge, elai_provider, openai_compat};
 use crate::types::{
     ContentBlockDelta, MessageResponse, MessageRequest, OutputContentBlock, StreamEvent, Usage,
 };
@@ -113,6 +113,53 @@ impl UnifiedProvider for OpenAiUnifiedAdapter {
     }
 }
 
+/// Adapter wrapping `CodexBridgeClient` so orchestrator can delegate OpenAI
+/// requests through local `codex exec` when using ChatGPT auth.
+pub struct CodexBridgeUnifiedAdapter {
+    client: codex_bridge::CodexBridgeClient,
+    provider_id: String,
+    capabilities: HashSet<ProviderCapability>,
+}
+
+impl CodexBridgeUnifiedAdapter {
+    #[must_use]
+    pub fn new(client: codex_bridge::CodexBridgeClient, id: &str) -> Self {
+        let mut caps = HashSet::new();
+        caps.insert(ProviderCapability::Streaming);
+        Self {
+            client,
+            provider_id: id.to_string(),
+            capabilities: caps,
+        }
+    }
+}
+
+#[async_trait]
+impl UnifiedProvider for CodexBridgeUnifiedAdapter {
+    fn id(&self) -> &str {
+        &self.provider_id
+    }
+
+    fn capabilities(&self) -> &HashSet<ProviderCapability> {
+        &self.capabilities
+    }
+
+    async fn send_message(&self, request: &MessageRequest) -> Result<MessageResponse, ApiError> {
+        self.client.send_message(request).await
+    }
+
+    async fn stream_message(&self, request: &MessageRequest) -> Result<MessageResponse, ApiError> {
+        let mut stream_req = request.clone();
+        stream_req.stream = true;
+        let mut stream = self.client.stream_message(&stream_req).await?;
+        collect_codex_bridge_stream(&mut stream).await
+    }
+
+    async fn health_check(&self) -> Result<(), ApiError> {
+        Ok(())
+    }
+}
+
 fn empty_response() -> MessageResponse {
     MessageResponse {
         id: String::new(),
@@ -144,6 +191,16 @@ async fn collect_elai_stream(
 
 async fn collect_openai_stream(
     stream: &mut openai_compat::MessageStream,
+) -> Result<MessageResponse, ApiError> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next_event().await? {
+        events.push(event);
+    }
+    collect_stream_events(events)
+}
+
+async fn collect_codex_bridge_stream(
+    stream: &mut codex_bridge::MessageStream,
 ) -> Result<MessageResponse, ApiError> {
     let mut events = Vec::new();
     while let Some(event) = stream.next_event().await? {

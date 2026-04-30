@@ -88,9 +88,13 @@ pub use oauth::{
 pub use secure_storage::{auto_store, FileStore, KeychainStore, SecretStore};
 
 pub mod claude_code_compat;
+pub mod codex_compat;
 pub use claude_code_compat::{
     detect_claude_code_credentials, import_claude_code_credentials,
     ClaudeCodeCredSource, ClaudeCodeCredentialsSnapshot,
+};
+pub use codex_compat::{
+    detect_codex_credentials, import_codex_credentials, CodexCredSource, CodexCredentialsSnapshot,
 };
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,

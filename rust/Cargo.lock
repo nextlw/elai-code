@@ -142,6 +142,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
 ]
 
@@ -1145,6 +1146,7 @@ dependencies = [
  "plugins",
  "pulldown-cmark",
  "ratatui",
+ "ratatui-cheese",
  "reqwest",
  "runtime",
  "rust-i18n",
@@ -3386,6 +3388,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-cheese"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e953118268177f5871053b7123a7053c6bafc445d0e9eaa2e43e7ea5994fae7b"
+dependencies = [
+ "ratatui",
+ "unicode-width",
+]
+
+[[package]]
 name = "ratatui-core"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3680,6 +3692,7 @@ dependencies = [
 name = "runtime"
 version = "0.9.1"
 dependencies = [
+ "base64 0.22.1",
  "code_index",
  "dirs 6.0.0",
  "filetime",

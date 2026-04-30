@@ -132,7 +132,8 @@ impl From<&runtime::AuthMethod> for AuthSource {
             runtime::AuthMethod::Bedrock
             | runtime::AuthMethod::Vertex
             | runtime::AuthMethod::Foundry
-            | runtime::AuthMethod::OpenAiApiKey { .. } => Self::None,
+            | runtime::AuthMethod::OpenAiApiKey { .. }
+            | runtime::AuthMethod::OpenAiCodexOAuth { .. } => Self::None,
         }
     }
 }
@@ -537,11 +538,24 @@ pub fn resolve_saved_oauth_token(config: &OAuthConfig) -> Result<Option<OAuthTok
 }
 
 pub fn has_auth_from_env_or_saved() -> Result<bool, ApiError> {
+    let saved_anthropic_auth = runtime::load_auth_method()
+        .map_err(ApiError::from)?
+        .is_some_and(|method| {
+            matches!(
+                method,
+                runtime::AuthMethod::ConsoleApiKey { .. }
+                    | runtime::AuthMethod::AnthropicAuthToken { .. }
+                    | runtime::AuthMethod::ClaudeAiOAuth { .. }
+                    | runtime::AuthMethod::Bedrock
+                    | runtime::AuthMethod::Vertex
+                    | runtime::AuthMethod::Foundry
+            )
+        });
     Ok(read_env_non_empty("ANTHROPIC_API_KEY")?.is_some()
         || read_env_non_empty("ANTHROPIC_AUTH_TOKEN")?.is_some()
         || read_env_non_empty("CLAUDE_CODE_OAUTH_TOKEN")?.is_some()
         || load_saved_oauth_token()?.is_some()
-        || runtime::load_auth_method().map_err(ApiError::from)?.is_some())
+        || saved_anthropic_auth)
 }
 
 pub fn resolve_startup_auth_source<F>(load_oauth_config: F) -> Result<AuthSource, ApiError>
@@ -605,7 +619,8 @@ where
         runtime::AuthMethod::Bedrock
         | runtime::AuthMethod::Vertex
         | runtime::AuthMethod::Foundry
-        | runtime::AuthMethod::OpenAiApiKey { .. } => Ok(AuthSource::None),
+        | runtime::AuthMethod::OpenAiApiKey { .. }
+        | runtime::AuthMethod::OpenAiCodexOAuth { .. } => Ok(AuthSource::None),
         runtime::AuthMethod::ClaudeAiOAuth {
             token_set,
             subscription,
@@ -930,7 +945,7 @@ mod tests {
     use runtime::{clear_oauth_credentials, save_oauth_credentials, OAuthConfig};
 
     use super::{
-        now_unix_timestamp, oauth_token_is_expired, resolve_saved_oauth_token,
+        has_auth_from_env_or_saved, now_unix_timestamp, oauth_token_is_expired, resolve_saved_oauth_token,
         resolve_startup_auth_source, AuthSource, ElaiApiClient, OAuthTokenSet,
     };
     use crate::types::{ContentBlockDelta, MessageRequest};
@@ -1364,6 +1379,61 @@ mod tests {
             let auth = AuthSource::from(&method);
             assert_eq!(auth, AuthSource::None, "expected None for {method:?}");
         }
+    }
+
+    #[test]
+    fn has_auth_from_env_or_saved_ignores_openai_saved_methods() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::env::set_var("ELAI_CONFIG_HOME", &config_home);
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        clear_oauth_credentials().expect("clear oauth credentials");
+        runtime::save_auth_method(&runtime::AuthMethod::OpenAiCodexOAuth {
+            token_set: runtime::OAuthTokenSet {
+                access_token: "codex-access-token".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: vec![],
+            },
+            last_refresh: None,
+        })
+        .expect("save openai codex auth method");
+
+        assert!(
+            !has_auth_from_env_or_saved().expect("check auth presence"),
+            "openai/codex auth não deve contar como auth Anthropic"
+        );
+
+        runtime::clear_auth_method().expect("clear auth");
+        std::env::remove_var("ELAI_CONFIG_HOME");
+        cleanup_temp_config_home(&config_home);
+    }
+
+    #[test]
+    fn has_auth_from_env_or_saved_accepts_saved_anthropic_methods() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        std::env::set_var("ELAI_CONFIG_HOME", &config_home);
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        clear_oauth_credentials().expect("clear oauth credentials");
+        runtime::save_auth_method(&runtime::AuthMethod::ConsoleApiKey {
+            api_key: "sk-ant-test".to_string(),
+            origin: runtime::ApiKeyOrigin::Pasted,
+        })
+        .expect("save anthropic auth method");
+
+        assert!(
+            has_auth_from_env_or_saved().expect("check auth presence"),
+            "auth Anthropic salvo deve ser detectado"
+        );
+
+        runtime::clear_auth_method().expect("clear auth");
+        std::env::remove_var("ELAI_CONFIG_HOME");
+        cleanup_temp_config_home(&config_home);
     }
 
     #[test]

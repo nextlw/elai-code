@@ -5,6 +5,7 @@ use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
 pub mod claude_code_spoof;
+pub mod codex_bridge;
 pub mod elai_provider;
 pub mod openai_compat;
 
@@ -352,10 +353,22 @@ pub fn suggested_default_model() -> String {
         return "claude-haiku-4-5-20251001".to_string();
     }
     if openai_compat::has_openai_credentials() {
+        // Allow explicit override first.
         return std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+            .unwrap_or_else(|| {
+                // Align with Codex docs: for ChatGPT-based OpenAI auth, prefer GPT-5.5.
+                // API-key auth keeps a conservative default until user opts in.
+                if matches!(
+                    runtime::load_auth_method(),
+                    Ok(Some(runtime::AuthMethod::OpenAiCodexOAuth { .. }))
+                ) {
+                    "gpt-5.5".to_string()
+                } else {
+                    "gpt-4o-mini".to_string()
+                }
+            });
     }
     if openai_compat::has_api_key("XAI_API_KEY") {
         return "grok-3".to_string();
@@ -491,8 +504,16 @@ pub fn resolve_output_config(effort_override: Option<EffortLevel>) -> Option<Out
 mod tests {
     use super::{
         detect_provider_kind, max_tokens_for_model, parse_local_provider_prefix,
-        resolve_model_alias, ProviderKind,
+        resolve_model_alias, suggested_default_model, ProviderKind,
     };
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
 
     #[test]
     fn resolves_grok_aliases() {
@@ -565,5 +586,33 @@ mod tests {
     fn local_models_use_conservative_token_limit() {
         assert_eq!(max_tokens_for_model("ollama:llama3"), 4_096);
         assert_eq!(max_tokens_for_model("lmstudio:qwen"), 4_096);
+    }
+
+    #[test]
+    fn suggested_default_model_prefers_gpt55_for_codex_oauth() {
+        let _guard = env_lock();
+        let config_home = tempfile::tempdir().expect("tmp config");
+        std::env::set_var("ELAI_CONFIG_HOME", config_home.path());
+        std::env::remove_var("ELAI_DEFAULT_OPENAI_MODEL");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
+        runtime::clear_oauth_credentials().expect("clear oauth credentials");
+        runtime::save_auth_method(&runtime::AuthMethod::OpenAiCodexOAuth {
+            token_set: runtime::OAuthTokenSet {
+                access_token: "codex-token".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: vec!["model.request".to_string()],
+            },
+            last_refresh: None,
+        })
+        .expect("save codex auth");
+
+        assert_eq!(suggested_default_model(), "gpt-5.5");
+
+        runtime::clear_auth_method().expect("clear auth");
+        std::env::remove_var("ELAI_CONFIG_HOME");
     }
 }

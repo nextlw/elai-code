@@ -143,15 +143,13 @@ impl OpenAiCompatClient {
         if let Some(api_key) = read_env_non_empty(config.api_key_env)? {
             return Ok(Self::new(api_key, config));
         }
-        // Fallback: para OpenAI, tenta ler `AuthMethod::OpenAiApiKey` salvo em
-        // `~/.config/elai/credentials.json` (gravado pelo AuthPicker da TUI).
-        // xAI hoje não tem variant equivalente — só env var.
+        // Fallback: para OpenAI, tenta ler credencial persistida em
+        // `~/.config/elai/credentials.json` (AuthPicker/imports).
+        // xAI hoje não tem variants equivalentes — só env var.
         if config.provider_name == "OpenAI" {
-            if let Ok(Some(runtime::AuthMethod::OpenAiApiKey { api_key })) =
-                runtime::load_auth_method()
-            {
-                if !api_key.trim().is_empty() {
-                    return Ok(Self::new(api_key, config));
+            if let Ok(Some(method)) = runtime::load_auth_method() {
+                if let Some(secret) = openai_secret_from_auth_method(&method) {
+                    return Ok(Self::new(secret.to_string(), config));
                 }
             }
         }
@@ -955,10 +953,24 @@ pub fn has_openai_credentials() -> bool {
     if has_api_key("OPENAI_API_KEY") {
         return true;
     }
-    matches!(
-        runtime::load_auth_method(),
-        Ok(Some(runtime::AuthMethod::OpenAiApiKey { api_key })) if !api_key.trim().is_empty()
-    )
+    let Ok(Some(method)) = runtime::load_auth_method() else {
+        return false;
+    };
+    openai_secret_from_auth_method(&method).is_some()
+}
+
+fn openai_secret_from_auth_method(method: &runtime::AuthMethod) -> Option<&str> {
+    match method {
+        runtime::AuthMethod::OpenAiApiKey { api_key } if !api_key.trim().is_empty() => {
+            Some(api_key.as_str())
+        }
+        runtime::AuthMethod::OpenAiCodexOAuth { token_set, .. }
+            if !token_set.access_token.trim().is_empty() =>
+        {
+            Some(token_set.access_token.as_str())
+        }
+        _ => None,
+    }
 }
 
 #[must_use]
@@ -1037,7 +1049,8 @@ impl StringExt for String {
 mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        openai_tool_choice, parse_tool_arguments, OpenAiCompatClient, OpenAiCompatConfig,
+        openai_secret_from_auth_method, openai_tool_choice, parse_tool_arguments, OpenAiCompatClient,
+        OpenAiCompatConfig,
     };
     use crate::error::ApiError;
     use crate::types::{
@@ -1185,6 +1198,28 @@ mod tests {
             chat_completions_endpoint("https://api.x.ai/v1/chat/completions"),
             "https://api.x.ai/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn openai_secret_accepts_codex_oauth_and_openai_key() {
+        let method = runtime::AuthMethod::OpenAiCodexOAuth {
+            token_set: runtime::OAuthTokenSet {
+                access_token: "codex-access-token".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: Vec::new(),
+            },
+            last_refresh: None,
+        };
+        assert_eq!(
+            openai_secret_from_auth_method(&method),
+            Some("codex-access-token")
+        );
+
+        let method = runtime::AuthMethod::OpenAiApiKey {
+            api_key: "sk-test".to_string(),
+        };
+        assert_eq!(openai_secret_from_auth_method(&method), Some("sk-test"));
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {

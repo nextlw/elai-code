@@ -41,15 +41,23 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::buffer::Buffer;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-    ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Wrap,
 };
 use ratatui::Terminal;
+use ratatui_cheese::fieldset::{Fieldset, FieldsetFill, FieldsetStyles};
+use ratatui_cheese::help::{Binding as HelpBinding, Help, HelpStyles};
+use ratatui_cheese::list::{
+    List as CheeseList, ListItem as CheeseListItem, ListItemContext as CheeseListItemContext,
+    ListState as CheeseListState,
+};
+use ratatui_cheese::theme::Palette as CheesePalette;
 
 use commands::SlashCategory;
 
@@ -74,6 +82,23 @@ fn theme() -> RatatuiTheme {
     *theme_cache()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[inline]
+fn cheese_palette_from_theme(t: RatatuiTheme) -> CheesePalette {
+    CheesePalette {
+        foreground: t.text_primary,
+        muted: t.text_secondary,
+        faint: t.border_inactive,
+        primary: t.primary_accent,
+        secondary: t.info,
+        surface: t.border_inactive,
+        border: t.border_active,
+        highlight: t.primary_accent,
+        on_highlight: t.accent_on_primary_bg,
+        success: t.success,
+        error: t.error,
+    }
 }
 
 /// Atualiza o cache de tema com as cores resolvidas do ambiente.
@@ -281,6 +306,7 @@ pub enum AuthMethodChoice {
     ClaudeAiOAuth,
     ConsoleOAuth,
     SsoOAuth,
+    CodexOAuth,
     PasteApiKey,
     PasteAuthToken,
     /// API key da OpenAI (sk-... ou sk-proj-...). Salva como
@@ -290,6 +316,7 @@ pub enum AuthMethodChoice {
     UseVertex,
     UseFoundry,
     ImportClaudeCode,
+    ImportCodex,
     LegacyElai,
 }
 
@@ -300,6 +327,7 @@ pub enum AuthStep {
     MethodList {
         selected: usize,
         claude_code_detected: bool,
+        codex_detected: bool,
     },
     /// Collect e-mail (SSO only).
     EmailInput {
@@ -896,30 +924,59 @@ impl UiApp {
         text
     }
 
-    fn filtered_model_list(filter: &str) -> Vec<String> {
-        let all = [
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5-20251001",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4.5",
-            "o1",
-            "o3",
-            "o4-mini",
-            "grok-3",
-            "grok-3-mini",
+    fn active_provider_model_items(&self) -> Vec<String> {
+        let anthropic = vec![
+            "claude-opus-4-7".to_string(),
+            "claude-opus-4-6".to_string(),
+            "claude-sonnet-4-6".to_string(),
+            "claude-haiku-4-5-20251001".to_string(),
         ];
+        let openai = vec![
+            "gpt-4o".to_string(),
+            "gpt-4o-mini".to_string(),
+            "gpt-4.5".to_string(),
+            "o1".to_string(),
+            "o3".to_string(),
+            "o4-mini".to_string(),
+        ];
+        let xai = vec!["grok-3".to_string(), "grok-3-mini".to_string()];
+        if let Ok(Some(method)) = runtime::load_auth_method() {
+            return match method {
+                runtime::AuthMethod::OpenAiApiKey { .. }
+                | runtime::AuthMethod::OpenAiCodexOAuth { .. } => openai,
+                runtime::AuthMethod::ClaudeAiOAuth { .. }
+                | runtime::AuthMethod::ConsoleApiKey { .. }
+                | runtime::AuthMethod::AnthropicAuthToken { .. }
+                | runtime::AuthMethod::Bedrock
+                | runtime::AuthMethod::Vertex
+                | runtime::AuthMethod::Foundry => anthropic,
+            };
+        }
+        if std::env::var_os("OPENAI_API_KEY").is_some() {
+            return openai;
+        }
+        if std::env::var_os("XAI_API_KEY").is_some() {
+            return xai;
+        }
+        if std::env::var_os("ANTHROPIC_API_KEY").is_some()
+            || std::env::var_os("ANTHROPIC_AUTH_TOKEN").is_some()
+        {
+            return anthropic;
+        }
+        anthropic
+    }
+
+    fn filter_model_items(items: &[String], filter: &str) -> Vec<String> {
         let f = filter.to_lowercase();
-        all.iter()
+        items
+            .iter()
             .filter(|m| f.is_empty() || m.to_lowercase().contains(&f))
-            .map(|s| s.to_string())
+            .cloned()
             .collect()
     }
 
     pub fn open_model_picker(&mut self) {
-        let items = Self::filtered_model_list("");
+        let items = self.active_provider_model_items();
         self.overlay = Some(OverlayKind::ModelPicker {
             items,
             filter: String::new(),
@@ -988,11 +1045,12 @@ impl UiApp {
     }
 
     pub fn open_auth_picker(&mut self) {
-        let detected = runtime::detect_claude_code_credentials().is_some();
+        let (claude_detected, codex_detected) = detect_importable_auth_sources();
         self.overlay = Some(OverlayKind::AuthPicker {
             step: AuthStep::MethodList {
                 selected: 0,
-                claude_code_detected: detected,
+                claude_code_detected: claude_detected,
+                codex_detected,
             },
         });
     }
@@ -1601,12 +1659,12 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                     app.overlay = Some(OverlayKind::ModelPicker { items, filter, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Down) => {
-                    let filtered = UiApp::filtered_model_list(&filter);
+                    let filtered = UiApp::filter_model_items(&items, &filter);
                     selected = (selected + 1).min(filtered.len().saturating_sub(1));
                     app.overlay = Some(OverlayKind::ModelPicker { items, filter, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
-                    let filtered = UiApp::filtered_model_list(&filter);
+                    let filtered = UiApp::filter_model_items(&items, &filter);
                     if let Some(model) = filtered.get(selected) {
                         let m = model.clone();
                         app.overlay = None;
@@ -2177,11 +2235,22 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
     }
 }
 
-fn auth_methods_visible(claude_code_detected: bool) -> Vec<(AuthMethodChoice, &'static str)> {
+fn detect_importable_auth_sources() -> (bool, bool) {
+    (
+        runtime::detect_claude_code_credentials().is_some(),
+        runtime::detect_codex_credentials().is_some(),
+    )
+}
+
+fn auth_methods_visible(
+    claude_code_detected: bool,
+    codex_detected: bool,
+) -> Vec<(AuthMethodChoice, &'static str)> {
     let mut methods: Vec<(AuthMethodChoice, &'static str)> = vec![
         (AuthMethodChoice::ClaudeAiOAuth, "Claude.ai OAuth  (Pro/Max)"),
         (AuthMethodChoice::ConsoleOAuth,  "Console OAuth    (cria API key)"),
         (AuthMethodChoice::SsoOAuth,      "SSO OAuth        (claude.ai + SSO)"),
+        (AuthMethodChoice::CodexOAuth,    "Codex/OpenAI OAuth (abre browser via codex login)"),
         (AuthMethodChoice::PasteApiKey,   "Colar API key    (sk-ant-...)"),
         (AuthMethodChoice::PasteAuthToken,"Colar Auth Token (Bearer)"),
         (AuthMethodChoice::PasteOpenAiKey,"Colar OpenAI key (sk-...)"),
@@ -2190,6 +2259,9 @@ fn auth_methods_visible(claude_code_detected: bool) -> Vec<(AuthMethodChoice, &'
         (AuthMethodChoice::UseFoundry,    "Azure Foundry"),
         (AuthMethodChoice::LegacyElai,    "Elai OAuth legacy (elai.dev)"),
     ];
+    if codex_detected {
+        methods.insert(0, (AuthMethodChoice::ImportCodex, "Importar Codex auth.json  [detectado]"));
+    }
     if claude_code_detected {
         methods.insert(0, (AuthMethodChoice::ImportClaudeCode, "Importar Claude Code credentials  [detectado]"));
     }
@@ -2198,8 +2270,12 @@ fn auth_methods_visible(claude_code_detected: bool) -> Vec<(AuthMethodChoice, &'
 
 fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> TuiAction {
     match step {
-        AuthStep::MethodList { selected, claude_code_detected } => {
-            let methods = auth_methods_visible(claude_code_detected);
+        AuthStep::MethodList {
+            selected,
+            claude_code_detected,
+            codex_detected,
+        } => {
+            let methods = auth_methods_visible(claude_code_detected, codex_detected);
             let count = methods.len();
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) => {
@@ -2211,6 +2287,7 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                         step: AuthStep::MethodList {
                             selected: selected.saturating_sub(1),
                             claude_code_detected,
+                            codex_detected,
                         },
                     });
                     TuiAction::None
@@ -2220,6 +2297,7 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                         step: AuthStep::MethodList {
                             selected: (selected + 1).min(count.saturating_sub(1)),
                             claude_code_detected,
+                            codex_detected,
                         },
                     });
                     TuiAction::None
@@ -2253,6 +2331,24 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                                         cancel_flag,
                                     },
                                 });
+                            }
+                        }
+                        AuthMethodChoice::CodexOAuth => {
+                            match crate::auth::login_codex_oauth(false) {
+                                Ok(()) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Done {
+                                            label: "Codex/OpenAI OAuth concluido".to_string(),
+                                        },
+                                    });
+                                }
+                                Err(e) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Failed {
+                                            error: e.to_string(),
+                                        },
+                                    });
+                                }
                             }
                         }
                         AuthMethodChoice::PasteApiKey
@@ -2316,6 +2412,31 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                                 }
                             }
                         }
+                        AuthMethodChoice::ImportCodex => {
+                            match runtime::import_codex_credentials() {
+                                Ok(Some(_)) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Done {
+                                            label: "Imported Codex auth.json credentials".to_string(),
+                                        },
+                                    });
+                                }
+                                Ok(None) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Failed {
+                                            error: "No Codex auth.json found (set cli_auth_credentials_store=\"file\" and run codex login)".to_string(),
+                                        },
+                                    });
+                                }
+                                Err(e) => {
+                                    app.overlay = Some(OverlayKind::AuthPicker {
+                                        step: AuthStep::Failed {
+                                            error: format!("import error: {e}"),
+                                        },
+                                    });
+                                }
+                            }
+                        }
                         AuthMethodChoice::LegacyElai => {
                             app.overlay = Some(OverlayKind::AuthPicker {
                                 step: AuthStep::Done {
@@ -2328,7 +2449,11 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                 }
                 _ => {
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected, claude_code_detected },
+                        step: AuthStep::MethodList {
+                            selected,
+                            claude_code_detected,
+                            codex_detected,
+                        },
                     });
                     TuiAction::None
                 }
@@ -2338,9 +2463,13 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
         AuthStep::EmailInput { method, mut input, mut cursor } => {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) => {
-                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    let (claude_detected, codex_detected) = detect_importable_auth_sources();
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                        step: AuthStep::MethodList {
+                            selected: 0,
+                            claude_code_detected: claude_detected,
+                            codex_detected,
+                        },
                     });
                 }
                 (KeyModifiers::NONE, KeyCode::Backspace)
@@ -2388,9 +2517,13 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
         AuthStep::PasteSecret { method, mut input, mut cursor, masked } => {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) => {
-                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    let (claude_detected, codex_detected) = detect_importable_auth_sources();
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                        step: AuthStep::MethodList {
+                            selected: 0,
+                            claude_code_detected: claude_detected,
+                            codex_detected,
+                        },
                     });
                 }
                 (KeyModifiers::NONE, KeyCode::Backspace)
@@ -2450,9 +2583,13 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) => {
                     cancel_flag.store(true, Ordering::Relaxed);
-                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    let (claude_detected, codex_detected) = detect_importable_auth_sources();
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                        step: AuthStep::MethodList {
+                            selected: 0,
+                            claude_code_detected: claude_detected,
+                            codex_detected,
+                        },
                     });
                 }
                 _ => {
@@ -2495,9 +2632,13 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
                     }
                 }
                 _ => {
-                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    let (claude_detected, codex_detected) = detect_importable_auth_sources();
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                        step: AuthStep::MethodList {
+                            selected: 0,
+                            claude_code_detected: claude_detected,
+                            codex_detected,
+                        },
                     });
                 }
             }
@@ -2520,9 +2661,13 @@ fn handle_auth_picker_key(app: &mut UiApp, key: KeyEvent, step: AuthStep) -> Tui
         AuthStep::Failed { error } => {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Enter) => {
-                    let detected = runtime::detect_claude_code_credentials().is_some();
+                    let (claude_detected, codex_detected) = detect_importable_auth_sources();
                     app.overlay = Some(OverlayKind::AuthPicker {
-                        step: AuthStep::MethodList { selected: 0, claude_code_detected: detected },
+                        step: AuthStep::MethodList {
+                            selected: 0,
+                            claude_code_detected: claude_detected,
+                            codex_detected,
+                        },
                     });
                 }
                 _ => {
@@ -4383,8 +4528,6 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let hint = " / comandos · ↑/↓ histórico · F2 modelo · F3 perm · F4 sessão · Ctrl+R leitura · Ctrl+C sair";
-
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -4392,11 +4535,21 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 
     let input_area = layout[0];
 
-    // Hint line.
-    frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(theme().text_secondary)),
-        layout[1],
-    );
+    // Hint line (widget dedicado para facilitar evolução futura do help).
+    let shortcuts = vec![
+        HelpBinding::new("/", "comandos"),
+        HelpBinding::new("↑/↓", "histórico"),
+        HelpBinding::new("F2", "modelo"),
+        HelpBinding::new("F3", "perm"),
+        HelpBinding::new("F4", "sessão"),
+        HelpBinding::new("Ctrl+R", "leitura"),
+        HelpBinding::new("Ctrl+C", "sair"),
+    ];
+    let help = Help::default()
+        .bindings(shortcuts)
+        .show_all(false)
+        .styles(HelpStyles::from_palette(&cheese_palette_from_theme(theme())));
+    frame.render_widget(help, layout[1]);
 
     // Multi-line input: break text into rows respecting \n and avail_w wrap width.
     let avail_w = (input_area.width.saturating_sub(2) as usize).max(1); // minus "> " prefix
@@ -4482,9 +4635,9 @@ fn draw_overlay(
             draw_tool_approval(frame, area, tool_name, input_preview, required_mode);
         }
         OverlayKind::ModelPicker {
-            filter, selected, ..
+            filter, selected, items
         } => {
-            let items = UiApp::filtered_model_list(filter);
+            let items = UiApp::filter_model_items(items, filter);
             draw_picker(
                 frame,
                 area,
@@ -4613,14 +4766,13 @@ fn draw_picker(
     let popup = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .title(format!(" {title} "))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme().border_active));
-
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let palette = cheese_palette_from_theme(theme());
+    let fieldset = Fieldset::new()
+        .title(title)
+        .fill(FieldsetFill::Dash)
+        .styles(FieldsetStyles::from_palette(&palette));
+    let inner = fieldset.inner(popup);
+    frame.render_widget(fieldset, popup);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -4638,23 +4790,27 @@ fn draw_picker(
     let list_area = layout[0];
     let hint_area = if filter.is_some() { layout[2] } else { layout[1] };
 
-    let list_items: Vec<ListItem> = items
+    let mut list_items: Vec<CheeseRenderRow> = items
         .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            if i == selected {
-                ListItem::new(format!("▶ {item}"))
-                    .style(Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent))
-            } else {
-                ListItem::new(format!("  {item}"))
-                    .style(Style::default().fg(theme().text_primary))
-            }
+        .map(|item| CheeseRenderRow {
+            text: (*item).to_string(),
+            kind: CheeseRowKind::Option,
         })
         .collect();
-
-    let mut list_state = ListState::default();
-    list_state.select(Some(selected));
-    frame.render_stateful_widget(List::new(list_items), list_area, &mut list_state);
+    if list_items.is_empty() {
+        list_items.push(CheeseRenderRow {
+            text: "sem resultados".to_string(),
+            kind: CheeseRowKind::ComingSoon,
+        });
+    }
+    let mut list_state = CheeseListState::new(list_items.len());
+    list_state.select(selected.min(list_items.len().saturating_sub(1)), list_items.len());
+    let list = CheeseList::new(&list_items)
+        .palette(palette.clone())
+        .show_paginator(false)
+        .item_spacing(0)
+        .selection_indicator("▶");
+    frame.render_stateful_widget(list, list_area, &mut list_state);
 
     // Filter line.
     if let Some(f) = filter {
@@ -4696,14 +4852,13 @@ fn draw_slash_palette_grouped(
     let popup = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .title(" Slash Commands (Ctrl+K) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme().border_active));
-
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let palette = cheese_palette_from_theme(theme());
+    let fieldset = Fieldset::new()
+        .title("Slash Commands (Ctrl+K)")
+        .fill(FieldsetFill::Dash)
+        .styles(FieldsetStyles::from_palette(&palette));
+    let inner = fieldset.inner(popup);
+    frame.render_widget(fieldset, popup);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -4718,36 +4873,51 @@ fn draw_slash_palette_grouped(
     let filter_area = layout[1];
     let hint_area = layout[2];
 
-    let list_items: Vec<ListItem> = rows
+    let mut list_items: Vec<CheeseRenderRow> = rows
         .iter()
         .enumerate()
         .map(|(i, row)| match row {
-            PaletteRow::Header(label) => ListItem::new(format!("  {label}")).style(
-                Style::default()
-                    .fg(theme().primary_accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            PaletteRow::Header(label) => CheeseRenderRow {
+                text: label.clone(),
+                kind: CheeseRowKind::Header,
+            },
             PaletteRow::Command { cmd, desc } => {
                 let coming_soon = is_command_coming_soon(cmd);
                 let suffix = if coming_soon { "  (em breve)" } else { "" };
                 let body = format!("/{cmd:<12} {desc}{suffix}");
                 if i == selected {
-                    ListItem::new(format!("▶ {body}"))
-                        .style(Style::default().fg(theme().accent_on_primary_bg).bg(theme().primary_accent))
+                    CheeseRenderRow {
+                        text: body,
+                        kind: CheeseRowKind::Option,
+                    }
                 } else if coming_soon {
-                    // Cinza apagado — ainda selecionável mas visualmente "off".
-                    ListItem::new(format!("  {body}"))
-                        .style(Style::default().fg(theme().text_secondary))
+                    CheeseRenderRow {
+                        text: body,
+                        kind: CheeseRowKind::ComingSoon,
+                    }
                 } else {
-                    ListItem::new(format!("  {body}")).style(Style::default().fg(theme().text_primary))
+                    CheeseRenderRow {
+                        text: body,
+                        kind: CheeseRowKind::Option,
+                    }
                 }
             }
         })
         .collect();
-
-    let mut list_state = ListState::default();
-    list_state.select(Some(selected));
-    frame.render_stateful_widget(List::new(list_items), list_area, &mut list_state);
+    if list_items.is_empty() {
+        list_items.push(CheeseRenderRow {
+            text: "sem comandos para este filtro".to_string(),
+            kind: CheeseRowKind::ComingSoon,
+        });
+    }
+    let mut list_state = CheeseListState::new(list_items.len());
+    list_state.select(selected.min(list_items.len().saturating_sub(1)), list_items.len());
+    let list = CheeseList::new(&list_items)
+        .palette(palette.clone())
+        .show_paginator(false)
+        .item_spacing(0)
+        .selection_indicator("▶");
+    frame.render_stateful_widget(list, list_area, &mut list_state);
 
     frame.render_widget(
         Paragraph::new(format!("  filtro: {filter}_"))
@@ -4759,6 +4929,53 @@ fn draw_slash_palette_grouped(
             .style(Style::default().fg(theme().text_secondary)),
         hint_area,
     );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheeseRowKind {
+    Header,
+    Option,
+    ComingSoon,
+}
+
+#[derive(Debug, Clone)]
+struct CheeseRenderRow {
+    text: String,
+    kind: CheeseRowKind,
+}
+
+impl CheeseListItem for CheeseRenderRow {
+    fn height(&self) -> u16 {
+        1
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer, ctx: &CheeseListItemContext) {
+        if area.width == 0 {
+            return;
+        }
+        let (prefix, style) = match self.kind {
+            CheeseRowKind::Header => (
+                "  ",
+                Style::default()
+                    .fg(ctx.palette.secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            CheeseRowKind::ComingSoon if !ctx.selected => ("  ", Style::default().fg(ctx.palette.muted)),
+            _ if ctx.selected => (
+                "  ",
+                Style::default()
+                    .fg(ctx.palette.on_highlight)
+                    .bg(ctx.palette.highlight),
+            ),
+            _ => ("  ", Style::default().fg(ctx.palette.foreground)),
+        };
+        let width = area.width as usize;
+        let mut text = format!("{prefix}{}", self.text);
+        if text.chars().count() > width {
+            text = text.chars().take(width.saturating_sub(1)).collect::<String>() + "…";
+        }
+        buf.set_string(area.x, area.y, text, style);
+    }
 }
 
 fn draw_tool_approval(
@@ -5401,13 +5618,24 @@ fn draw_auth_picker(frame: &mut ratatui::Frame, area: Rect, step: &AuthStep) {
     frame.render_widget(block, popup);
 
     match step {
-        AuthStep::MethodList { selected, claude_code_detected } => {
-            let methods = auth_methods_visible(*claude_code_detected);
+        AuthStep::MethodList {
+            selected,
+            claude_code_detected,
+            codex_detected,
+        } => {
+            let methods = auth_methods_visible(*claude_code_detected, *codex_detected);
             let mut lines: Vec<Line> = Vec::new();
 
             if *claude_code_detected {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", rust_i18n::t!("tui.auth.claude_code_detected")),
+                    Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+            }
+            if *codex_detected {
+                lines.push(Line::from(Span::styled(
+                    "  Codex auth.json detectado".to_string(),
                     Style::default().fg(theme().success).add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -5880,9 +6108,10 @@ mod tests {
 
     #[test]
     fn filtered_model_list_returns_filtered_results() {
-        let all = UiApp::filtered_model_list("");
+        let app = make_app();
+        let all = app.active_provider_model_items();
         assert!(!all.is_empty());
-        let gpt = UiApp::filtered_model_list("gpt");
+        let gpt = UiApp::filter_model_items(&all, "gpt");
         assert!(gpt.iter().all(|m| m.contains("gpt")));
     }
 
@@ -5957,12 +6186,17 @@ mod tests {
             step: AuthStep::MethodList {
                 selected: 0,
                 claude_code_detected: false,
+                codex_detected: false,
             },
         });
         assert!(matches!(
             app.overlay,
             Some(OverlayKind::AuthPicker {
-                step: AuthStep::MethodList { selected: 0, claude_code_detected: false }
+                step: AuthStep::MethodList {
+                    selected: 0,
+                    claude_code_detected: false,
+                    codex_detected: false,
+                }
             })
         ));
     }
@@ -5970,11 +6204,15 @@ mod tests {
     #[test]
     fn auth_picker_method_list_navigation_clamps() {
         let mut app = make_app();
-        let methods = auth_methods_visible(false);
+        let methods = auth_methods_visible(false, false);
         let count = methods.len();
 
         app.overlay = Some(OverlayKind::AuthPicker {
-            step: AuthStep::MethodList { selected: 0, claude_code_detected: false },
+            step: AuthStep::MethodList {
+                selected: 0,
+                claude_code_detected: false,
+                codex_detected: false,
+            },
         });
 
         // Navigate up at 0 — should stay at 0.
@@ -6008,7 +6246,11 @@ mod tests {
     fn auth_picker_esc_closes_overlay() {
         let mut app = make_app();
         app.overlay = Some(OverlayKind::AuthPicker {
-            step: AuthStep::MethodList { selected: 0, claude_code_detected: false },
+            step: AuthStep::MethodList {
+                selected: 0,
+                claude_code_detected: false,
+                codex_detected: false,
+            },
         });
         let key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
@@ -6090,10 +6332,13 @@ mod tests {
 
     #[test]
     fn auth_methods_visible_includes_import_when_detected() {
-        let without = auth_methods_visible(false);
-        let with_cc = auth_methods_visible(true);
+        let without = auth_methods_visible(false, false);
+        let with_cc = auth_methods_visible(true, false);
+        let with_codex = auth_methods_visible(false, true);
         assert_eq!(with_cc.len(), without.len() + 1);
         assert_eq!(with_cc[0].0, AuthMethodChoice::ImportClaudeCode);
+        assert_eq!(with_codex.len(), without.len() + 1);
+        assert_eq!(with_codex[0].0, AuthMethodChoice::ImportCodex);
     }
 
     #[test]

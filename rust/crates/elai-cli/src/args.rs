@@ -212,6 +212,12 @@ pub struct LoginArgs {
     /// Import credentials from Claude Code (~/.claude/credentials.json) without interaction
     #[arg(long, group = "method")]
     pub import_claude_code: bool,
+    /// Login OAuth via Codex/OpenAI (`codex login`) and import credentials
+    #[arg(long, group = "method")]
+    pub codex_oauth: bool,
+    /// Import Codex ChatGPT OAuth from ~/.codex/auth.json (or $CODEX_HOME/auth.json)
+    #[arg(long, group = "method")]
+    pub import_codex: bool,
 }
 
 impl Default for LoginArgs {
@@ -230,6 +236,8 @@ impl Default for LoginArgs {
             stdin: false,
             legacy_elai: false,
             import_claude_code: false,
+            codex_oauth: false,
+            import_codex: false,
         }
     }
 }
@@ -390,6 +398,30 @@ mod tests {
             cli.command,
             Some(Command::Login(LoginArgs {
                 import_claude_code: true,
+                ..LoginArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_login_import_codex() {
+        let cli = Cli::parse_from(["elai-cli", "login", "--import-codex"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Login(LoginArgs {
+                import_codex: true,
+                ..LoginArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_login_codex_oauth() {
+        let cli = Cli::parse_from(["elai-cli", "login", "--codex-oauth"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Login(LoginArgs {
+                codex_oauth: true,
                 ..LoginArgs::default()
             }))
         );

@@ -744,6 +744,8 @@ fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
             "--stdin" => { login_args.stdin = true; idx += 1; }
             "--legacy-elai" => { login_args.legacy_elai = true; idx += 1; }
             "--import-claude-code" => { login_args.import_claude_code = true; idx += 1; }
+            "--codex-oauth" => { login_args.codex_oauth = true; idx += 1; }
+            "--import-codex" => { login_args.import_codex = true; idx += 1; }
             "--yes" => { idx += 1; } // accepted but no-op at this layer (auth.rs uses it)
             "--no" => { idx += 1; }
             "--email" => {

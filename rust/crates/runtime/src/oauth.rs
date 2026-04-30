@@ -48,6 +48,14 @@ pub enum AuthMethod {
     OpenAiApiKey {
         api_key: String,
     },
+    /// Credenciais OAuth importadas do Codex (`~/.codex/auth.json`) para uso
+    /// no provider OpenAI compatível. O refresh permanece de responsabilidade
+    /// do próprio Codex CLI; aqui apenas reutilizamos o access token.
+    OpenAiCodexOAuth {
+        token_set: OAuthTokenSet,
+        #[serde(default)]
+        last_refresh: Option<u64>,
+    },
     Bedrock,
     Vertex,
     Foundry,

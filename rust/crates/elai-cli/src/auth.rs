@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io::{self, BufRead, Read, Write};
 use std::net::TcpListener;
 use std::process::Command as ProcessCommand;
+use std::process::Output as ProcessOutput;
 
 use api::{base_url_is_anthropic_official, read_base_url, AuthSource, ElaiApiClient};
 use runtime::{
@@ -135,9 +136,15 @@ pub fn dispatch_login(args: &LoginArgs) -> Result<(), AuthError> {
     if args.import_claude_code {
         return import_claude_code_login();
     }
+    if args.codex_oauth {
+        return login_codex_oauth(args.no_browser);
+    }
+    if args.import_codex {
+        return import_codex_login();
+    }
     // No method selected — interactive picker placeholder for Layer 4
     Err(AuthError::InvalidInput(
-        "no method selected; rerun with --console|--claudeai|--sso|--api-key|--token|--use-bedrock|--use-vertex|--use-foundry|--import-claude-code, or use the TUI".into(),
+        "no method selected; rerun with --console|--claudeai|--sso|--api-key|--token|--use-bedrock|--use-vertex|--use-foundry|--import-claude-code|--codex-oauth|--import-codex, or use the TUI".into(),
     ))
 }
 
@@ -179,6 +186,8 @@ pub fn dispatch_auth_list() -> Result<(), AuthError> {
     );
     println!("  use-vertex  Switch to Google Vertex AI");
     println!("  use-foundry Switch to Azure Foundry");
+    println!("  codex-oauth Open browser login via `codex login` and import");
+    println!("  import-codex Import Codex ChatGPT OAuth from ~/.codex/auth.json");
     println!("  legacy-elai (deprecated) elai.dev OAuth flow");
     Ok(())
 }
@@ -506,6 +515,111 @@ fn import_claude_code_login() -> Result<(), AuthError> {
         "Could not find Claude Code credentials. \
          Ensure Claude Code is installed and logged in, or set ANTHROPIC_API_KEY.".into(),
     ))
+}
+
+fn import_codex_login() -> Result<(), AuthError> {
+    let imported = runtime::import_codex_credentials().map_err(|error| {
+        if error.kind() == io::ErrorKind::InvalidData {
+            AuthError::InvalidInput(error.to_string())
+        } else {
+            AuthError::Io(error)
+        }
+    })?;
+    match imported {
+        Some(_) => Ok(()),
+        None => Err(AuthError::InvalidInput(
+            "Could not find a valid Codex auth cache at $CODEX_HOME/auth.json or ~/.codex/auth.json. \
+             If Codex stores credentials in keyring, set `cli_auth_credentials_store = \"file\"` and run `codex login` first."
+                .into(),
+        )),
+    }
+}
+
+pub fn login_codex_oauth(no_browser: bool) -> Result<(), AuthError> {
+    let output = run_codex_login(no_browser, None).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            AuthError::InvalidInput(
+                "`codex` command not found. Install Codex CLI first, then retry.".into(),
+            )
+        } else {
+            AuthError::Io(error)
+        }
+    })?;
+    if output.status.success() {
+        return import_codex_login();
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let should_retry_isolated = stderr.contains("model_reasoning_effort")
+        && stderr.contains("unknown variant `xhigh`");
+    if should_retry_isolated {
+        return login_codex_oauth_isolated(no_browser);
+    }
+    Err(AuthError::InvalidInput(format!(
+        "`codex login` failed (status {}): {}",
+        output.status,
+        if stderr.is_empty() {
+            "no stderr output".to_string()
+        } else {
+            stderr
+        }
+    )))
+}
+
+fn login_codex_oauth_isolated(no_browser: bool) -> Result<(), AuthError> {
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| AuthError::Io(io::Error::other(error.to_string())))?
+        .as_nanos();
+    let isolated_home = std::env::temp_dir().join(format!(
+        "elai-codex-login-{}-{now_nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&isolated_home).map_err(AuthError::Io)?;
+    let output = run_codex_login(no_browser, Some(&isolated_home)).map_err(AuthError::Io)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AuthError::InvalidInput(format!(
+            "isolated `codex login` failed (status {}): {}",
+            output.status,
+            if stderr.is_empty() {
+                "no stderr output".to_string()
+            } else {
+                stderr
+            }
+        )));
+    }
+    let prev_codex_home = std::env::var_os("CODEX_HOME");
+    std::env::set_var("CODEX_HOME", &isolated_home);
+    let mut import_result = import_codex_login();
+    if import_result.is_err() {
+        // Fallback: some Codex builds may still persist outside CODEX_HOME.
+        std::env::remove_var("CODEX_HOME");
+        import_result = import_codex_login();
+    }
+    match prev_codex_home {
+        Some(value) => std::env::set_var("CODEX_HOME", value),
+        None => std::env::remove_var("CODEX_HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&isolated_home);
+    import_result
+}
+
+fn run_codex_login(
+    no_browser: bool,
+    codex_home: Option<&std::path::Path>,
+) -> io::Result<ProcessOutput> {
+    let mut command = ProcessCommand::new("codex");
+    command.arg("login");
+    // Ensure Codex writes plaintext auth cache so ELAI can import tokens.
+    command.arg("-c");
+    command.arg("cli_auth_credentials_store=\"file\"");
+    if no_browser {
+        command.arg("--device-auth");
+    }
+    if let Some(home) = codex_home {
+        command.env("CODEX_HOME", home);
+    }
+    command.output()
 }
 
 // ---------------------------------------------------------------------------
@@ -906,6 +1020,20 @@ fn auth_info_from_method(method: &AuthMethod) -> AuthInfo {
             subscription: None,
             expires_at: None,
             scopes: vec![],
+        },
+        AuthMethod::OpenAiCodexOAuth {
+            token_set,
+            last_refresh,
+        } => AuthInfo {
+            method: "openai_codex_oauth".into(),
+            source: if let Some(refresh) = last_refresh {
+                format!("credentials.json (codex import, last_refresh={refresh})")
+            } else {
+                "credentials.json (codex import)".into()
+            },
+            subscription: None,
+            expires_at: token_set.expires_at,
+            scopes: token_set.scopes.clone(),
         },
     }
 }

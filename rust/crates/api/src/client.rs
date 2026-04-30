@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::orchestrator::{
-    ElaiUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig, ProviderOrchestrator, RequestOptions,
+    CodexBridgeUnifiedAdapter, ElaiUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig,
+    ProviderOrchestrator, RequestOptions,
 };
 use crate::providers::elai_provider::{self, AuthSource, ElaiApiClient};
+use crate::providers::codex_bridge::CodexBridgeClient;
 use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{
@@ -32,6 +34,8 @@ pub enum ProviderClient {
     ElaiApi(ElaiApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    /// Bridge para `codex exec` usando sessão local autenticada no Codex CLI.
+    CodexBridge(CodexBridgeClient),
     /// Servidor Ollama local. Mesmo wire-protocol do `OpenAi` — o variant
     /// separado existe só para `provider_kind()` reportar a origem real.
     Ollama(OpenAiCompatClient),
@@ -60,9 +64,15 @@ impl ProviderClient {
             ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::xai(),
             )?)),
-            ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::openai(),
-            )?)),
+            ProviderKind::OpenAi => {
+                if should_use_codex_bridge() {
+                    Ok(Self::CodexBridge(CodexBridgeClient::from_env()?))
+                } else {
+                    Ok(Self::OpenAi(OpenAiCompatClient::from_env(
+                        OpenAiCompatConfig::openai(),
+                    )?))
+                }
+            }
             ProviderKind::Ollama => Ok(Self::Ollama(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::ollama(),
             )?)),
@@ -95,8 +105,22 @@ impl ProviderClient {
             }
         }
 
-        if openai_compat::has_api_key("OPENAI_API_KEY") {
-            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::openai()) {
+        if openai_compat::has_openai_credentials() {
+            if should_use_codex_bridge() {
+                if let Ok(client) = CodexBridgeClient::from_env() {
+                    orchestrator.register_provider(
+                        Box::new(CodexBridgeUnifiedAdapter::new(client, "openai-codex-bridge")),
+                        ProviderConfig {
+                            id: "openai-codex-bridge".to_string(),
+                            priority,
+                            enabled: true,
+                            max_concurrency: 2,
+                        },
+                    );
+                    priority += 1;
+                    registered_any = true;
+                }
+            } else if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::openai()) {
                 orchestrator.register_provider(
                     Box::new(OpenAiUnifiedAdapter::new(client, "openai")),
                     ProviderConfig {
@@ -183,7 +207,7 @@ impl ProviderClient {
         match self {
             Self::ElaiApi(_) | Self::Orchestrated(_) => ProviderKind::ElaiApi,
             Self::Xai(_) => ProviderKind::Xai,
-            Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::OpenAi(_) | Self::CodexBridge(_) => ProviderKind::OpenAi,
             Self::Ollama(_) => ProviderKind::Ollama,
             Self::LmStudio(_) => ProviderKind::LmStudio,
         }
@@ -199,6 +223,7 @@ impl ProviderClient {
             | Self::OpenAi(client)
             | Self::Ollama(client)
             | Self::LmStudio(client) => send_via_provider(client, request).await,
+            Self::CodexBridge(client) => client.send_message(request).await,
             Self::Orchestrated(orchestrator) => {
                 orchestrator
                     .send_message(request, &RequestOptions::default())
@@ -221,6 +246,10 @@ impl ProviderClient {
             | Self::LmStudio(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
+            Self::CodexBridge(client) => client
+                .stream_message(request)
+                .await
+                .map(MessageStream::CodexBridge),
             Self::Orchestrated(orchestrator) => {
                 let response = orchestrator
                     .stream_message(request, &RequestOptions::default())
@@ -237,6 +266,7 @@ impl ProviderClient {
 pub enum MessageStream {
     ElaiApi(elai_provider::MessageStream),
     OpenAiCompat(openai_compat::MessageStream),
+    CodexBridge(crate::providers::codex_bridge::MessageStream),
     Collected(CollectedMessageStream),
 }
 
@@ -246,6 +276,7 @@ impl MessageStream {
         match self {
             Self::ElaiApi(stream) => stream.request_id(),
             Self::OpenAiCompat(stream) => stream.request_id(),
+            Self::CodexBridge(stream) => stream.request_id(),
             Self::Collected(stream) => stream.request_id(),
         }
     }
@@ -254,9 +285,23 @@ impl MessageStream {
         match self {
             Self::ElaiApi(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
+            Self::CodexBridge(stream) => stream.next_event().await,
             Self::Collected(stream) => stream.next_event().await,
         }
     }
+}
+
+fn should_use_codex_bridge() -> bool {
+    if std::env::var("OPENAI_API_KEY")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    matches!(
+        runtime::load_auth_method(),
+        Ok(Some(runtime::AuthMethod::OpenAiCodexOAuth { .. }))
+    )
 }
 
 /// Replays an already-collected `MessageResponse` as a synthetic event stream so
@@ -345,7 +390,16 @@ pub fn read_xai_base_url() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::should_use_codex_bridge;
     use crate::providers::{detect_provider_kind, resolve_model_alias, ProviderKind};
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
 
     #[test]
     fn resolves_existing_and_grok_aliases() {
@@ -361,5 +415,52 @@ mod tests {
             detect_provider_kind("claude-sonnet-4-6"),
             ProviderKind::ElaiApi
         );
+    }
+
+    #[test]
+    fn codex_bridge_activates_for_saved_codex_auth_without_openai_key() {
+        let _guard = env_lock();
+        let config_home = tempfile::tempdir().expect("tmp config");
+        std::env::set_var("ELAI_CONFIG_HOME", config_home.path());
+        std::env::remove_var("OPENAI_API_KEY");
+        runtime::save_auth_method(&runtime::AuthMethod::OpenAiCodexOAuth {
+            token_set: runtime::OAuthTokenSet {
+                access_token: "codex-access".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: vec!["model.request".to_string()],
+            },
+            last_refresh: None,
+        })
+        .expect("save codex auth");
+
+        assert!(should_use_codex_bridge());
+
+        runtime::clear_auth_method().expect("clear auth");
+        std::env::remove_var("ELAI_CONFIG_HOME");
+    }
+
+    #[test]
+    fn codex_bridge_is_disabled_when_openai_api_key_is_present() {
+        let _guard = env_lock();
+        let config_home = tempfile::tempdir().expect("tmp config");
+        std::env::set_var("ELAI_CONFIG_HOME", config_home.path());
+        std::env::set_var("OPENAI_API_KEY", "sk-test");
+        runtime::save_auth_method(&runtime::AuthMethod::OpenAiCodexOAuth {
+            token_set: runtime::OAuthTokenSet {
+                access_token: "codex-access".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                scopes: vec!["model.request".to_string()],
+            },
+            last_refresh: None,
+        })
+        .expect("save codex auth");
+
+        assert!(!should_use_codex_bridge());
+
+        runtime::clear_auth_method().expect("clear auth");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ELAI_CONFIG_HOME");
     }
 }

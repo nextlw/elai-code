@@ -42,6 +42,7 @@ toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 tools = { path = "../tools" }
 ratatui = "0.30.0"
+ratatui-cheese = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 sha2 = "0.10"
 hex = "0.4"
