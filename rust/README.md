@@ -187,6 +187,9 @@ Commands:
                                    Embedding provider (default: local — fastembed BGE-small)
 --embed-model <name>               Override the default model for the chosen provider
 --ollama-url <URL>                 Ollama URL (when --embed-provider ollama)
+--start-qdrant                     Start a local Qdrant Docker container
+--qdrant-port <PORT>               Qdrant HTTP port when --start-qdrant (default: 6333)
+--qdrant-container <NAME>          Docker container name (default: elai-qdrant)
 --no-watcher                       Skip starting the background filesystem watcher
 --no-index                         Skip indexing (only create files + ELAI.md)
 --reindex                          Drop the existing index and rebuild from scratch

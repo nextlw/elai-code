@@ -243,6 +243,7 @@ elai logout             # clear saved credentials
 ```bash
 elai init                          # default: SQLite + local fastembed
 elai init --backend qdrant --qdrant-url http://localhost:6333
+elai init --start-qdrant           # start local Qdrant container via Docker
 elai init --embed-provider ollama --ollama-url http://localhost:11434
 elai init --no-index               # skip indexing, only scaffold .elai/ + ELAI.md
 elai init --reindex                # wipe existing index and rebuild
@@ -254,6 +255,9 @@ elai init --reindex                # wipe existing index and rebuild
 | `--embed-provider`     | `local` (fastembed), `ollama`, `jina`, `openai`, `voyage` | `local` |
 | `--embed-model`        | model name (overrides provider default)           | provider auto |
 | `--qdrant-url`         | URL of running Qdrant instance                    | —             |
+| `--start-qdrant`       | start (or create) local Qdrant Docker container   | false         |
+| `--qdrant-port`        | HTTP port used by `--start-qdrant`                | `6333`        |
+| `--qdrant-container`   | Docker container name used by `--start-qdrant`    | `elai-qdrant` |
 | `--ollama-url`         | URL of running Ollama instance                    | —             |
 | `--no-watcher`         | don't spawn the background re-indexer             | false         |
 | `--no-index`           | scaffold only, skip indexing                      | false         |

@@ -5,8 +5,12 @@
 //! TUI (substituição in-place de `ChatEntry::TaskProgress`).
 
 use std::fs;
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use crate::args::{EmbedProviderArg, IndexBackend, InitArgs};
 use code_index::{
@@ -100,7 +104,16 @@ fn run_init(
     args: &InitArgs,
     reporter: &TaskProgressReporter,
 ) -> Result<InitReport, Box<dyn std::error::Error>> {
+    let mut effective_args = args.clone();
     let mut artifacts = Vec::new();
+
+    if effective_args.start_qdrant {
+        reporter.report("Preparando Qdrant local via Docker…");
+        let local_qdrant_url = ensure_qdrant_running(cwd, &effective_args, reporter)?;
+        if effective_args.qdrant_url.is_none() {
+            effective_args.qdrant_url = Some(local_qdrant_url);
+        }
+    }
 
     // 1. Basic structure
     let elai_dir = cwd.join(".elai");
@@ -142,7 +155,12 @@ fn run_init(
     // 3. Indexing (unless --no-index)
     let mut index_stats: Option<IndexerStats> = None;
     if !args.no_index {
-        index_stats = Some(run_indexing_with_progress(cwd, &index_dir, args, reporter)?);
+        index_stats = Some(run_indexing_with_progress(
+            cwd,
+            &index_dir,
+            &effective_args,
+            reporter,
+        )?);
     }
 
     // 4. Generate ELAI.md
@@ -165,7 +183,7 @@ fn run_init(
 
     // 5. Save index config
     if !args.no_index {
-        write_index_config(&index_dir, args)?;
+        write_index_config(&index_dir, &effective_args)?;
     }
 
     Ok(InitReport {
@@ -173,6 +191,116 @@ fn run_init(
         artifacts,
         index_stats,
     })
+}
+
+fn ensure_qdrant_running(
+    cwd: &Path,
+    args: &InitArgs,
+    reporter: &TaskProgressReporter,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let port = args.qdrant_port;
+    let grpc_port = args
+        .qdrant_port
+        .checked_add(1)
+        .ok_or("qdrant-port inválida: não foi possível calcular a porta gRPC")?;
+    let container_name = args.qdrant_container.trim();
+    if container_name.is_empty() {
+        return Err("qdrant-container não pode ser vazio".into());
+    }
+
+    let docker_version = Command::new("docker").arg("--version").output();
+    match docker_version {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "Docker não está disponível para subir o Qdrant automaticamente: {}",
+                stderr.trim()
+            )
+            .into());
+        }
+        Err(err) => {
+            return Err(format!(
+                "Falha ao executar Docker (necessário para --start-qdrant): {err}"
+            )
+            .into());
+        }
+    }
+
+    let inspect = Command::new("docker")
+        .args(["inspect", "-f", "{{.State.Running}}", container_name])
+        .output();
+
+    match inspect {
+        Ok(output) if output.status.success() => {
+            let running = String::from_utf8_lossy(&output.stdout).trim() == "true";
+            if running {
+                reporter.report(&format!(
+                    "Qdrant já está em execução no container '{container_name}'."
+                ));
+            } else {
+                reporter.report(&format!(
+                    "Iniciando container Qdrant existente '{container_name}'…"
+                ));
+                let start = Command::new("docker")
+                    .args(["start", container_name])
+                    .output()?;
+                if !start.status.success() {
+                    return Err(format!(
+                        "Falha ao iniciar container '{container_name}': {}",
+                        String::from_utf8_lossy(&start.stderr).trim()
+                    )
+                    .into());
+                }
+            }
+        }
+        _ => {
+            reporter.report(&format!(
+                "Criando container Qdrant '{container_name}' (porta {port})…"
+            ));
+            let host_storage_dir = cwd.join(".elai").join("qdrant").join(container_name);
+            fs::create_dir_all(&host_storage_dir)?;
+            let volume = format!("{}:/qdrant/storage", host_storage_dir.display());
+            let port_http = format!("{port}:6333");
+            let port_grpc = format!("{grpc_port}:6334");
+            let run = Command::new("docker")
+                .args([
+                    "run",
+                    "-d",
+                    "--name",
+                    container_name,
+                    "-p",
+                    port_http.as_str(),
+                    "-p",
+                    port_grpc.as_str(),
+                    "-v",
+                    volume.as_str(),
+                    "qdrant/qdrant:latest",
+                ])
+                .output()?;
+            if !run.status.success() {
+                return Err(format!(
+                    "Falha ao criar container Qdrant '{container_name}': {}",
+                    String::from_utf8_lossy(&run.stderr).trim()
+                )
+                .into());
+            }
+        }
+    }
+
+    for _ in 0..20 {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            let url = format!("http://127.0.0.1:{port}");
+            reporter.report(&format!("Qdrant pronto em {url}"));
+            return Ok(url);
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+
+    Err(format!(
+        "Qdrant não respondeu na porta {port} após iniciar o container '{container_name}'"
+    )
+    .into())
 }
 
 fn run_indexing_with_progress(

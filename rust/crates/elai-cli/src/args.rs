@@ -114,6 +114,15 @@ pub struct InitArgs {
     /// Apaga índice existente e reindexa do zero
     #[arg(long)]
     pub reindex: bool,
+    /// Sobe (ou inicia) um container Qdrant local via Docker
+    #[arg(long)]
+    pub start_qdrant: bool,
+    /// Porta HTTP do Qdrant quando --start-qdrant estiver ativo
+    #[arg(long, default_value_t = 6333)]
+    pub qdrant_port: u16,
+    /// Nome do container Docker do Qdrant quando --start-qdrant estiver ativo
+    #[arg(long, default_value = "elai-qdrant")]
+    pub qdrant_container: String,
 }
 
 impl Default for InitArgs {
@@ -127,6 +136,9 @@ impl Default for InitArgs {
             no_watcher: false,
             no_index: false,
             reindex: false,
+            start_qdrant: false,
+            qdrant_port: 6333,
+            qdrant_container: "elai-qdrant".to_string(),
         }
     }
 }
@@ -517,6 +529,28 @@ mod tests {
             cli.command,
             Some(Command::Init(InitArgs {
                 backend: IndexBackend::Sqlite,
+                ..InitArgs::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_init_with_start_qdrant_flags() {
+        let cli = Cli::parse_from([
+            "elai",
+            "init",
+            "--start-qdrant",
+            "--qdrant-port",
+            "7333",
+            "--qdrant-container",
+            "meu-qdrant",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Init(InitArgs {
+                start_qdrant: true,
+                qdrant_port: 7333,
+                qdrant_container: "meu-qdrant".to_string(),
                 ..InitArgs::default()
             }))
         );

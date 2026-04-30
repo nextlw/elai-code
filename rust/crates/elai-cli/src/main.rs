@@ -4553,6 +4553,7 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
             "--no-index" => { args.no_index = true; idx += 1; }
             "--no-watcher" => { args.no_watcher = true; idx += 1; }
             "--reindex" => { args.reindex = true; idx += 1; }
+            "--start-qdrant" => { args.start_qdrant = true; idx += 1; }
             "--backend" => {
                 if let Some(v) = rest.get(idx + 1) {
                     args.backend = match v.as_str() {
@@ -4582,6 +4583,17 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
             }
             "--qdrant-url" => {
                 if let Some(v) = rest.get(idx + 1) { args.qdrant_url = Some(v.clone()); idx += 2; } else { idx += 1; }
+            }
+            "--qdrant-port" => {
+                if let Some(v) = rest.get(idx + 1) {
+                    if let Ok(port) = v.parse::<u16>() {
+                        args.qdrant_port = port;
+                    }
+                    idx += 2;
+                } else { idx += 1; }
+            }
+            "--qdrant-container" => {
+                if let Some(v) = rest.get(idx + 1) { args.qdrant_container = v.clone(); idx += 2; } else { idx += 1; }
             }
             _ => { idx += 1; }
         }
