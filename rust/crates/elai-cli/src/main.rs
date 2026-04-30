@@ -1,5 +1,6 @@
 mod args;
 mod auth;
+mod cheese_theme;
 mod diff;
 mod dream;
 mod init;
@@ -2187,15 +2188,13 @@ fn run_tui_repl(
                     ));
                 }
                 tui::TuiAction::SetupComplete => {
-                    // Re-detect the best model now that keys are in the environment.
-                    let new_model = suggested_default_model();
-                    app.model = new_model.clone();
+                    let new_model = app.model.clone();
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} API key salva em ~/.elai/.env\n  Modelo padrão: {new_model}"
                     )));
                 }
                 tui::TuiAction::AuthComplete { label } => {
-                    let new_model = suggested_default_model();
+                    let new_model = preferred_model_after_auth();
                     app.model = new_model.clone();
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} {label}\n  Modelo padrão: {new_model}"
@@ -2223,6 +2222,33 @@ fn run_tui_repl(
     let _ = tui::leave_tui(&mut io::stdout());
 
     result
+}
+
+fn preferred_model_after_auth() -> String {
+    let env_or = |key: &str, fallback: &str| {
+        std::env::var(key)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    };
+
+    match runtime::load_auth_method() {
+        Ok(Some(runtime::AuthMethod::OpenAiCodexOAuth { .. })) => {
+            env_or("ELAI_DEFAULT_OPENAI_MODEL", "gpt-5.5")
+        }
+        Ok(Some(runtime::AuthMethod::OpenAiApiKey { .. })) => {
+            env_or("ELAI_DEFAULT_OPENAI_MODEL", "gpt-4o-mini")
+        }
+        Ok(Some(
+            runtime::AuthMethod::ClaudeAiOAuth { .. }
+            | runtime::AuthMethod::ConsoleApiKey { .. }
+            | runtime::AuthMethod::AnthropicAuthToken { .. }
+            | runtime::AuthMethod::Bedrock
+            | runtime::AuthMethod::Vertex
+            | runtime::AuthMethod::Foundry,
+        )) => env_or("ELAI_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        _ => suggested_default_model(),
+    }
 }
 
 fn append_budget_summary_to_memory(
@@ -2523,7 +2549,15 @@ fn handle_tui_slash_command(
             // `SystemNote` porque é texto multilinha de resumo, não progresso.
             let tx = msg_tx.clone();
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let args = crate::args::InitArgs::default();
+            let args = arg
+                .map(|raw_args| {
+                    let rest: Vec<String> = raw_args
+                        .split_whitespace()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    parse_init_args(&rest)
+                })
+                .unwrap_or_default();
             // JoinHandle descartado: thread daemon de inicialização de repositório em background; encerra quando o canal fecha (TUI encerrando).
             let _init_handle = std::thread::spawn(move || match initialize_repo(&cwd, &args) {
                 Ok(report) => {

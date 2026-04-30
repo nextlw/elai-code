@@ -57,7 +57,6 @@ use ratatui_cheese::list::{
     List as CheeseList, ListItem as CheeseListItem, ListItemContext as CheeseListItemContext,
     ListState as CheeseListState,
 };
-use ratatui_cheese::theme::Palette as CheesePalette;
 
 use commands::SlashCategory;
 
@@ -85,20 +84,8 @@ fn theme() -> RatatuiTheme {
 }
 
 #[inline]
-fn cheese_palette_from_theme(t: RatatuiTheme) -> CheesePalette {
-    CheesePalette {
-        foreground: t.text_primary,
-        muted: t.text_secondary,
-        faint: t.border_inactive,
-        primary: t.primary_accent,
-        secondary: t.info,
-        surface: t.border_inactive,
-        border: t.border_active,
-        highlight: t.primary_accent,
-        on_highlight: t.accent_on_primary_bg,
-        success: t.success,
-        error: t.error,
-    }
+fn cheese_palette_from_theme(t: RatatuiTheme) -> ratatui_cheese::theme::Palette {
+    crate::cheese_theme::palette_from_ratatui(&t)
 }
 
 /// Atualiza o cache de tema com as cores resolvidas do ambiente.
@@ -252,7 +239,9 @@ pub enum OverlayKind {
     SlashPalette {
         items: Vec<(SlashCategory, String, String)>,
         filter: String,
+        category_selected: usize,
         selected: usize,
+        focus: SlashPaletteFocus,
     },
     FileMentionPicker {
         items: Vec<String>,    // paths relativos do projeto (cache)
@@ -298,6 +287,12 @@ pub enum OverlayKind {
         input: String,
         cursor: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashPaletteFocus {
+    Categories,
+    Commands,
 }
 
 /// Which authentication method the user selected in the AuthPicker.
@@ -380,6 +375,7 @@ pub enum AuthEvent {
 /// State collected while the setup wizard is running.
 #[derive(Debug, Clone)]
 pub struct WizardState {
+    pub provider: WizardProvider,
     pub model: String,
     pub permission_mode: String,
     pub features: runtime::FeatureFlags,
@@ -388,6 +384,7 @@ pub struct WizardState {
 impl Default for WizardState {
     fn default() -> Self {
         Self {
+            provider: WizardProvider::Anthropic,
             model: "claude-opus-4-6".into(),
             permission_mode: "workspace-write".into(),
             features: runtime::FeatureFlags::default(),
@@ -400,8 +397,13 @@ impl Default for WizardState {
 pub enum WizardStep {
     /// Welcome screen — press Enter to continue.
     Welcome,
-    /// Model selection (4 choices).
-    Model { selected: usize },
+    /// Provider/channel selection.
+    Provider { selected: usize },
+    /// Model selection for the selected provider/channel.
+    Model {
+        provider: WizardProvider,
+        selected: usize,
+    },
     /// Permission mode selection (3 choices).
     Permissions { selected: usize },
     /// Optional defaults toggle (auto-update / telemetry / indexing).
@@ -410,6 +412,26 @@ pub enum WizardStep {
     /// Summary + persist — press Enter to close.
     Done,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiChannel {
+    Codex,
+    ApiKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WizardProvider {
+    Anthropic,
+    OpenAi(OpenAiChannel),
+    Xai,
+}
+
+const WIZARD_PROVIDER_OPTIONS: [WizardProvider; 4] = [
+    WizardProvider::Anthropic,
+    WizardProvider::OpenAi(OpenAiChannel::Codex),
+    WizardProvider::OpenAi(OpenAiChannel::ApiKey),
+    WizardProvider::Xai,
+];
 
 // ─── Helpers para in-place update de progresso de tasks ─────────────────────
 
@@ -925,45 +947,34 @@ impl UiApp {
     }
 
     fn active_provider_model_items(&self) -> Vec<String> {
-        let anthropic = vec![
-            "claude-opus-4-7".to_string(),
-            "claude-opus-4-6".to_string(),
-            "claude-sonnet-4-6".to_string(),
-            "claude-haiku-4-5-20251001".to_string(),
-        ];
-        let openai = vec![
-            "gpt-4o".to_string(),
-            "gpt-4o-mini".to_string(),
-            "gpt-4.5".to_string(),
-            "o1".to_string(),
-            "o3".to_string(),
-            "o4-mini".to_string(),
-        ];
-        let xai = vec!["grok-3".to_string(), "grok-3-mini".to_string()];
         if let Ok(Some(method)) = runtime::load_auth_method() {
             return match method {
-                runtime::AuthMethod::OpenAiApiKey { .. }
-                | runtime::AuthMethod::OpenAiCodexOAuth { .. } => openai,
+                runtime::AuthMethod::OpenAiApiKey { .. } => {
+                    models_for_provider(WizardProvider::OpenAi(OpenAiChannel::ApiKey))
+                }
+                runtime::AuthMethod::OpenAiCodexOAuth { .. } => {
+                    models_for_provider(WizardProvider::OpenAi(OpenAiChannel::Codex))
+                }
                 runtime::AuthMethod::ClaudeAiOAuth { .. }
                 | runtime::AuthMethod::ConsoleApiKey { .. }
                 | runtime::AuthMethod::AnthropicAuthToken { .. }
                 | runtime::AuthMethod::Bedrock
                 | runtime::AuthMethod::Vertex
-                | runtime::AuthMethod::Foundry => anthropic,
+                | runtime::AuthMethod::Foundry => models_for_provider(WizardProvider::Anthropic),
             };
         }
         if std::env::var_os("OPENAI_API_KEY").is_some() {
-            return openai;
+            return models_for_provider(WizardProvider::OpenAi(OpenAiChannel::ApiKey));
         }
         if std::env::var_os("XAI_API_KEY").is_some() {
-            return xai;
+            return models_for_provider(WizardProvider::Xai);
         }
         if std::env::var_os("ANTHROPIC_API_KEY").is_some()
             || std::env::var_os("ANTHROPIC_AUTH_TOKEN").is_some()
         {
-            return anthropic;
+            return models_for_provider(WizardProvider::Anthropic);
         }
-        anthropic
+        models_for_provider(WizardProvider::Anthropic)
     }
 
     fn filter_model_items(items: &[String], filter: &str) -> Vec<String> {
@@ -1004,12 +1015,12 @@ impl UiApp {
 
     pub fn open_slash_palette(&mut self) {
         let items = slash_palette_items();
-        let initial_rows = build_palette_rows(&items, "");
-        let selected = first_selectable_row(&initial_rows);
         self.overlay = Some(OverlayKind::SlashPalette {
             filter: String::new(),
             items,
-            selected,
+            category_selected: 0,
+            selected: 0,
+            focus: SlashPaletteFocus::Commands,
         });
     }
 
@@ -1232,7 +1243,26 @@ fn build_palette_rows(
     rows
 }
 
+/// Constrói as colunas da paleta (categorias + comandos filtrados por categoria).
+fn build_palette_columns(
+    items: &[(SlashCategory, String, String)],
+    filter: &str,
+) -> Vec<(SlashCategory, Vec<(String, String)>)> {
+    type CatBucket = (SlashCategory, Vec<(String, String)>);
+    let filtered = filter_slash_items(items, filter);
+    let mut by_cat: std::collections::BTreeMap<u8, CatBucket> = std::collections::BTreeMap::new();
+    for (cat, cmd, desc) in &filtered {
+        by_cat
+            .entry(cat.order())
+            .or_insert_with(|| (*cat, Vec::new()))
+            .1
+            .push((cmd.clone(), desc.clone()));
+    }
+    by_cat.into_values().collect()
+}
+
 /// Próximo índice selecionável (pulando `Header`). Mantém posição se já está no fim.
+#[cfg(test)]
 fn next_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
     let mut i = from.saturating_add(1);
     while i < rows.len() {
@@ -1245,6 +1275,7 @@ fn next_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
 }
 
 /// Anterior selecionável (pulando `Header`). Mantém posição se já está no topo.
+#[cfg(test)]
 fn prev_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
     if from == 0 {
         return 0;
@@ -1262,6 +1293,7 @@ fn prev_selectable_row(rows: &[PaletteRow], from: usize) -> usize {
 }
 
 /// Primeiro `Command` (pulando `Header` líder). Retorna 0 se não houver comandos.
+#[cfg(test)]
 fn first_selectable_row(rows: &[PaletteRow]) -> usize {
     rows.iter()
         .position(|r| matches!(r, PaletteRow::Command { .. }))
@@ -1754,26 +1786,101 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         Some(OverlayKind::SlashPalette {
             items,
             mut filter,
+            mut category_selected,
             mut selected,
+            mut focus,
         }) => {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Up) => {
-                    let rows = build_palette_rows(&items, &filter);
-                    selected = prev_selectable_row(&rows, selected);
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    let columns = build_palette_columns(&items, &filter);
+                    match focus {
+                        SlashPaletteFocus::Categories => {
+                            category_selected = category_selected.saturating_sub(1);
+                            selected = 0;
+                        }
+                        SlashPaletteFocus::Commands => {
+                            let cmd_len = columns
+                                .get(category_selected.min(columns.len().saturating_sub(1)))
+                                .map(|(_, cmds)| cmds.len())
+                                .unwrap_or(0);
+                            selected = selected.saturating_sub(1).min(cmd_len.saturating_sub(1));
+                        }
+                    }
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
                 (KeyModifiers::NONE, KeyCode::Down) => {
-                    let rows = build_palette_rows(&items, &filter);
-                    selected = next_selectable_row(&rows, selected);
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    let columns = build_palette_columns(&items, &filter);
+                    match focus {
+                        SlashPaletteFocus::Categories => {
+                            category_selected =
+                                (category_selected + 1).min(columns.len().saturating_sub(1));
+                            selected = 0;
+                        }
+                        SlashPaletteFocus::Commands => {
+                            let cmd_len = columns
+                                .get(category_selected.min(columns.len().saturating_sub(1)))
+                                .map(|(_, cmds)| cmds.len())
+                                .unwrap_or(0);
+                            selected = (selected + 1).min(cmd_len.saturating_sub(1));
+                        }
+                    }
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Left) => {
+                    focus = SlashPaletteFocus::Categories;
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
+                }
+                (KeyModifiers::NONE, KeyCode::Right) => {
+                    focus = SlashPaletteFocus::Commands;
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
-                    let rows = build_palette_rows(&items, &filter);
-                    if let Some(PaletteRow::Command { cmd, .. }) = rows.get(selected) {
-                        let cmd = cmd.clone();
-                        app.overlay = None;
-                        app.clear_input();
-                        return TuiAction::SlashCommand(format!("/{cmd}"));
+                    let columns = build_palette_columns(&items, &filter);
+                    if matches!(focus, SlashPaletteFocus::Categories) {
+                        focus = SlashPaletteFocus::Commands;
+                        selected = 0;
+                        app.overlay = Some(OverlayKind::SlashPalette {
+                            items,
+                            filter,
+                            category_selected,
+                            selected,
+                            focus,
+                        });
+                        return TuiAction::None;
+                    }
+                    if let Some((_, cmds)) =
+                        columns.get(category_selected.min(columns.len().saturating_sub(1)))
+                    {
+                        if let Some((cmd, _)) = cmds.get(selected.min(cmds.len().saturating_sub(1)))
+                        {
+                            app.overlay = None;
+                            app.clear_input();
+                            return TuiAction::SlashCommand(format!("/{}", cmd));
+                        }
                     }
                     // Se o filtro contém espaço, tenta "/<cmd> <arg>" — suporte a argumentos inline.
                     let stripped = filter.trim_start_matches('/');
@@ -1796,7 +1903,13 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                         }
                     }
                     // Header selecionado ou lista vazia → no-op (não fecha overlay).
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
                 (KeyModifiers::NONE, KeyCode::Esc) => {
                     app.overlay = None;
@@ -1804,19 +1917,39 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 (KeyModifiers::NONE, KeyCode::Backspace) => {
                     filter.pop();
-                    let rows = build_palette_rows(&items, &filter);
-                    selected = first_selectable_row(&rows);
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    let columns = build_palette_columns(&items, &filter);
+                    category_selected = 0.min(columns.len().saturating_sub(1));
+                    selected = 0;
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
                 (_, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let c = if c == '/' && filter.is_empty() { c } else { c };
                     filter.push(c);
-                    let rows = build_palette_rows(&items, &filter);
-                    selected = first_selectable_row(&rows);
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    let columns = build_palette_columns(&items, &filter);
+                    category_selected = 0.min(columns.len().saturating_sub(1));
+                    selected = 0;
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
                 _ => {
-                    app.overlay = Some(OverlayKind::SlashPalette { items, filter, selected });
+                    app.overlay = Some(OverlayKind::SlashPalette {
+                        items,
+                        filter,
+                        category_selected,
+                        selected,
+                        focus,
+                    });
                 }
             }
             TuiAction::None
@@ -2102,6 +2235,9 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                                 } else {
                                     // Single provider — save and close
                                     let _ = save_setup_keys(provider_sel, &new_key1, "");
+                                    if let Some(model) = setup_wizard_default_model(provider_sel) {
+                                        app.model = model;
+                                    }
                                     app.overlay = None;
                                     TuiAction::SetupComplete
                                 }
@@ -2109,6 +2245,9 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                                 // step == 2: finished typing key2
                                 let new_key2 = input.clone();
                                 let _ = save_setup_keys(provider_sel, &key1, &new_key2);
+                                if let Some(model) = setup_wizard_default_model(provider_sel) {
+                                    app.model = model;
+                                }
                                 app.overlay = None;
                                 TuiAction::SetupComplete
                             }
@@ -2703,19 +2842,65 @@ pub fn drain_auth_events(app: &mut UiApp) {
     }
 }
 
-const WIZARD_MODELS: &[&str] = &[
+const ANTHROPIC_MODELS: &[&str] = &[
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
-    "gpt-4o-mini",
 ];
+
+// Keep this list aligned with Codex-supported model IDs.
+const OPENAI_CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5", "gpt-5-mini", "gpt-5-nano"];
+
+const OPENAI_API_MODELS: &[&str] = &["gpt-4o", "gpt-4o-mini", "gpt-4.5", "o1", "o3", "o4-mini"];
+
+const XAI_MODELS: &[&str] = &["grok-3", "grok-3-mini"];
+
+fn models_for_provider(provider: WizardProvider) -> Vec<String> {
+    let ids: &[&str] = match provider {
+        WizardProvider::Anthropic => ANTHROPIC_MODELS,
+        WizardProvider::OpenAi(OpenAiChannel::Codex) => OPENAI_CODEX_MODELS,
+        WizardProvider::OpenAi(OpenAiChannel::ApiKey) => OPENAI_API_MODELS,
+        WizardProvider::Xai => XAI_MODELS,
+    };
+    ids.iter().map(|s| (*s).to_string()).collect()
+}
+
+fn provider_label(provider: WizardProvider) -> &'static str {
+    match provider {
+        WizardProvider::Anthropic => "Anthropic",
+        WizardProvider::OpenAi(OpenAiChannel::Codex) => "OpenAI (ChatGPT/Codex)",
+        WizardProvider::OpenAi(OpenAiChannel::ApiKey) => "OpenAI (API key)",
+        WizardProvider::Xai => "xAI (Grok)",
+    }
+}
 
 const WIZARD_PERMS: &[&str] = &[
     "read-only",
     "workspace-write",
     "danger-full-access",
 ];
+
+fn setup_wizard_default_model(provider_sel: usize) -> Option<String> {
+    match provider_sel {
+        // Anthropic
+        0 => Some(
+            std::env::var("ELAI_DEFAULT_ANTHROPIC_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "claude-haiku-4-5-20251001".to_string()),
+        ),
+        // OpenAI
+        1 => Some(
+            std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "gpt-4o-mini".to_string()),
+        ),
+        // Both: keep current model unchanged.
+        _ => None,
+    }
+}
 
 fn handle_first_run_wizard_key(
     app: &mut UiApp,
@@ -2731,7 +2916,7 @@ fn handle_first_run_wizard_key(
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
                 app.overlay = Some(OverlayKind::FirstRunWizard {
-                    step: WizardStep::Model { selected: 0 },
+                    step: WizardStep::Provider { selected: 0 },
                     state,
                 });
                 TuiAction::None
@@ -2745,7 +2930,7 @@ fn handle_first_run_wizard_key(
             }
         },
 
-        WizardStep::Model { selected } => match (key.modifiers, key.code) {
+        WizardStep::Provider { selected } => match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 app.overlay = Some(OverlayKind::FirstRunWizard {
                     step: WizardStep::Welcome,
@@ -2755,7 +2940,7 @@ fn handle_first_run_wizard_key(
             }
             (KeyModifiers::NONE, KeyCode::Up) => {
                 app.overlay = Some(OverlayKind::FirstRunWizard {
-                    step: WizardStep::Model {
+                    step: WizardStep::Provider {
                         selected: selected.saturating_sub(1),
                     },
                     state,
@@ -2763,20 +2948,83 @@ fn handle_first_run_wizard_key(
                 TuiAction::None
             }
             (KeyModifiers::NONE, KeyCode::Down) => {
-                let next = (selected + 1).min(WIZARD_MODELS.len().saturating_sub(1));
+                let next = (selected + 1).min(WIZARD_PROVIDER_OPTIONS.len().saturating_sub(1));
                 app.overlay = Some(OverlayKind::FirstRunWizard {
-                    step: WizardStep::Model { selected: next },
+                    step: WizardStep::Provider { selected: next },
                     state,
                 });
                 TuiAction::None
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
-                let model = WIZARD_MODELS
+                let provider = WIZARD_PROVIDER_OPTIONS
                     .get(selected)
                     .copied()
-                    .unwrap_or("claude-opus-4-6")
+                    .unwrap_or(WizardProvider::Anthropic);
+                let mut new_state = state;
+                new_state.provider = provider;
+                let models = models_for_provider(provider);
+                if let Some(default_model) = models.first() {
+                    new_state.model = default_model.clone();
+                }
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { provider, selected: 0 },
+                    state: new_state,
+                });
+                TuiAction::None
+            }
+            _ => {
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Provider { selected },
+                    state,
+                });
+                TuiAction::None
+            }
+        },
+
+        WizardStep::Model { provider, selected } => match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                let provider_selected = WIZARD_PROVIDER_OPTIONS
+                    .iter()
+                    .position(|p| *p == provider)
+                    .unwrap_or(0);
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Provider {
+                        selected: provider_selected,
+                    },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Up) => {
+                let next = selected.saturating_sub(1);
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model {
+                        provider,
+                        selected: next,
+                    },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Down) => {
+                let models = models_for_provider(provider);
+                let next = (selected + 1).min(models.len().saturating_sub(1));
+                app.overlay = Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { provider, selected: next },
+                    state,
+                });
+                TuiAction::None
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                let model = models_for_provider(provider)
+                    .get(selected)
+                    .cloned()
+                    .unwrap_or_else(|| "claude-opus-4-6".to_string())
                     .to_string();
-                let new_state = WizardState { model, ..state };
+                let new_state = WizardState {
+                    model,
+                    ..state
+                };
                 app.overlay = Some(OverlayKind::FirstRunWizard {
                     step: WizardStep::Permissions { selected: 0 },
                     state: new_state,
@@ -2785,7 +3033,7 @@ fn handle_first_run_wizard_key(
             }
             _ => {
                 app.overlay = Some(OverlayKind::FirstRunWizard {
-                    step: WizardStep::Model { selected },
+                    step: WizardStep::Model { provider, selected },
                     state,
                 });
                 TuiAction::None
@@ -2794,8 +3042,16 @@ fn handle_first_run_wizard_key(
 
         WizardStep::Permissions { selected } => match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Esc) => {
+                let provider = state.provider;
+                let selected_model = models_for_provider(provider)
+                    .iter()
+                    .position(|m| m == &state.model)
+                    .unwrap_or(0);
                 app.overlay = Some(OverlayKind::FirstRunWizard {
-                    step: WizardStep::Model { selected: 0 },
+                    step: WizardStep::Model {
+                        provider,
+                        selected: selected_model,
+                    },
                     state,
                 });
                 TuiAction::None
@@ -4674,10 +4930,20 @@ fn draw_overlay(
         OverlayKind::SlashPalette {
             items,
             filter,
+            category_selected,
             selected,
+            focus,
         } => {
-            let rows = build_palette_rows(items, filter);
-            draw_slash_palette_grouped(frame, area, &rows, *selected, filter);
+            let columns = build_palette_columns(items, filter);
+            draw_slash_palette_grouped(
+                frame,
+                area,
+                &columns,
+                *category_selected,
+                *selected,
+                *focus,
+                filter,
+            );
         }
         OverlayKind::SessionPicker { items, selected } => {
             let labels: Vec<String> = items
@@ -4834,19 +5100,19 @@ fn draw_picker(
     );
 }
 
-/// Render da paleta Ctrl+K com cabeçalhos de seção não-selecionáveis.
-/// `selected` indexa diretamente `rows`; assume-se que aponta para um `Command`
-/// (caller usa `first_selectable_row` / `next_selectable_row`).
+/// Render da paleta Ctrl+K em duas colunas (categorias + comandos).
 fn draw_slash_palette_grouped(
     frame: &mut ratatui::Frame,
     area: Rect,
-    rows: &[PaletteRow],
+    columns: &[(SlashCategory, Vec<(String, String)>)],
+    category_selected: usize,
     selected: usize,
+    focus: SlashPaletteFocus,
     filter: &str,
 ) {
-    let width = (area.width / 2).max(50).min(area.width - 4);
+    let width = (area.width * 3 / 4).max(70).min(area.width - 4);
     // +6 para borda + filtro + hint; usa mesmo cálculo do draw_picker.
-    let height = (rows.len() as u16 + 6).min(area.height - 4);
+    let height = (columns.len() as u16 + 8).min(area.height - 4);
     let x = (area.width.saturating_sub(width)) / 2 + area.x;
     let y = (area.height.saturating_sub(height)) / 2 + area.y;
     let popup = Rect::new(x, y, width, height);
@@ -4869,55 +5135,103 @@ fn draw_slash_palette_grouped(
         ])
         .split(inner);
 
-    let list_area = layout[0];
+    let content_area = layout[0];
     let filter_area = layout[1];
     let hint_area = layout[2];
 
-    let mut list_items: Vec<CheeseRenderRow> = rows
+    let columns_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![Constraint::Percentage(34), Constraint::Percentage(66)])
+        .split(content_area);
+    let left_area = columns_layout[0];
+    let right_area = columns_layout[1];
+
+    let left_title = if matches!(focus, SlashPaletteFocus::Categories) {
+        "Categorias ●"
+    } else {
+        "Categorias"
+    };
+    let right_title = if matches!(focus, SlashPaletteFocus::Commands) {
+        "Comandos ●"
+    } else {
+        "Comandos"
+    };
+    let left_fieldset = Fieldset::new()
+        .title(left_title)
+        .fill(FieldsetFill::Dash)
+        .styles(FieldsetStyles::from_palette(&palette));
+    let right_fieldset = Fieldset::new()
+        .title(right_title)
+        .fill(FieldsetFill::Dash)
+        .styles(FieldsetStyles::from_palette(&palette));
+    let left_inner = left_fieldset.inner(left_area);
+    let right_inner = right_fieldset.inner(right_area);
+    frame.render_widget(left_fieldset, left_area);
+    frame.render_widget(right_fieldset, right_area);
+
+    let mut category_items: Vec<CheeseRenderRow> = columns
         .iter()
-        .enumerate()
-        .map(|(i, row)| match row {
-            PaletteRow::Header(label) => CheeseRenderRow {
-                text: label.clone(),
-                kind: CheeseRowKind::Header,
-            },
-            PaletteRow::Command { cmd, desc } => {
-                let coming_soon = is_command_coming_soon(cmd);
-                let suffix = if coming_soon { "  (em breve)" } else { "" };
-                let body = format!("/{cmd:<12} {desc}{suffix}");
-                if i == selected {
-                    CheeseRenderRow {
-                        text: body,
-                        kind: CheeseRowKind::Option,
-                    }
-                } else if coming_soon {
-                    CheeseRenderRow {
-                        text: body,
-                        kind: CheeseRowKind::ComingSoon,
-                    }
-                } else {
-                    CheeseRenderRow {
-                        text: body,
-                        kind: CheeseRowKind::Option,
-                    }
-                }
-            }
+        .map(|(cat, cmds)| CheeseRenderRow {
+            text: format!("{} ({})", category_label_pt(*cat), cmds.len()),
+            kind: CheeseRowKind::Option,
         })
         .collect();
-    if list_items.is_empty() {
-        list_items.push(CheeseRenderRow {
-            text: "sem comandos para este filtro".to_string(),
+    if category_items.is_empty() {
+        category_items.push(CheeseRenderRow {
+            text: "sem categorias".to_string(),
             kind: CheeseRowKind::ComingSoon,
         });
     }
-    let mut list_state = CheeseListState::new(list_items.len());
-    list_state.select(selected.min(list_items.len().saturating_sub(1)), list_items.len());
-    let list = CheeseList::new(&list_items)
+    let mut category_state = CheeseListState::new(category_items.len());
+    category_state.select(
+        category_selected.min(category_items.len().saturating_sub(1)),
+        category_items.len(),
+    );
+    let category_list = CheeseList::new(&category_items)
         .palette(palette.clone())
         .show_paginator(false)
         .item_spacing(0)
         .selection_indicator("▶");
-    frame.render_stateful_widget(list, list_area, &mut list_state);
+    frame.render_stateful_widget(category_list, left_inner, &mut category_state);
+
+    let mut command_items: Vec<CheeseRenderRow> = if let Some((_, cmds)) =
+        columns.get(category_selected.min(columns.len().saturating_sub(1)))
+    {
+        cmds.iter()
+            .map(|(cmd, desc)| {
+                let coming_soon = is_command_coming_soon(cmd);
+                let suffix = if coming_soon { "  (em breve)" } else { "" };
+                let body = format!("/{cmd:<12} {desc}{suffix}");
+                CheeseRenderRow {
+                    text: body,
+                    kind: if coming_soon {
+                        CheeseRowKind::ComingSoon
+                    } else {
+                        CheeseRowKind::Option
+                    },
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if command_items.is_empty() {
+        command_items.push(CheeseRenderRow {
+            text: "sem comandos para este filtro".to_string(),
+            kind: CheeseRowKind::ComingSoon,
+        });
+    }
+    let mut command_state = CheeseListState::new(command_items.len());
+    command_state.select(
+        selected.min(command_items.len().saturating_sub(1)),
+        command_items.len(),
+    );
+    let list = CheeseList::new(&command_items)
+        .palette(palette.clone())
+        .show_paginator(false)
+        .item_spacing(0)
+        .selection_indicator("▶");
+    frame.render_stateful_widget(list, right_inner, &mut command_state);
 
     frame.render_widget(
         Paragraph::new(format!("  filtro: {filter}_"))
@@ -4925,7 +5239,7 @@ fn draw_slash_palette_grouped(
         filter_area,
     );
     frame.render_widget(
-        Paragraph::new("  ↑/↓ navegar · Enter aplicar · Esc cancelar")
+        Paragraph::new("  ←/→ foco colunas · ↑/↓ navegar · Enter executar · Esc cancelar")
             .style(Style::default().fg(theme().text_secondary)),
         hint_area,
     );
@@ -4933,7 +5247,6 @@ fn draw_slash_palette_grouped(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CheeseRowKind {
-    Header,
     Option,
     ComingSoon,
 }
@@ -4954,12 +5267,6 @@ impl CheeseListItem for CheeseRenderRow {
             return;
         }
         let (prefix, style) = match self.kind {
-            CheeseRowKind::Header => (
-                "  ",
-                Style::default()
-                    .fg(ctx.palette.secondary)
-                    .add_modifier(Modifier::BOLD),
-            ),
             CheeseRowKind::ComingSoon if !ctx.selected => ("  ", Style::default().fg(ctx.palette.muted)),
             _ if ctx.selected => (
                 "  ",
@@ -5337,11 +5644,12 @@ fn draw_first_run_wizard(
     frame.render_widget(Clear, popup);
 
     let (step_label, total_steps) = match step {
-        WizardStep::Welcome => ("1", "5"),
-        WizardStep::Model { .. } => ("2", "5"),
-        WizardStep::Permissions { .. } => ("3", "5"),
-        WizardStep::Defaults { .. } => ("4", "5"),
-        WizardStep::Done => ("5", "5"),
+        WizardStep::Welcome => ("1", "6"),
+        WizardStep::Provider { .. } => ("2", "6"),
+        WizardStep::Model { .. } => ("3", "6"),
+        WizardStep::Permissions { .. } => ("4", "6"),
+        WizardStep::Defaults { .. } => ("5", "6"),
+        WizardStep::Done => ("6", "6"),
     };
 
     let block = Block::default()
@@ -5391,25 +5699,17 @@ fn draw_first_run_wizard(
             )),
         ],
 
-        WizardStep::Model { selected } => {
+        WizardStep::Provider { selected } => {
             let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("  {}", rust_i18n::t!("tui.wizard.model.title")),
+                    "  Escolha o provedor/canal:",
                     Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
             ];
-            let recommended = rust_i18n::t!("tui.wizard.model.recommended");
-            let fallback = rust_i18n::t!("tui.wizard.model.fallback");
-            let labels = [
-                format!("claude-opus-4-7        {recommended}"),
-                "claude-opus-4-6".to_string(),
-                "claude-sonnet-4-6".to_string(),
-                "claude-haiku-4-5-20251001".to_string(),
-                format!("gpt-4o-mini            {fallback}"),
-            ];
-            for (i, label) in labels.iter().enumerate() {
+            for (i, provider) in WIZARD_PROVIDER_OPTIONS.iter().enumerate() {
+                let label = provider_label(*provider);
                 if i == *selected {
                     lines.push(Line::from(Span::styled(
                         format!("  ▶ {label}"),
@@ -5421,6 +5721,40 @@ fn draw_first_run_wizard(
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!("    {label}"),
+                        Style::default().fg(theme().text_primary),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", rust_i18n::t!("tui.wizard.nav.up_down_enter_esc")),
+                Style::default().fg(theme().text_secondary),
+            )));
+            lines
+        }
+
+        WizardStep::Model { provider, selected } => {
+            let models = models_for_provider(*provider);
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {} ({})", rust_i18n::t!("tui.wizard.model.title"), provider_label(*provider)),
+                    Style::default().fg(theme().text_primary).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+            ];
+            for (i, model) in models.iter().enumerate() {
+                if i == *selected {
+                    lines.push(Line::from(Span::styled(
+                        format!("  ▶ {model}"),
+                        Style::default()
+                            .fg(theme().accent_on_primary_bg)
+                            .bg(theme().primary_accent)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {model}"),
                         Style::default().fg(theme().text_primary),
                     )));
                 }
@@ -6529,12 +6863,25 @@ mod tests {
         let mut app = make_app();
         app.open_first_run_wizard();
 
-        // Welcome -> Model
+        // Welcome -> Provider
         wizard_enter(&mut app);
         assert!(
             matches!(
                 app.overlay,
-                Some(OverlayKind::FirstRunWizard { step: WizardStep::Model { .. }, .. })
+                Some(OverlayKind::FirstRunWizard { step: WizardStep::Provider { .. }, .. })
+            ),
+            "expected Provider step"
+        );
+
+        // Provider -> Model
+        wizard_enter(&mut app);
+        assert!(
+            matches!(
+                app.overlay,
+                Some(OverlayKind::FirstRunWizard {
+                    step: WizardStep::Model { .. },
+                    ..
+                })
             ),
             "expected Model step"
         );
@@ -6580,7 +6927,8 @@ mod tests {
     fn setup_wizard_model_selection_is_captured() {
         let mut app = make_app();
         app.open_first_run_wizard();
-        wizard_enter(&mut app); // -> Model
+        wizard_enter(&mut app); // -> Provider
+        wizard_enter(&mut app); // Provider(Anthropic) -> Model
 
         // Navigate down twice to select index 2 (claude-sonnet-4-6)
         handle_overlay_key(&mut app, make_key(KeyCode::Down));
@@ -6606,7 +6954,8 @@ mod tests {
     fn setup_wizard_defaults_toggle_works() {
         let mut app = make_app();
         app.open_first_run_wizard();
-        wizard_enter(&mut app); // Welcome -> Model
+        wizard_enter(&mut app); // Welcome -> Provider
+        wizard_enter(&mut app); // Provider -> Model
         wizard_enter(&mut app); // Model -> Permissions
         wizard_enter(&mut app); // Permissions -> Defaults
 
@@ -6653,7 +7002,8 @@ mod tests {
 
         let mut app = make_app();
         app.open_first_run_wizard();
-        wizard_enter(&mut app); // Welcome -> Model
+        wizard_enter(&mut app); // Welcome -> Provider
+        wizard_enter(&mut app); // Provider -> Model
         wizard_enter(&mut app); // Model -> Permissions
         wizard_enter(&mut app); // Permissions -> Defaults
         wizard_enter(&mut app); // Defaults -> Done
