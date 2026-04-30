@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseEventKind,
 };
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
@@ -1306,14 +1306,14 @@ fn first_selectable_row(rows: &[PaletteRow]) -> usize {
 /// Text selection still works via Shift+drag in most terminals.
 pub fn enter_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     Ok(())
 }
 
 /// Restore terminal on exit (always call even on error).
 pub fn leave_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(stdout, DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen)?;
     Ok(())
 }
 
@@ -1404,6 +1404,19 @@ pub fn poll_and_handle(
                 return TuiAction::ExitReadMode;
             }
             handle_key(app, key)
+        }
+
+        Event::Paste(pasted) => {
+            if app.read_mode || app.overlay.is_some() {
+                return TuiAction::None;
+            }
+            // Bracketed paste: insere conteúdo bruto no input sem disparar submit.
+            // Normaliza CRLF/CR para '\n' para manter consistência no editor multilinha.
+            let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
+            for ch in normalized.chars() {
+                app.input_char(ch);
+            }
+            TuiAction::None
         }
 
         _ => TuiAction::None,
