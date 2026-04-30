@@ -5,6 +5,35 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [0.9.1] - 2026-04-29
+
+Hotfix do build em CI cross-compile (musl) que quebrou em 0.9.0 ao
+adicionar `native-tls`. Mantém todas as features do 0.9.0 + correção do
+TLS sem dependência de `openssl-sys`.
+
+### Corrigido
+
+- **Build em `aarch64-unknown-linux-musl`**: 0.9.0 adicionou a feature
+  `native-tls` ao `reqwest` na crate `tools` para resolver o problema
+  de TLS handshake com Railway no macOS. Isso introduziu `openssl-sys`
+  como dependência, que quebra o cross-compile pra musl no CI
+  (`Could not find directory of OpenSSL installation`).
+- Substituída a feature por `rustls-tls-native-roots`: continua usando
+  rustls (puro Rust, sem deps C), mas agora lê os root certificates do
+  **sistema** (Keychain no macOS, `/etc/ssl/certs` no Linux, cert store
+  no Windows) em vez de `webpki-roots` embutido.
+- Resolve a causa raiz do bug original (snapshot estática de roots
+  desatualizada) sem trade-off no build cross-platform.
+- Removida chamada `.use_native_tls()` em `dr_client()` — volta ao
+  default do reqwest com a feature acima ativada.
+
+### Notas
+
+- Todas as features e correções do 0.9.0 permanecem ativas.
+- Veja entrada [0.9.0] abaixo para a lista completa.
+
+---
+
 ## [0.9.0] - 2026-04-29
 
 Esta versão introduz a tool **DeepResearch** — pesquisa profunda na web com

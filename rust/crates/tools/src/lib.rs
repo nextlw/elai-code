@@ -2944,9 +2944,11 @@ fn run_deep_research(input: DeepResearchInput) -> Result<String, String> {
 }
 
 fn dr_client(timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
+    // rustls-tls-native-roots: rustls + roots do sistema (Keychain no macOS,
+    // /etc/ssl/certs no Linux). Resolve cadeias modernas (cross-sign Let's
+    // Encrypt) sem precisar de openssl-sys (que quebra cross-compile pra musl).
     reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
-        .use_native_tls()
         .build()
         .map_err(|e| e.to_string())
 }
