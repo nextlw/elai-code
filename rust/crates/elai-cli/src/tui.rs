@@ -195,10 +195,13 @@ pub enum ChatEntry {
         hunks: Vec<crate::diff::DiffHunk>,
     },
     /// Linha viva de uma task. Mutável até `finished = true`; depois congela.
+    /// Para tasks "multi-line" (ex.: DeepResearch), `events` acumula o histórico
+    /// e é renderizado como bloco; tasks single-line usam apenas `msg`.
     TaskProgress {
         task_id: String,
         label: String,
         msg: String,
+        events: Vec<String>,
         finished: bool,
         status: Option<runtime::TaskStatus>,
     },
@@ -714,6 +717,7 @@ impl UiApp {
                 self.push_chat(ChatEntry::SystemNote(note));
             }
             TuiMsg::TaskProgress { task_id, label, msg } => {
+                let multiline = is_multiline_task(&label);
                 // Scan reverso curto (≤ 8 entries) — cobre o caso comum onde
                 // tool calls / assistant text se intercalam com updates.
                 let found = self
@@ -724,18 +728,31 @@ impl UiApp {
                     .find(|e| matches_task_progress(e, &task_id));
                 match found {
                     Some(ChatEntry::TaskProgress {
-                        msg: m, label: l, ..
+                        msg: m,
+                        label: l,
+                        events,
+                        ..
                     }) => {
+                        if multiline {
+                            // Acumula no histórico, dedup do último.
+                            if events.last().map(String::as_str) != Some(msg.as_str()) {
+                                events.push(msg.clone());
+                            }
+                        }
                         *m = msg;
                         *l = label;
                     }
-                    _ => self.push_chat(ChatEntry::TaskProgress {
-                        task_id,
-                        label,
-                        msg,
-                        finished: false,
-                        status: None,
-                    }),
+                    _ => {
+                        let events = if multiline { vec![msg.clone()] } else { Vec::new() };
+                        self.push_chat(ChatEntry::TaskProgress {
+                            task_id,
+                            label,
+                            msg,
+                            events,
+                            finished: false,
+                            status: None,
+                        });
+                    }
                 }
                 self.scroll_to_bottom();
             }
@@ -3422,6 +3439,133 @@ fn syntax_resources() -> &'static (SyntaxSet, SyntectTheme) {
     })
 }
 
+/// Tasks que renderizam como bloco multilinha (acumulam histórico de eventos).
+/// Para outras tasks o comportamento é single-line (último evento substitui).
+fn is_multiline_task(label: &str) -> bool {
+    let l = label.to_ascii_lowercase();
+    l.starts_with("deepresearch") || l.starts_with("deep research")
+}
+
+/// Quantas linhas visíveis o bloco multilinha mostra (janela rolante).
+const DR_VISIBLE_LINES: usize = 5;
+
+// ── Spinner sets variados (estilo rattles / cli-spinners) ────────────────
+const SPINNER_DOTS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_DOTS3: &[&str] = &["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"];
+const SPINNER_ARROWS: &[&str] = &["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"];
+const SPINNER_EARTH: &[&str] = &["🌍", "🌎", "🌏"];
+const SPINNER_SCAN: &[&str] = &["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⡖"];
+const SPINNER_TRIANGLE: &[&str] = &["◢", "◣", "◤", "◥"];
+const SPINNER_ARC: &[&str] = &["◜", "◠", "◝", "◞", "◡", "◟"];
+const SPINNER_GROW: &[&str] = &["▁", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃"];
+
+/// Escolhe o conjunto de frames do spinner conforme a "operação" atual,
+/// deduzida pelo emoji/prefixo do último evento. Inspirado em cli-spinners.
+fn spinner_for_msg(msg: &str) -> &'static [&'static str] {
+    if msg.starts_with("🔎") || msg.contains("Query:") {
+        SPINNER_ARROWS
+    } else if msg.starts_with("🌐") {
+        SPINNER_EARTH
+    } else if msg.starts_with("💭") {
+        SPINNER_DOTS3
+    } else if msg.starts_with("🔍") {
+        SPINNER_SCAN
+    } else if msg.starts_with("⚡") || msg.contains("Batch") || msg.contains("paralelas") {
+        SPINNER_TRIANGLE
+    } else if msg.starts_with("✍️") || msg.contains("Compilando") {
+        SPINNER_ARC
+    } else if msg.starts_with("📡") {
+        SPINNER_GROW
+    } else {
+        SPINNER_DOTS
+    }
+}
+
+/// Quebra `text` em no máximo `max_lines` linhas de até `width` caracteres.
+/// Quebra preferencialmente em espaços; se passar do limite, elide com "…".
+fn wrap_event_lines(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    let width = width.max(20);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        let need = if current.is_empty() {
+            word.chars().count()
+        } else {
+            current.chars().count() + 1 + word.chars().count()
+        };
+        if need <= width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        } else {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                if lines.len() >= max_lines {
+                    break;
+                }
+            }
+            // Palavra maior que a largura: corta em chunks.
+            let mut remaining: String = word.to_string();
+            while remaining.chars().count() > width {
+                let head: String = remaining.chars().take(width).collect();
+                lines.push(head);
+                remaining = remaining.chars().skip(width).collect();
+                if lines.len() >= max_lines {
+                    break;
+                }
+            }
+            if lines.len() >= max_lines {
+                break;
+            }
+            current = remaining;
+        }
+    }
+    if !current.is_empty() && lines.len() < max_lines {
+        lines.push(current);
+    }
+
+    // Se truncamos antes de exaurir o texto, marca a última com "…"
+    if lines.len() == max_lines {
+        let total_chars: usize = text.chars().count();
+        let consumed: usize = lines.iter().map(|l| l.chars().count()).sum::<usize>() + lines.len();
+        if consumed < total_chars {
+            if let Some(last) = lines.last_mut() {
+                if last.chars().count() >= width {
+                    let trimmed: String = last.chars().take(width.saturating_sub(1)).collect();
+                    *last = format!("{}…", trimmed);
+                } else {
+                    last.push('…');
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Brand color para o demarcador vertical de cada tipo de task.
+/// Mesmo padrão de `lang_label_color` para blocos de código — cada task tem
+/// sua cor pra ficar visualmente identificável (verde = bash, azul = deep, etc).
+fn task_label_color(label: &str) -> ratatui::style::Color {
+    let l = label.to_ascii_lowercase();
+    if l.starts_with("deepresearch") || l.starts_with("deep research") {
+        ratatui::style::Color::Rgb(0, 173, 216) // azul ciano
+    } else if l.starts_with("verify") {
+        ratatui::style::Color::Rgb(137, 224, 81) // verde (igual bash)
+    } else if l.starts_with("agent") {
+        ratatui::style::Color::Rgb(180, 130, 200) // roxo
+    } else if l.starts_with("plugin") {
+        ratatui::style::Color::Rgb(241, 224, 90) // amarelo
+    } else {
+        theme().info
+    }
+}
+
 /// Language-specific label color — each language has its recognized brand color.
 fn lang_label_color(lang: &str) -> ratatui::style::Color {
     match lang {
@@ -3916,11 +4060,17 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
             ChatEntry::TaskProgress {
                 label,
                 msg,
+                events,
                 finished,
                 status,
                 ..
             } => {
-                let (prefix, color) = if *finished {
+                // Bloco visual igual aos code fences:
+                //   ╭─ Label ─
+                //   │ ⠋ msg…
+                //   ╰──────
+                let border_color = task_label_color(label);
+                let (prefix, prefix_color) = if *finished {
                     match status {
                         Some(runtime::TaskStatus::Completed) => ("\u{2713}", theme().success), // ✓
                         Some(runtime::TaskStatus::Failed) => ("\u{2717}", theme().error),       // ✗
@@ -3929,22 +4079,78 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                     }
                 } else {
                     let frame = SPINNER[app.spinner_frame % SPINNER.len()];
-                    (frame, theme().info)
+                    (frame, border_color)
+                };
+
+                // Header: ╭─ {spinner} Label ─
+                // Spinner muda conforme o tipo da última operação (URL, query,
+                // thinking, etc), inspirado em cli-spinners/rattles.
+                let header_spinner = if *finished {
+                    prefix.to_string()
+                } else {
+                    let frames = spinner_for_msg(msg);
+                    frames[app.spinner_frame % frames.len()].to_string()
                 };
                 result.push(Line::from(vec![
+                    Span::styled("  ╭─ ", Style::default().fg(border_color)),
                     Span::styled(
-                        format!("  {prefix} "),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        format!("{header_spinner} "),
+                        Style::default().fg(prefix_color).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         label.clone(),
-                        Style::default()
-                            .fg(theme().text_primary)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" \u{00b7} "),
-                    Span::styled(msg.clone(), Style::default().fg(theme().text_secondary)),
+                    Span::styled(" ─", Style::default().fg(border_color)),
                 ]));
+
+                // Conteúdo: multilinha (events) com janela rolante das últimas
+                // DR_VISIBLE_LINES linhas, ou linha única (msg).
+                let inner_width = 88usize;
+                if events.is_empty() {
+                    result.push(Line::from(vec![
+                        Span::styled("  │ ", Style::default().fg(border_color)),
+                        Span::styled(msg.clone(), Style::default().fg(theme().text_secondary)),
+                    ]));
+                } else {
+                    // Expande todos os eventos em linhas visuais, marcando qual é
+                    // a primeira linha de cada evento (pra colocar o bullet "·").
+                    let mut visual_lines: Vec<(bool, String)> = Vec::new();
+                    for ev in events.iter() {
+                        let chunks = wrap_event_lines(ev, inner_width, 4);
+                        for (j, chunk) in chunks.into_iter().enumerate() {
+                            visual_lines.push((j == 0, chunk));
+                        }
+                    }
+                    // Janela rolante: pega últimas DR_VISIBLE_LINES.
+                    let total = visual_lines.len();
+                    let window: Vec<&(bool, String)> = if total > DR_VISIBLE_LINES {
+                        visual_lines[total - DR_VISIBLE_LINES..].iter().collect()
+                    } else {
+                        visual_lines.iter().collect()
+                    };
+                    for (is_first, chunk) in window {
+                        let lead = if *is_first { "·" } else { " " };
+                        result.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(border_color)),
+                            Span::styled(
+                                format!("{lead} "),
+                                Style::default().fg(theme().text_secondary),
+                            ),
+                            Span::styled(
+                                chunk.clone(),
+                                Style::default().fg(theme().text_secondary),
+                            ),
+                        ]));
+                    }
+                }
+
+                // Footer: ╰──────
+                result.push(Line::from(Span::styled(
+                    "  ╰──────",
+                    Style::default().fg(border_color),
+                )));
+
                 if *finished {
                     result.push(Line::from(""));
                 }

@@ -3173,14 +3173,14 @@ fn dr_run_with_reporter(
                 } else if content.contains("</think>") {
                     in_thinking = false;
                     if !think_buffer.is_empty() {
-                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 90)));
+                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 200)));
                         think_buffer.clear();
                     }
                 } else if in_thinking && !content.is_empty() {
                     thinking.push_str(content);
                     think_buffer.push_str(content);
                     if last_think_emit.elapsed().as_millis() > 250 && !think_buffer.is_empty() {
-                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 90)));
+                        reporter.report(&format!("💭 {}", dr_tail(&thinking, 200)));
                         think_buffer.clear();
                         last_think_emit = std::time::Instant::now();
                     }
