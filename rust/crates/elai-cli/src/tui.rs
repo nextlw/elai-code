@@ -2897,7 +2897,16 @@ const ANTHROPIC_MODELS: &[&str] = &[
 ];
 
 // Keep this list aligned with Codex-supported model IDs.
-const OPENAI_CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5", "gpt-5-mini", "gpt-5-nano"];
+const OPENAI_CODEX_MODELS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+];
 
 const OPENAI_API_MODELS: &[&str] = &["gpt-4o", "gpt-4o-mini", "gpt-4.5", "o1", "o3", "o4-mini"];
 
