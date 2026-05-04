@@ -154,7 +154,7 @@ pub fn save(cfg: &GlobalConfig) -> std::io::Result<()> {
 
 #[must_use]
 pub fn is_setup_complete() -> bool {
-    load().map_or(false, |c| c.setup_complete)
+    load().is_ok_and(|c| c.setup_complete)
 }
 
 #[cfg(test)]

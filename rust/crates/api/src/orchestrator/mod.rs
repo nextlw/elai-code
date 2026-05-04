@@ -7,7 +7,7 @@ pub mod types;
 
 pub use metrics::ModelMetrics;
 pub use orchestrator::{extract_fallback_reason, HealthReport, ProviderOrchestrator};
-pub use provider::{CodexBridgeUnifiedAdapter, ElaiUnifiedAdapter, OpenAiUnifiedAdapter, UnifiedProvider};
+pub use provider::{CodexBridgeUnifiedAdapter, ElaiUnifiedAdapter, GoUnifiedAdapter, OpenAiUnifiedAdapter, UnifiedProvider};
 pub use types::{
     FallbackReason, OrchestrationEvent, ProviderCapability, ProviderConfig, ProviderStatus,
     RequestOptions, TaskType,

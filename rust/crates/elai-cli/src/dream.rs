@@ -185,6 +185,7 @@ pub fn rewrite_memory(path: &Path, summary: &str, recent: &[String]) -> io::Resu
 }
 
 /// Format the output shown to the user after dream completes.
+#[allow(clippy::cast_precision_loss)]
 pub fn format_dream_output(result: &DreamResult) -> String {
     let summary_preview = if result.summary.len() > 200 {
         format!("{}…", &result.summary[..200])
@@ -210,6 +211,7 @@ pub fn format_dream_output(result: &DreamResult) -> String {
 /// Accepts a `model_call` closure (so the caller supplies the LLM backend) and a
 /// `reporter` for TUI-safe progress messages.  Returns `None` when the run is
 /// skipped, or `Some(DreamResult)` on success.
+#[allow(clippy::type_complexity)]
 pub fn execute_dream(
     cwd: &Path,
     force: bool,
@@ -225,8 +227,7 @@ pub fn execute_dream(
     let content = fs::read_to_string(&path)?;
     let before_size = content.len();
     let parsed = parse_memory_sections(&content);
-    let entries_to_compress: Vec<String>;
-    if parsed.old_entries.is_empty() {
+    let entries_to_compress: Vec<String> = if parsed.old_entries.is_empty() {
         if !force {
             reporter.report(&format!(
                 "Dream\n  Result           skipped\n  Reason           <= 20 entries (currently {})",
@@ -234,14 +235,14 @@ pub fn execute_dream(
             ));
             return Ok(None);
         }
-        entries_to_compress = if parsed.recent_entries.len() > 20 {
+        if parsed.recent_entries.len() > 20 {
             parsed.recent_entries[..parsed.recent_entries.len() - 20].to_vec()
         } else {
             parsed.recent_entries.clone()
-        };
+        }
     } else {
-        entries_to_compress = parsed.old_entries.clone();
-    }
+        parsed.old_entries.clone()
+    };
     reporter.report(&format!(
         "Dream\n  Compressing {} entries from {} ...",
         entries_to_compress.len(),

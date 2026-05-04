@@ -5,9 +5,9 @@ use crate::session::{ContentBlock, ConversationMessage, MessageRole};
 /// Describes each repair action taken. Useful for logging and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepairAction {
-    /// A tool_use had no corresponding tool_result — injected synthetic.
+    /// A `tool_use` had no corresponding `tool_result` — injected synthetic.
     InjectedSyntheticToolResult { tool_use_id: String },
-    /// A tool_result had no corresponding tool_use — removed.
+    /// A `tool_result` had no corresponding `tool_use` — removed.
     RemovedOrphanedToolResult { tool_use_id: String },
     /// First message was not User — inserted placeholder.
     PrependedUserPlaceholder,
@@ -16,7 +16,7 @@ pub enum RepairAction {
 /// Validates and repairs a message sequence to guarantee Anthropic API invariants.
 /// Returns the list of actions taken (empty = no issues found).
 ///
-/// Should be called immediately before constructing ApiRequest.
+/// Should be called immediately before constructing `ApiRequest`.
 /// Does NOT modify the persisted session — only the cloned messages sent to the API.
 pub fn validate_and_repair(messages: &mut Vec<ConversationMessage>) -> Vec<RepairAction> {
     let mut actions = Vec::new();
@@ -26,8 +26,8 @@ pub fn validate_and_repair(messages: &mut Vec<ConversationMessage>) -> Vec<Repai
     actions
 }
 
-/// Collects all tool_use ids present across all messages, then removes any
-/// ToolResult blocks whose tool_use_id has no corresponding ToolUse block.
+/// Collects all `tool_use` ids present across all messages, then removes any
+/// `ToolResult` blocks whose `tool_use_id` has no corresponding `ToolUse` block.
 fn repair_orphaned_tool_results(messages: &mut Vec<ConversationMessage>, actions: &mut Vec<RepairAction>) {
     // Collect every tool_use id that exists.
     let known_tool_use_ids: HashSet<String> = messages
@@ -79,8 +79,8 @@ fn repair_orphaned_tool_results(messages: &mut Vec<ConversationMessage>, actions
     messages.retain(|msg| !msg.blocks.is_empty());
 }
 
-/// For each Assistant message containing ToolUse blocks, verifies the next
-/// message contains ToolResult blocks for each tool_use_id. If not, injects
+/// For each Assistant message containing `ToolUse` blocks, verifies the next
+/// message contains `ToolResult` blocks for each `tool_use_id`. If not, injects
 /// a synthetic Tool message with a placeholder result.
 fn repair_missing_tool_results(messages: &mut Vec<ConversationMessage>, actions: &mut Vec<RepairAction>) {
     let mut i = 0;
@@ -169,15 +169,12 @@ fn repair_missing_tool_results(messages: &mut Vec<ConversationMessage>, actions:
 /// Ensures the first non-System message is a valid User message.
 ///
 /// Iteratively removes leading Tool messages and User messages that contain
-/// only ToolResult blocks (both are invalid as the first API message). After
+/// only `ToolResult` blocks (both are invalid as the first API message). After
 /// draining any such messages, prepends a placeholder User message if needed.
 /// Uses a loop instead of recursion to avoid duplicate action entries.
 fn repair_first_message_role(messages: &mut Vec<ConversationMessage>, actions: &mut Vec<RepairAction>) {
     loop {
-        let idx = match messages.iter().position(|m| m.role != MessageRole::System) {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(idx) = messages.iter().position(|m| m.role != MessageRole::System) else { return };
 
         let msg = &messages[idx];
 

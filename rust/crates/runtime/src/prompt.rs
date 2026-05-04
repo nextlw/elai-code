@@ -318,17 +318,11 @@ pub fn parse_mentions(text: &str) -> Vec<String> {
 /// Trunca cada arquivo a `MAX_MENTIONED_FILE_BYTES`.
 #[must_use]
 pub fn read_mentioned_files(cwd: &std::path::Path, mentions: &[String]) -> Vec<ContextFile> {
-    let cwd_abs = match cwd.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
+    let Ok(cwd_abs) = cwd.canonicalize() else { return Vec::new() };
     let mut out = Vec::new();
     for m in mentions {
         let candidate = cwd.join(m);
-        let abs = match candidate.canonicalize() {
-            Ok(p) => p,
-            Err(_) => continue, // arquivo não existe — ignora
-        };
+        let Ok(abs) = candidate.canonicalize() else { continue };
         if !abs.starts_with(&cwd_abs) {
             // path traversal — skip
             continue;
@@ -336,10 +330,7 @@ pub fn read_mentioned_files(cwd: &std::path::Path, mentions: &[String]) -> Vec<C
         if !abs.is_file() {
             continue;
         }
-        let content = match std::fs::read_to_string(&abs) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+        let Ok(content) = std::fs::read_to_string(&abs) else { continue };
         let truncated = if content.len() > MAX_MENTIONED_FILE_BYTES {
             let mut idx = MAX_MENTIONED_FILE_BYTES;
             while idx > 0 && !content.is_char_boundary(idx) {

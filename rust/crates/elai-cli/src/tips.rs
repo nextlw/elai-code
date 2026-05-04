@@ -44,6 +44,7 @@ pub fn shuffle_indices(n: usize) -> Vec<usize> {
         return order;
     }
     let mut state = seed();
+    #[allow(clippy::cast_possible_truncation)]
     for i in (1..n).rev() {
         state = lcg_next(state);
         let j = (state as usize) % (i + 1);
@@ -52,11 +53,11 @@ pub fn shuffle_indices(n: usize) -> Vec<usize> {
     order
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| (d.as_nanos() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        .unwrap_or(0xDEAD_BEEF_CAFE_BABE)
+        .map_or(0xDEAD_BEEF_CAFE_BABE, |d| (d.as_nanos() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
         | 1
 }
 

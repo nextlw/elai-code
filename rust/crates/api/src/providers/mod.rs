@@ -7,6 +7,7 @@ use crate::types::{MessageRequest, MessageResponse};
 pub mod claude_code_spoof;
 pub mod codex_bridge;
 pub mod elai_provider;
+pub mod go_client;
 pub mod openai_compat;
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + Send + 'a>>;
@@ -34,6 +35,8 @@ pub enum ProviderKind {
     Ollama,
     /// LM Studio local server (OpenAI-compatible API at `:1234/v1`).
     LmStudio,
+    /// `OpenCode` Go — OpenAI-compatible chat API at `opencode.ai/zen/go/v1`.
+    OpenCodeGo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +156,69 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         },
     ),
+    (
+        "kimi-k2.6",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "glm-5",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "deepseek-v4-pro",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "qwen3.6-plus",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "mimo-v2-pro",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "minimax-m2.5",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
+    (
+        "minimax-m2.7",
+        ProviderMetadata {
+            provider: ProviderKind::OpenCodeGo,
+            auth_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+        },
+    ),
 ];
 
 /// Reconhece um prefixo `<provider>:<model>` que força o roteamento para um
@@ -167,6 +233,7 @@ pub fn parse_local_provider_prefix(model: &str) -> Option<(ProviderKind, String)
     let kind = match prefix.to_ascii_lowercase().as_str() {
         "ollama" => ProviderKind::Ollama,
         "lmstudio" | "lm-studio" | "lm_studio" => ProviderKind::LmStudio,
+        "go" | "opencode-go" | "opencode_go" => ProviderKind::OpenCodeGo,
         _ => return None,
     };
     let bare = rest.trim();
@@ -199,7 +266,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::LmStudio => trimmed,
+                ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::LmStudio | ProviderKind::OpenCodeGo => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -207,8 +274,8 @@ pub fn resolve_model_alias(model: &str) -> String {
 
 #[must_use]
 pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
-    // Prefixo explícito `ollama:NAME` / `lmstudio:NAME` curto-circuita a
-    // detecção heurística — não tentamos adivinhar pelo nome bare do modelo.
+    // Prefixo explícito `ollama:NAME` / `lmstudio:NAME` / `go:NAME` curto-circuita
+    // a detecção heurística — não tentamos adivinhar pelo nome bare do modelo.
     if let Some((kind, _)) = parse_local_provider_prefix(model) {
         return Some(match kind {
             ProviderKind::Ollama => ProviderMetadata {
@@ -223,7 +290,13 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
                 base_url_env: "LMSTUDIO_BASE_URL",
                 default_base_url: openai_compat::DEFAULT_LM_STUDIO_BASE_URL,
             },
-            _ => unreachable!("parse_local_provider_prefix only returns Ollama or LmStudio"),
+            ProviderKind::OpenCodeGo => ProviderMetadata {
+                provider: ProviderKind::OpenCodeGo,
+                auth_env: "OPENCODE_GO_API_KEY",
+                base_url_env: "OPENCODE_GO_BASE_URL",
+                default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+            },
+            _ => unreachable!("parse_local_provider_prefix returns unexpected kind"),
         });
     }
     let canonical = resolve_model_alias(model);
@@ -274,6 +347,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if openai_compat::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
     }
+    if openai_compat::has_api_key("OPENCODE_GO_API_KEY") {
+        return ProviderKind::OpenCodeGo;
+    }
     // Local providers como último recurso: se o usuário setou explicitamente
     // o base_url de um provider local, assume que está rodando ele.
     if std::env::var_os("OLLAMA_BASE_URL").is_some() {
@@ -285,7 +361,7 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     ProviderKind::ElaiApi
 }
 
-/// OpenAI Chat Completions rejects requests when `max_tokens` exceeds the model's completion limit
+/// `OpenAI` Chat Completions rejects requests when `max_tokens` exceeds the model's completion limit
 /// (e.g. `gpt-4o` currently allows at most 16384 completion tokens).
 const OPENAI_DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16_384;
 
@@ -399,7 +475,7 @@ pub fn suggested_default_model() -> String {
 use crate::types::{EffortLevel, OutputConfig, ThinkingConfig};
 
 /// Returns `true` when the model supports extended thinking at all.
-/// Claude 4+ (including Haiku 4.5) on first-party.  Local and OpenAI
+/// Claude 4+ (including Haiku 4.5) on first-party.  Local and `OpenAI`
 /// providers do not.
 #[must_use]
 pub fn model_supports_thinking(model: &str) -> bool {

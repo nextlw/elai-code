@@ -18,6 +18,7 @@ pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_LM_STUDIO_BASE_URL: &str = "http://localhost:1234/v1";
+pub const DEFAULT_GO_CHAT_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -36,6 +37,7 @@ const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 const OLLAMA_ENV_VARS: &[&str] = &["OLLAMA_API_KEY", "OLLAMA_BASE_URL"];
 const LM_STUDIO_ENV_VARS: &[&str] = &["LMSTUDIO_API_KEY", "LMSTUDIO_BASE_URL"];
+const GO_ENV_VARS: &[&str] = &["OPENCODE_GO_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -85,12 +87,23 @@ impl OpenAiCompatConfig {
     }
 
     #[must_use]
+    pub const fn opencode_go() -> Self {
+        Self {
+            provider_name: "OpenCode Go",
+            api_key_env: "OPENCODE_GO_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: DEFAULT_GO_CHAT_BASE_URL,
+        }
+    }
+
+    #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
             "Ollama" => OLLAMA_ENV_VARS,
             "LM Studio" => LM_STUDIO_ENV_VARS,
+            "OpenCode Go" => GO_ENV_VARS,
             _ => &[],
         }
     }
@@ -191,6 +204,7 @@ impl OpenAiCompatClient {
         let request = MessageRequest {
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
             ..request.clone()
         };
@@ -764,10 +778,10 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                 // OpenAI: `tool_calls` must be omitted or non-empty; never send `[]`.
                 let mut obj = Map::new();
                 obj.insert("role".to_string(), json!("assistant"));
-                if !text.is_empty() {
-                    obj.insert("content".to_string(), Value::String(text));
-                } else {
+                if text.is_empty() {
                     obj.insert("content".to_string(), Value::Null);
+                } else {
+                    obj.insert("content".to_string(), Value::String(text));
                 }
                 if !tool_calls.is_empty() {
                     obj.insert("tool_calls".to_string(), Value::Array(tool_calls));
@@ -946,8 +960,8 @@ pub fn has_api_key(key: &str) -> bool {
 }
 
 /// Considera tanto `OPENAI_API_KEY` no ambiente quanto uma `AuthMethod::OpenAiApiKey`
-/// salva pelo AuthPicker da TUI. Use isso em vez de `has_api_key("OPENAI_API_KEY")`
-/// quando precisar saber se o usuário **pode** rodar OpenAI agora.
+/// salva pelo `AuthPicker` da TUI. Use isso em vez de `has_api_key("OPENAI_API_KEY")`
+/// quando precisar saber se o usuário **pode** rodar `OpenAI` agora.
 #[must_use]
 pub fn has_openai_credentials() -> bool {
     if has_api_key("OPENAI_API_KEY") {
@@ -1089,6 +1103,7 @@ mod tests {
             tool_choice: Some(ToolChoice::Auto),
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         });
 
@@ -1137,6 +1152,7 @@ mod tests {
             tool_choice: Some(ToolChoice::Auto),
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         });
 

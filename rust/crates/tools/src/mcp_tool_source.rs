@@ -25,7 +25,7 @@ impl McpToolSource {
 
 impl ToolSource for McpToolSource {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        let mgr = self.manager.lock().unwrap_or_else(|e| e.into_inner());
+        let mgr = self.manager.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         mgr.all_managed_tools()
             .filter(|t| mgr.healthy(&t.server_name))
             .map(|t| ToolDefinition {

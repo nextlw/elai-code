@@ -177,11 +177,12 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, FrontmatterValue>, Strin
     (map, body)
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn map_to_metadata(map: &HashMap<String, FrontmatterValue>, path: &Path) -> SkillMetadata {
     let mut meta = SkillMetadata::default();
 
     if let Some(FrontmatterValue::Str(v)) = map.get("name") {
-        meta.name = v.clone();
+        meta.name.clone_from(v);
     }
     if meta.name.is_empty() {
         // Fall back to directory/file name
@@ -193,10 +194,10 @@ fn map_to_metadata(map: &HashMap<String, FrontmatterValue>, path: &Path) -> Skil
     }
 
     if let Some(FrontmatterValue::Str(v)) = map.get("description") {
-        meta.description = v.clone();
+        meta.description.clone_from(v);
     }
     if let Some(FrontmatterValue::Str(v)) = map.get("version") {
-        meta.version = v.clone();
+        meta.version.clone_from(v);
     }
     if let Some(v) = map.get("priority") {
         meta.priority = match v {
@@ -216,10 +217,10 @@ fn map_to_metadata(map: &HashMap<String, FrontmatterValue>, path: &Path) -> Skil
         meta.force_provider = Some(v.clone());
     }
     if let Some(FrontmatterValue::List(v)) = map.get("incompatible_with") {
-        meta.incompatible_with = v.clone();
+        meta.incompatible_with.clone_from(v);
     }
     if let Some(FrontmatterValue::List(v)) = map.get("requires_tools") {
-        meta.requires_tools = v.clone();
+        meta.requires_tools.clone_from(v);
     }
     if let Some(FrontmatterValue::Bool(v)) = map.get("allow_fallback") {
         meta.allow_fallback = *v;
@@ -288,7 +289,7 @@ fn skill_dirs_from_roots(roots: &[PathBuf]) -> Vec<Skill> {
             let path = entry.path();
             let skill_md = if path.is_dir() {
                 path.join("SKILL.md")
-            } else if path.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
+            } else if path.file_name().is_some_and(|n| n == "SKILL.md") {
                 path.clone()
             } else {
                 continue;
@@ -302,7 +303,7 @@ fn skill_dirs_from_roots(roots: &[PathBuf]) -> Vec<Skill> {
                 }
             }
         }
-        dir_skills.sort_by(|a, b| b.metadata.priority.cmp(&a.metadata.priority));
+        dir_skills.sort_by_key(|b| std::cmp::Reverse(b.metadata.priority));
         skills.extend(dir_skills);
     }
     skills
@@ -311,7 +312,7 @@ fn skill_dirs_from_roots(roots: &[PathBuf]) -> Vec<Skill> {
 fn discover_skill_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let push = |dirs: &mut Vec<PathBuf>, p: PathBuf| {
-        if p.is_dir() && !dirs.iter().any(|d| *d == p) {
+        if p.is_dir() && !dirs.contains(&p) {
             dirs.push(p);
         }
     };
@@ -337,6 +338,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<PathBuf> {
 /// Loads all skills from discovered directories under `cwd`.
 /// Skills are deduplicated by name (first occurrence wins), then sorted by
 /// priority descending.
+#[must_use] 
 pub fn load_all_skills(cwd: &Path) -> Vec<Skill> {
     let roots = discover_skill_roots(cwd);
     let raw = skill_dirs_from_roots(&roots);
@@ -350,12 +352,13 @@ pub fn load_all_skills(cwd: &Path) -> Vec<Skill> {
         }
     }
 
-    skills.sort_by(|a, b| b.metadata.priority.cmp(&a.metadata.priority));
+    skills.sort_by_key(|b| std::cmp::Reverse(b.metadata.priority));
     skills
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
+#[must_use] 
 pub fn validate_skills(skills: &[Skill]) -> SkillValidation {
     let mut errors = Vec::new();
 
@@ -398,9 +401,10 @@ pub fn validate_skills(skills: &[Skill]) -> SkillValidation {
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
+#[must_use] 
 pub fn build_skill_prompt_sections(skills: &[Skill]) -> SkillPromptResult {
     let mut sorted: Vec<&Skill> = skills.iter().collect();
-    sorted.sort_by(|a, b| b.metadata.priority.cmp(&a.metadata.priority));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.metadata.priority));
 
     let mut sections = Vec::new();
     let header = format!(

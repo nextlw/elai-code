@@ -85,7 +85,7 @@ pub struct ColorTheme {
     pub error: Color,
 
     /// "Pensando" / spinner ativo. **Default**: `DarkBlue`. **Sites**:
-    /// `Spinner::tick`, indicador "Thinking…", spinner de TaskProgress em execução.
+    /// `Spinner::tick`, indicador "Thinking…", spinner de `TaskProgress` em execução.
     pub thinking: Color,
 
     /// Hyperlinks markdown e headings nível 3. **Default**: `DarkBlue`. **Sites**:
@@ -157,6 +157,7 @@ impl Default for ColorTheme {
 
 impl ColorTheme {
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn resolved() -> Self {
         let mut theme = Self::default();
         let config = runtime::load_global_config().ok();
@@ -464,8 +465,7 @@ pub fn crossterm_to_ratatui(color: Color) -> ratatui::style::Color {
         Color::DarkBlue => Rt::Blue,
         Color::DarkMagenta => Rt::Magenta,
         Color::DarkCyan => Rt::Cyan,
-        Color::Grey => Rt::Gray,
-        Color::DarkGrey => Rt::Gray,
+        Color::Grey | Color::DarkGrey => Rt::Gray,
         Color::Red => Rt::LightRed,
         Color::Green => Rt::LightGreen,
         Color::Yellow => Rt::LightYellow,

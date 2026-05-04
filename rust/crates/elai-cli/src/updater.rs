@@ -91,7 +91,7 @@ fn do_update(url: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("elai-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_mins(2))
         .build()?;
 
     print!("  Baixando novo binário");

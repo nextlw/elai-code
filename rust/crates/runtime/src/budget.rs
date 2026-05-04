@@ -46,18 +46,22 @@ pub struct BudgetTracker {
 }
 
 impl BudgetTracker {
+    #[must_use] 
     pub fn new(config: BudgetConfig) -> Self {
         Self { config, enabled: true }
     }
 
+    #[must_use] 
     pub fn disabled() -> Self {
         Self { config: BudgetConfig::default(), enabled: false }
     }
 
+    #[must_use] 
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 
+    #[must_use] 
     pub fn config(&self) -> &BudgetConfig {
         &self.config
     }
@@ -71,6 +75,7 @@ impl BudgetTracker {
         self.enabled = false;
     }
 
+    #[must_use] 
     pub fn check(&self, usage: &UsageTracker, model: &str) -> BudgetStatus {
         if !self.enabled {
             return BudgetStatus::Disabled;
@@ -125,9 +130,11 @@ impl BudgetTracker {
         BudgetStatus::Ok
     }
 
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    #[must_use] 
     pub fn usage_pct(&self, usage: &UsageTracker, model: &str) -> BudgetUsagePct {
         let cumulative = usage.cumulative_usage();
-        let total_tokens = cumulative.total_tokens() as u64;
+        let total_tokens = u64::from(cumulative.total_tokens());
 
         let current_cost_usd = if let Some(pricing) = pricing_for_model(model) {
             cumulative.estimate_cost_usd_with_pricing(pricing).total_cost_usd()
@@ -136,16 +143,13 @@ impl BudgetTracker {
         };
 
         let tokens_pct = self.config.max_tokens
-            .map(|m| (total_tokens as f32 / m as f32) * 100.0)
-            .unwrap_or(0.0);
+            .map_or(0.0, |m| (total_tokens as f32 / m as f32) * 100.0);
 
         let turns_pct = self.config.max_turns
-            .map(|m| (usage.turns() as f32 / m as f32) * 100.0)
-            .unwrap_or(0.0);
+            .map_or(0.0, |m| (usage.turns() as f32 / m as f32) * 100.0);
 
         let cost_pct = self.config.max_cost_usd
-            .map(|m| (current_cost_usd / m) as f32 * 100.0)
-            .unwrap_or(0.0);
+            .map_or(0.0, |m| (current_cost_usd / m) as f32 * 100.0);
 
         let highest_pct = tokens_pct.max(turns_pct).max(cost_pct);
 
@@ -160,10 +164,12 @@ impl BudgetTracker {
     }
 }
 
+#[must_use] 
 pub fn budget_config_path(cwd: &Path) -> PathBuf {
     cwd.join(".elai").join("budget.json")
 }
 
+#[must_use] 
 pub fn load_budget_config(cwd: &Path) -> Option<BudgetConfig> {
     let path = budget_config_path(cwd);
     let json = std::fs::read_to_string(&path).ok()?;
@@ -176,7 +182,7 @@ pub fn save_budget_config(cwd: &Path, config: &BudgetConfig) -> io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     std::fs::write(&path, json)
 }
 

@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::orchestrator::{
-    CodexBridgeUnifiedAdapter, ElaiUnifiedAdapter, OpenAiUnifiedAdapter, ProviderConfig,
-    ProviderOrchestrator, RequestOptions,
+    CodexBridgeUnifiedAdapter, ElaiUnifiedAdapter, GoUnifiedAdapter, OpenAiUnifiedAdapter,
+    ProviderConfig, ProviderOrchestrator, RequestOptions,
 };
 use crate::providers::elai_provider::{self, AuthSource, ElaiApiClient};
 use crate::providers::codex_bridge::CodexBridgeClient;
+use crate::providers::go_client::GoClient;
 use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{
@@ -41,6 +42,7 @@ pub enum ProviderClient {
     Ollama(OpenAiCompatClient),
     /// Servidor LM Studio local.
     LmStudio(OpenAiCompatClient),
+    Go(GoClient),
     Orchestrated(Arc<ProviderOrchestrator>),
 }
 
@@ -79,11 +81,13 @@ impl ProviderClient {
             ProviderKind::LmStudio => Ok(Self::LmStudio(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::lm_studio(),
             )?)),
+            ProviderKind::OpenCodeGo => Ok(Self::Go(GoClient::from_env()?)),
         }
     }
 
     /// Build an orchestrated `ProviderClient` that registers every provider with
     /// available credentials and falls back across them.
+    #[allow(clippy::too_many_lines)]
     pub fn orchestrated() -> Result<Self, ApiError> {
         let mut orchestrator = ProviderOrchestrator::new();
         let mut priority = 0_usize;
@@ -186,6 +190,21 @@ impl ProviderClient {
             }
         }
 
+        if openai_compat::has_api_key("OPENCODE_GO_API_KEY") {
+            if let Ok(client) = GoClient::from_env() {
+                orchestrator.register_provider(
+                    Box::new(GoUnifiedAdapter::new(client)),
+                    ProviderConfig {
+                        id: "opencode-go".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
+                registered_any = true;
+            }
+        }
+
         if !registered_any {
             return Err(ApiError::missing_credentials(
                 "orchestrator",
@@ -193,6 +212,7 @@ impl ProviderClient {
                     "ANTHROPIC_API_KEY",
                     "OPENAI_API_KEY",
                     "XAI_API_KEY",
+                    "OPENCODE_GO_API_KEY",
                     "OLLAMA_BASE_URL",
                     "LMSTUDIO_BASE_URL",
                 ],
@@ -210,6 +230,7 @@ impl ProviderClient {
             Self::OpenAi(_) | Self::CodexBridge(_) => ProviderKind::OpenAi,
             Self::Ollama(_) => ProviderKind::Ollama,
             Self::LmStudio(_) => ProviderKind::LmStudio,
+            Self::Go(_) => ProviderKind::OpenCodeGo,
         }
     }
 
@@ -224,6 +245,7 @@ impl ProviderClient {
             | Self::Ollama(client)
             | Self::LmStudio(client) => send_via_provider(client, request).await,
             Self::CodexBridge(client) => client.send_message(request).await,
+            Self::Go(client) => client.send_message(request).await,
             Self::Orchestrated(orchestrator) => {
                 orchestrator
                     .send_message(request, &RequestOptions::default())
@@ -250,6 +272,10 @@ impl ProviderClient {
                 .stream_message(request)
                 .await
                 .map(MessageStream::CodexBridge),
+            Self::Go(client) => client
+                .stream_message(request)
+                .await
+                .map(MessageStream::Go),
             Self::Orchestrated(orchestrator) => {
                 let response = orchestrator
                     .stream_message(request, &RequestOptions::default())
@@ -267,6 +293,7 @@ pub enum MessageStream {
     ElaiApi(elai_provider::MessageStream),
     OpenAiCompat(openai_compat::MessageStream),
     CodexBridge(crate::providers::codex_bridge::MessageStream),
+    Go(crate::providers::go_client::MessageStream),
     Collected(CollectedMessageStream),
 }
 
@@ -277,6 +304,7 @@ impl MessageStream {
             Self::ElaiApi(stream) => stream.request_id(),
             Self::OpenAiCompat(stream) => stream.request_id(),
             Self::CodexBridge(stream) => stream.request_id(),
+            Self::Go(stream) => stream.request_id(),
             Self::Collected(stream) => stream.request_id(),
         }
     }
@@ -286,6 +314,7 @@ impl MessageStream {
             Self::ElaiApi(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
             Self::CodexBridge(stream) => stream.next_event().await,
+            Self::Go(stream) => stream.next_event().await,
             Self::Collected(stream) => stream.next_event().await,
         }
     }

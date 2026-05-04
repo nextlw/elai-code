@@ -1,9 +1,9 @@
 //! Auto-dream: consolidação automática de memória.
 //!
 //! Gates (em ordem de custo):
-//!   1. Time gate: hours since lastAt >= min_hours
+//!   1. Time gate: hours since lastAt >= `min_hours`
 //!   2. Scan throttle: 10 min entre scans falhos
-//!   3. Session gate: sessions touched since lastAt >= min_sessions
+//!   3. Session gate: sessions touched since lastAt >= `min_sessions`
 //!   4. Lock acquire: outro processo não está mid-consolidation
 
 mod config;
@@ -53,6 +53,7 @@ pub enum SkipReason {
 
 /// Avalia gates e adquire lock se OK. NÃO executa o dream — apenas decide.
 /// O caller (post-turn hook) usa `Fire` para invocar o agent forked.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn evaluate(root: &Path, cfg: &AutoDreamConfig) -> AutoDreamDecision {
     if !cfg.enabled {
         return AutoDreamDecision::Skip {
@@ -135,6 +136,7 @@ pub fn evaluate(root: &Path, cfg: &AutoDreamConfig) -> AutoDreamDecision {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn current_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

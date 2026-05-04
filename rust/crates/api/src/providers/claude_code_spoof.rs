@@ -14,7 +14,11 @@ use serde_json::Value;
 // Inline hex helper (avoids an external `hex` crate dep)
 // ---------------------------------------------------------------------------
 fn to_hex_lower(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +45,7 @@ const EXTRA_OAUTH_BETAS_LIST: &[&str] = &[
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Orchestrates all request transforms. Returns the list of PascalCased tool
+/// Orchestrates all request transforms. Returns the list of `PascalCased` tool
 /// names that must later be reversed in the response.
 ///
 /// Order:
@@ -57,7 +61,7 @@ pub fn apply_request_transform(body: &mut Value, cli_version: &str) -> Vec<Strin
     modified
 }
 
-/// Reverse the PascalCase rewrite on tool-use blocks in a response body.
+/// Reverse the `PascalCase` rewrite on tool-use blocks in a response body.
 pub fn apply_response_transform(body: &mut Value, modified_tool_names: &[String]) {
     if modified_tool_names.is_empty() {
         return;
@@ -72,6 +76,7 @@ pub fn apply_response_transform(body: &mut Value, modified_tool_names: &[String]
 
 /// Returns the nine Stainless/browser-access spoofing headers that real
 /// Claude Code 2.1.112 sends.
+#[must_use] 
 pub fn stainless_headers(_cli_version: &str) -> Vec<(&'static str, String)> {
     vec![
         ("anthropic-dangerous-direct-browser-access", "true".into()),
@@ -87,6 +92,7 @@ pub fn stainless_headers(_cli_version: &str) -> Vec<(&'static str, String)> {
 }
 
 /// Beta flags that OAuth requests need in addition to the base set.
+#[must_use] 
 pub fn extra_oauth_betas() -> &'static [&'static str] {
     EXTRA_OAUTH_BETAS_LIST
 }
@@ -129,8 +135,7 @@ pub fn inject_billing_header(body: &mut Value, cli_version: &str) -> Vec<String>
         Value::Array(arr) => arr,
         other => {
             eprintln!(
-                "[claude_code_spoof] inject_billing_header: unexpected system type {:?}; skipping",
-                other
+                "[claude_code_spoof] inject_billing_header: unexpected system type {other:?}; skipping"
             );
             return vec![];
         }
@@ -157,14 +162,14 @@ pub fn inject_billing_header(body: &mut Value, cli_version: &str) -> Vec<String>
             // Stale billing header — drop.
             continue;
         }
-        if text.starts_with(SYSTEM_IDENTITY) {
+        if let Some(stripped) = text.strip_prefix(SYSTEM_IDENTITY) {
             if identity_seen {
                 // Duplicate identity entry — drop.
                 continue;
             }
             identity_seen = true;
             // Truncate text to exactly SYSTEM_IDENTITY; move the rest.
-            let rest = text[SYSTEM_IDENTITY.len()..].trim_start_matches('\n').to_string();
+            let rest = stripped.trim_start_matches('\n').to_string();
             let mut identity_obj = obj.clone();
             identity_obj.insert("text".to_string(), Value::String(SYSTEM_IDENTITY.to_string()));
             kept.push(Value::Object(identity_obj));
@@ -220,8 +225,7 @@ pub fn pascalcase_mcp_tool_names(body: &mut Value) -> Vec<String> {
                 for block in content.iter_mut() {
                     let is_tool_use = block
                         .get("type")
-                        .and_then(|v| v.as_str())
-                        .map_or(false, |t| t == "tool_use");
+                        .and_then(|v| v.as_str()) == Some("tool_use");
                     if is_tool_use {
                         if let Some(name) = block.get_mut("name") {
                             if let Some(s) = name.as_str() {
@@ -249,20 +253,20 @@ pub fn fix_temperature_for_adaptive_models(body: &mut Value) {
         return;
     };
     // Keep temperature == 1 or 1.0 unchanged.
-    let is_one = temp.as_f64().map_or(false, |t| (t - 1.0_f64).abs() < f64::EPSILON);
+    let is_one = temp.as_f64().is_some_and(|t| (t - 1.0_f64).abs() < f64::EPSILON);
     if is_one {
         return;
     }
     let model_is_adaptive = body
         .get("model")
         .and_then(|v| v.as_str())
-        .map_or(false, |m| m.contains("4-6") || m.contains("4.6"));
+        .is_some_and(|m| m.contains("4-6") || m.contains("4.6"));
     if model_is_adaptive {
         body.as_object_mut().map(|o| o.remove("temperature"));
     }
 }
 
-/// Reverse a PascalCased MCP tool name in a streaming SSE event value.
+/// Reverse a `PascalCased` MCP tool name in a streaming SSE event value.
 ///
 /// Handles `content_block_start` events that carry a `content_block` with
 /// `type == "tool_use"`.
@@ -290,9 +294,8 @@ pub fn reverse_pascalcase_mcp_in_streaming_event(
 
 /// Extract the text of the first user message's first text block.
 pub(crate) fn extract_first_user_message_text(messages: &Value) -> String {
-    let arr = match messages.as_array() {
-        Some(a) => a,
-        None => return String::new(),
+    let Some(arr) = messages.as_array() else {
+        return String::new();
     };
     for msg in arr {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
@@ -370,26 +373,24 @@ fn try_pascalcase_mcp(name: &str) -> Option<String> {
     Some(new_name)
 }
 
-/// Reverse a PascalCased MCP tool name on a single JSON block in place.
+/// Reverse a `PascalCased` MCP tool name on a single JSON block in place.
 fn reverse_pascalcase_in_block(block: &mut Value, modified: &[String]) {
     let is_tool_use = block
         .get("type")
-        .and_then(|v| v.as_str())
-        .map_or(false, |t| t == "tool_use");
+        .and_then(|v| v.as_str()) == Some("tool_use");
     if !is_tool_use {
         return;
     }
     let name_matches = block
         .get("name")
         .and_then(|v| v.as_str())
-        .map_or(false, |n| modified.contains(&n.to_string()));
+        .is_some_and(|n| modified.contains(&n.to_string()));
     if !name_matches {
         return;
     }
     if let Some(name_val) = block.get_mut("name") {
         if let Some(s) = name_val.as_str() {
-            if s.starts_with(MCP_PREFIX) {
-                let rest = &s[MCP_PREFIX.len()..];
+            if let Some(rest) = s.strip_prefix(MCP_PREFIX) {
                 if let Some(first) = rest.chars().next() {
                     if first.is_uppercase() {
                         let mut lowered = MCP_PREFIX.to_string();
@@ -414,9 +415,8 @@ fn prepend_to_first_user_message(body: &mut Value, texts: &[String]) {
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let messages = match body.get_mut("messages").and_then(|v| v.as_array_mut()) {
-        Some(m) => m,
-        None => return,
+    let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) else {
+        return;
     };
 
     for msg in messages.iter_mut() {
@@ -439,7 +439,7 @@ fn prepend_to_first_user_message(body: &mut Value, texts: &[String]) {
             Some(Value::Array(mut blocks)) => {
                 // Find first text block and prepend.
                 let mut found = false;
-                for block in blocks.iter_mut() {
+                for block in &mut blocks {
                     if block.get("type").and_then(|v| v.as_str()) == Some("text") {
                         let existing = block
                             .get("text")

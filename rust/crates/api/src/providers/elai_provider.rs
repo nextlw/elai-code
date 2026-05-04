@@ -24,7 +24,7 @@ const DEFAULT_MAX_RETRIES: u32 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpoofMode {
     None,
-    /// Mascarar como Claude Code 2.1.x (billing header + Stainless headers + system relocation + PascalCase MCP).
+    /// Mascarar como Claude Code 2.1.x (billing header + Stainless headers + system relocation + `PascalCase` MCP).
     ClaudeCode,
 }
 
@@ -723,7 +723,7 @@ fn now_unix_timestamp() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
+pub(crate) fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
     match std::env::var(key) {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
@@ -735,6 +735,7 @@ fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
 /// On Unix: reads via `/dev/fd/{fd}` (follows the Claude Code convention). On Windows: returns None.
 #[cfg(unix)]
 fn read_api_key_from_fd_env() -> Result<Option<String>, ApiError> {
+    use std::io::Read as _;
     let fd_str = match std::env::var("CLAUDE_CODE_API_KEY_FD") {
         Ok(v) if !v.is_empty() => v,
         _ => return Ok(None),
@@ -746,7 +747,6 @@ fn read_api_key_from_fd_env() -> Result<Option<String>, ApiError> {
     let path = format!("/dev/fd/{fd}");
     let mut file = std::fs::File::open(&path).map_err(ApiError::from)?;
     let mut contents = String::new();
-    use std::io::Read as _;
     file.read_to_string(&mut contents).map_err(ApiError::from)?;
     let key = contents.trim().to_string();
     if key.is_empty() {
@@ -788,8 +788,8 @@ fn detect_spoof_mode_for_auth(auth: &AuthSource) -> SpoofMode {
         return SpoofMode::None;
     }
     match runtime::load_auth_method() {
-        Ok(Some(runtime::AuthMethod::ClaudeAiOAuth { .. }))
-        | Ok(Some(runtime::AuthMethod::AnthropicAuthToken { .. })) => SpoofMode::ClaudeCode,
+        Ok(Some(runtime::AuthMethod::ClaudeAiOAuth { .. } |
+runtime::AuthMethod::AnthropicAuthToken { .. })) => SpoofMode::ClaudeCode,
         _ => SpoofMode::None,
     }
 }
@@ -879,9 +879,8 @@ impl MessageStream {
         if self.modified_tools.is_empty() {
             return event;
         }
-        let mut event_value = match serde_json::to_value(&event) {
-            Ok(v) => v,
-            Err(_) => return event,
+        let Ok(mut event_value) = serde_json::to_value(&event) else {
+            return event;
         };
         super::claude_code_spoof::reverse_pascalcase_mcp_in_streaming_event(
             &mut event_value,
@@ -1248,6 +1247,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 
@@ -1757,6 +1757,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 
@@ -1792,6 +1793,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 
@@ -1826,6 +1828,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 
@@ -1862,6 +1865,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 

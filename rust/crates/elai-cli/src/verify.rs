@@ -4,8 +4,8 @@
 //! to avoid corrupting the ratatui alternate screen.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ pub struct VerifyReport {
 
 /// Recursively walk the project tree, returning relative paths for all files.
 /// Delegates to `code_index::walker` for the actual traversal.
-pub fn walk_project(root: &Path) -> io::Result<Vec<PathBuf>> {
+pub fn walk_project(root: &Path) -> Vec<PathBuf> {
     let abs_paths = code_index::walker::walk_project(root);
     let rel_paths = abs_paths
         .into_iter()
@@ -44,7 +44,7 @@ pub fn walk_project(root: &Path) -> io::Result<Vec<PathBuf>> {
                 .unwrap_or(p)
         })
         .collect();
-    Ok(rel_paths)
+    rel_paths
 }
 
 // ─── parse_memory_entries ────────────────────────────────────────────────────
@@ -205,15 +205,18 @@ const ANSI_RESET: &str = "\x1b[0m";
 
 /// Render a colored report string for terminal output.
 pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
+    const MAX_SHOW: usize = 10;
     let mut out = String::new();
 
-    out.push_str(&format!(
-        "{ANSI_BOLD}Verify — Codebase \u{00d7} Memory Sync{ANSI_RESET}\n"
-    ));
-    out.push_str(&format!(
-        "  Scanned {} files | Memory has {} entries\n",
+    let _ = writeln!(
+        out,
+        "{ANSI_BOLD}Verify — Codebase \u{00d7} Memory Sync{ANSI_RESET}"
+    );
+    let _ = writeln!(
+        out,
+        "  Scanned {} files | Memory has {} entries",
         report.files_scanned, report.memory_entries
-    ));
+    );
 
     // File references section
     let has_refs = !report.verified.is_empty()
@@ -225,57 +228,64 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
         out.push_str("File References in Memory:\n");
 
         for path in &report.verified {
-            out.push_str(&format!(
-                "  {ANSI_GREEN}\u{2713}{ANSI_RESET}  {}\n",
+            let _ = writeln!(
+                out,
+                "  {ANSI_GREEN}\u{2713}{ANSI_RESET}  {}",
                 path.display()
-            ));
+            );
         }
         for path in &report.drift {
-            out.push_str(&format!(
-                "  {ANSI_YELLOW}?{ANSI_RESET}  {} — drift\n",
+            let _ = writeln!(
+                out,
+                "  {ANSI_YELLOW}?{ANSI_RESET}  {} — drift",
                 path.display()
-            ));
+            );
         }
         for path in &report.missing {
-            out.push_str(&format!(
-                "  {ANSI_RED}\u{2717}{ANSI_RESET}  {} — missing from filesystem\n",
+            let _ = writeln!(
+                out,
+                "  {ANSI_RED}\u{2717}{ANSI_RESET}  {} — missing from filesystem",
                 path.display()
-            ));
+            );
         }
     } else if report.memory_entries == 0 {
         out.push('\n');
         out.push_str("File References in Memory:\n");
-        out.push_str(&format!(
-            "  {ANSI_DIM}No file paths found in instruction files.{ANSI_RESET}\n"
-        ));
+        let _ = writeln!(
+            out,
+            "  {ANSI_DIM}No file paths found in instruction files.{ANSI_RESET}"
+        );
     }
 
     // Untracked section
     if !report.untracked.is_empty() {
         out.push('\n');
-        out.push_str(&format!(
-            "Untracked (not in memory): {} files\n",
+        let _ = writeln!(
+            out,
+            "Untracked (not in memory): {} files",
             report.untracked.len()
-        ));
-        const MAX_SHOW: usize = 10;
+        );
         for path in report.untracked.iter().take(MAX_SHOW) {
-            out.push_str(&format!(
-                "  {ANSI_DIM}{}{ANSI_RESET}\n",
+            let _ = writeln!(
+                out,
+                "  {ANSI_DIM}{}{ANSI_RESET}",
                 path.display()
-            ));
+            );
         }
         if report.untracked.len() > MAX_SHOW {
-            out.push_str(&format!(
-                "  {ANSI_DIM}... and {} more{ANSI_RESET}\n",
+            let _ = writeln!(
+                out,
+                "  {ANSI_DIM}... and {} more{ANSI_RESET}",
                 report.untracked.len() - MAX_SHOW
-            ));
+            );
         }
     }
 
     // Summary
     out.push('\n');
-    out.push_str(&format!(
-        "Summary: {green}{v} verified{reset} | {yellow}{d} drift{reset} | {red}{m} missing{reset} | {dim}{u} untracked{reset}\n",
+    let _ = writeln!(
+        out,
+        "Summary: {green}{v} verified{reset} | {yellow}{d} drift{reset} | {red}{m} missing{reset} | {dim}{u} untracked{reset}",
         green = ANSI_GREEN,
         yellow = ANSI_YELLOW,
         red = ANSI_RED,
@@ -285,7 +295,7 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
         d = report.drift.len(),
         m = report.missing.len(),
         u = report.untracked.len(),
-    ));
+    );
 
     out
 }
@@ -295,10 +305,11 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
 pub fn render_verify_report_tui(report: &VerifyReport) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!(
-        "Verify — Codebase × Memory Sync\n  {} files escaneados | {} entradas na memória\n",
+    let _ = writeln!(
+        out,
+        "Verify — Codebase × Memory Sync\n  {} files escaneados | {} entradas na memória",
         report.files_scanned, report.memory_entries
-    ));
+    );
 
     let has_refs = !report.verified.is_empty()
         || !report.missing.is_empty()
@@ -307,26 +318,27 @@ pub fn render_verify_report_tui(report: &VerifyReport) -> String {
     if has_refs || report.memory_entries > 0 {
         out.push_str("\nReferências de Arquivo:\n");
         for path in &report.verified {
-            out.push_str(&format!("  ✓  {}\n", path.display()));
+            let _ = writeln!(out, "  ✓  {}", path.display());
         }
         for path in &report.drift {
-            out.push_str(&format!("  ~  {} — drift\n", path.display()));
+            let _ = writeln!(out, "  ~  {} — drift", path.display());
         }
         for path in &report.missing {
-            out.push_str(&format!("  ✗  {} — não encontrado\n", path.display()));
+            let _ = writeln!(out, "  ✗  {} — não encontrado", path.display());
         }
         if !has_refs {
             out.push_str("  (nenhuma referência de arquivo nas instruções)\n");
         }
     }
 
-    out.push_str(&format!(
-        "\nResumo: {} verificados | {} drift | {} ausentes | {} não rastreados\n",
+    let _ = writeln!(
+        out,
+        "\nResumo: {} verificados | {} drift | {} ausentes | {} não rastreados",
         report.verified.len(),
         report.drift.len(),
         report.missing.len(),
         report.untracked.len(),
-    ));
+    );
 
     if !report.missing.is_empty() {
         out.push_str("\nDica: os arquivos ausentes foram removidos ou renomeados.\n");
@@ -339,6 +351,7 @@ pub fn render_verify_report_tui(report: &VerifyReport) -> String {
 // ─── run_verify ──────────────────────────────────────────────────────────────
 
 /// Runs the verify flow and returns `(report, formatted_terminal_string)`.
+#[allow(clippy::unnecessary_wraps)]
 pub fn run_verify_inner(
     cwd: &Path,
     reporter: &dyn runtime::ProgressReporter,
@@ -363,7 +376,7 @@ pub fn run_verify_inner(
         .collect();
 
     reporter.report("Scanning project files...");
-    let files = walk_project(cwd)?;
+    let files = walk_project(cwd);
     reporter.report("Parsing instruction files...");
     let memory = parse_memory_entries(&instruction_files);
 
@@ -401,7 +414,7 @@ pub fn run_verify_inner(
 
 /// Orchestrates the full verify flow within a registered task. O reporter
 /// resolvido via `default_sink()` decide o destino do progresso (CLI in-place
-/// stderr, TUI ChatEntry, etc.).
+/// stderr, TUI `ChatEntry`, etc.).
 pub fn run_verify(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
     runtime::with_task_default(
         runtime::TaskType::LocalWorkflow,
@@ -464,7 +477,7 @@ mod tests {
         fs::create_dir_all(root.join("target/debug")).unwrap();
         fs::write(root.join("target/debug/binary"), "bin").unwrap();
 
-        let files = walk_project(root).unwrap();
+        let files = walk_project(root);
         let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
 
         assert!(
@@ -622,7 +635,7 @@ MODIFY: src/lib.rs — add new function
         }
         fs::write(shallow.join("shallow_file.rs"), "shallow").unwrap();
 
-        let files = walk_project(root).unwrap();
+        let files = walk_project(root);
         let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
 
         // deep_file.rs is at depth 21 (20 dirs + file), beyond MAX_DEPTH=15

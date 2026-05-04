@@ -42,12 +42,10 @@ pub fn compute_diff(old: &str, new: &str, context: usize) -> Vec<DiffHunk> {
     for group in diff.grouped_ops(context) {
         let old_start = group
             .first()
-            .map(|op| op.old_range().start + 1)
-            .unwrap_or(1);
+            .map_or(1, |op| op.old_range().start + 1);
         let new_start = group
             .first()
-            .map(|op| op.new_range().start + 1)
-            .unwrap_or(1);
+            .map_or(1, |op| op.new_range().start + 1);
 
         let mut lines = Vec::new();
         for op in &group {

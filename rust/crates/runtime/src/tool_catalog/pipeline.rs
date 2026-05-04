@@ -7,10 +7,10 @@
 //!
 //! Ordem dos estágios:
 //! 1. Context gating  — remove tools desabilitadas no catálogo
-//! 2. Skill overrides — force-include (requires_tools) e force-exclude (incompatible_with)
+//! 2. Skill overrides — force-include (`requires_tools`) e force-exclude (`incompatible_with`)
 //! 3. User filter     — --allowedTools (gate duro, sempre vence)
 //! 4. Priority ranking — ordena por priority do catálogo (desc)
-//! 5. Budget cap      — top-N respeitando mcp_share e per_server_max
+//! 5. Budget cap      — top-N respeitando `mcp_share` e `per_server_max`
 
 use crate::tool_catalog::ToolCatalog;
 use crate::skills::Skill;
@@ -75,7 +75,7 @@ impl Default for ToolBudgetConfig {
     }
 }
 
-/// Conjunto de IDs que são imunes ao budget cap (requires_tools da skill ativa).
+/// Conjunto de IDs que são imunes ao budget cap (`requires_tools` da skill ativa).
 #[derive(Debug, Default, Clone)]
 struct ImmuneSet {
     ids: Vec<String>,
@@ -91,7 +91,7 @@ impl ImmuneSet {
 
 /// Estágio 1: remove tools com `enabled: false` no catálogo.
 ///
-/// TODO: implementar ContextGate para ENV/file gating em fase futura.
+/// TODO: implementar `ContextGate` para ENV/file gating em fase futura.
 fn stage_context_gate(
     kept: &mut Vec<PipelineTool>,
     rejected: &mut Vec<RejectedTool>,
@@ -158,6 +158,7 @@ pub enum FilterPattern {
 }
 
 impl FilterPattern {
+    #[must_use] 
     pub fn matches(&self, name: &str) -> bool {
         match self {
             Self::Exact(s) => s == name,
@@ -169,7 +170,7 @@ impl FilterPattern {
 /// Estágio 3: filtra pelas patterns de `--allowedTools` (gate duro, sempre vence).
 ///
 /// O user filter é um gate absoluto: nenhuma tool passa sem match, nem as marcadas
-/// como imunes pela skill. Imunidade (requires_tools) só protege contra o budget cap
+/// como imunes pela skill. Imunidade (`requires_tools`) só protege contra o budget cap
 /// no estágio 5 — o usuário sempre tem a última palavra.
 fn stage_user_filter(
     kept: &mut Vec<PipelineTool>,
@@ -194,15 +195,14 @@ fn stage_user_filter(
 
 /// Estágio 4: ordena por priority do catálogo (descrescente).
 ///
-/// Tools em requires_tools da skill ativa recebem +100 (skill_boost).
+/// Tools em `requires_tools` da skill ativa recebem +100 (`skill_boost`).
 fn stage_priority_ranking(
-    kept: &mut Vec<PipelineTool>,
+    kept: &mut [PipelineTool],
     catalog: &ToolCatalog,
     active_skill: Option<&Skill>,
 ) {
     let requires: &[String] = active_skill
-        .map(|s| s.metadata.requires_tools.as_slice())
-        .unwrap_or(&[]);
+        .map_or(&[], |s| s.metadata.requires_tools.as_slice());
 
     kept.sort_by(|a, b| {
         let priority_a = effective_priority(&a.name, catalog, requires);
@@ -217,9 +217,10 @@ fn effective_priority(name: &str, catalog: &ToolCatalog, requires: &[String]) ->
     base + boost
 }
 
-/// Estágio 5: aplica o budget cap — top-N respeitando mcp_share e per_server_max.
+/// Estágio 5: aplica o budget cap — top-N respeitando `mcp_share` e `per_server_max`.
 ///
-/// Tools imunes (requires_tools) entram antes do corte e nunca são descartadas.
+/// Tools imunes (`requires_tools`) entram antes do corte e nunca são descartadas.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn stage_budget_cap(
     kept: &mut Vec<PipelineTool>,
     rejected: &mut Vec<RejectedTool>,
@@ -289,7 +290,7 @@ fn stage_budget_cap(
 /// Extrai o prefixo de servidor de um nome MCP qualificado (`mcp__server__tool` → `server`).
 fn mcp_server_prefix(name: &str) -> String {
     // Formato: "mcp__<server>__<tool>"
-    name.splitn(3, "__").nth(1).unwrap_or("").to_string()
+    name.split("__").nth(1).unwrap_or("").to_string()
 }
 
 // ─── Pipeline principal ───────────────────────────────────────────────────────
@@ -298,6 +299,7 @@ fn mcp_server_prefix(name: &str) -> String {
 ///
 /// `all_tools` é a lista completa de tools disponíveis (como nomes).
 /// Retorna `PipelineResult` com os nomes aceitos em ordem de prioridade.
+#[must_use] 
 pub fn run_pipeline(
     all_tools: Vec<PipelineTool>,
     catalog: &ToolCatalog,

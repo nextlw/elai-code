@@ -31,11 +31,12 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    default_thinking_config, max_tokens_for_model, model_supports_adaptive_thinking,
-    model_supports_thinking, resolve_model_alias, resolve_output_config, suggested_default_model,
-    ContentBlockDelta, EffortLevel, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent,
-    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    default_thinking_config, max_tokens_for_model, metadata_for_model,
+    model_supports_adaptive_thinking, model_supports_thinking, resolve_model_alias,
+    resolve_output_config, suggested_default_model, ContentBlockDelta, EffortLevel,
+    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ThinkingConfig,
+    ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -119,10 +120,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Logout => auth::dispatch_logout().map_err(|e| e.to_string())?,
         CliAction::Auth { cmd } => match cmd {
             crate::args::AuthCmd::Status { json } => {
-                auth::dispatch_auth_status(json).map_err(|e| e.to_string())?
+                auth::dispatch_auth_status(json);
             }
             crate::args::AuthCmd::List => {
-                auth::dispatch_auth_list().map_err(|e| e.to_string())?
+                auth::dispatch_auth_list();
             }
         },
         CliAction::Init(args) => run_init(&args)?,
@@ -145,10 +146,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::Send { message, wait, json, thinking_budget } => run_headless_send(&message, wait, json, thinking_budget)?,
         CliAction::ChatShow { last, json } => run_chat_show(last, json)?,
-        CliAction::ModelGet => run_model_get()?,
+        CliAction::ModelGet => run_model_get(),
         CliAction::ModelSet { model } => run_model_set(&model)?,
         CliAction::Reply { answer } => run_reply(&answer)?,
-        CliAction::StatusCmd { json } => run_status_cmd(json)?,
+        CliAction::StatusCmd { json } => run_status_cmd(json),
     }
     Ok(())
 }
@@ -256,16 +257,15 @@ fn persist_locale(lang: &str) -> Result<(), String> {
 }
 
 fn has_any_auth() -> bool {
-    let env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY"];
+    let env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "OPENCODE_GO_API_KEY"];
     if env_keys
         .iter()
-        .any(|k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false))
+        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
     {
         return true;
     }
     runtime::load_auth_method()
-        .map(|opt| opt.is_some())
-        .unwrap_or(false)
+        .is_ok_and(|opt| opt.is_some())
 }
 
 /// Sets only known API keys from `path` when they are not already in the process environment.
@@ -279,6 +279,8 @@ fn elai_env_fill_missing_from_file(path: &Path) {
         "OPENAI_BASE_URL",
         "XAI_API_KEY",
         "XAI_BASE_URL",
+        "OPENCODE_GO_API_KEY",
+        "OPENCODE_GO_BASE_URL",
     ];
     let Ok(contents) = fs::read_to_string(path) else {
         return;
@@ -747,8 +749,7 @@ fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
             "--import-claude-code" => { login_args.import_claude_code = true; idx += 1; }
             "--codex-oauth" => { login_args.codex_oauth = true; idx += 1; }
             "--import-codex" => { login_args.import_codex = true; idx += 1; }
-            "--yes" => { idx += 1; } // accepted but no-op at this layer (auth.rs uses it)
-            "--no" => { idx += 1; }
+            "--yes" | "--no" => { idx += 1; } // accepted but no-op at this layer (auth.rs uses it)
             "--email" => {
                 let value = args
                     .get(idx + 1)
@@ -769,7 +770,7 @@ fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
 }
 
 fn parse_auth_args(args: &[String]) -> Result<CliAction, String> {
-    let subcommand = args.first().map(String::as_str).unwrap_or("");
+    let subcommand = args.first().map_or("", String::as_str);
     match subcommand {
         "status" => {
             let json = args.iter().any(|a| a == "--json");
@@ -823,7 +824,7 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
 }
 
 fn parse_chat_args(args: &[String]) -> Result<CliAction, String> {
-    let sub = args.first().map(String::as_str).unwrap_or("show");
+    let sub = args.first().map_or("show", String::as_str);
     match sub {
         "show" | "" => {
             let mut last = 20usize;
@@ -915,6 +916,7 @@ fn schedule_windows_cleanup(
 }
 
 fn perform_uninstall() -> String {
+    const MARKER: &str = "# elai-code api keys";
     let mut log = Vec::<String>::new();
     let mut errors = Vec::<String>::new();
 
@@ -952,14 +954,14 @@ fn perform_uninstall() -> String {
     #[cfg(not(windows))]
     {
         match std::fs::remove_file(&bin) {
-            Ok(_) => log.push(format!("✅ Removido: {}", bin.display())),
+            Ok(()) => log.push(format!("✅ Removido: {}", bin.display())),
             Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
         }
 
         // 2. Diretório ~/.elai/ (inclui ~/.elai/fastembed_cache, ~/.elai/tasks/, etc.)
         if let Some(dir) = &elai_dir {
             match std::fs::remove_dir_all(dir) {
-                Ok(_) => log.push(format!("✅ Removido: {}", dir.display())),
+                Ok(()) => log.push(format!("✅ Removido: {}", dir.display())),
                 Err(e) => errors.push(format!("⚠ {}: {e}", dir.display())),
             }
         }
@@ -978,7 +980,7 @@ fn perform_uninstall() -> String {
         for path in legacy_caches {
             if path.is_dir() {
                 match std::fs::remove_dir_all(&path) {
-                    Ok(_) => log.push(format!("✅ Cache fastembed legado removido: {}", path.display())),
+                    Ok(()) => log.push(format!("✅ Cache fastembed legado removido: {}", path.display())),
                     Err(e) => errors.push(format!("⚠ {}: {e}", path.display())),
                 }
             }
@@ -1000,7 +1002,6 @@ fn perform_uninstall() -> String {
         format!("{home_str}/.bashrc")
     };
 
-    const MARKER: &str = "# elai-code api keys";
     if let Ok(content) = std::fs::read_to_string(&rc_path) {
         let mut out_lines: Vec<&str> = Vec::new();
         let mut skip = false;
@@ -1018,7 +1019,7 @@ fn perform_uninstall() -> String {
         let new_content = out_lines.join("\n") + "\n";
         if new_content.trim() != content.trim() {
             match std::fs::write(&rc_path, &new_content) {
-                Ok(_) => log.push(format!("✅ Linhas elai removidas de {rc_path}")),
+                Ok(()) => log.push(format!("✅ Linhas elai removidas de {rc_path}")),
                 Err(e) => errors.push(format!("⚠ Não foi possível atualizar {rc_path}: {e}")),
             }
         }
@@ -1212,7 +1213,7 @@ fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
 
 /// `elai send "message"` — fire a single prompt and print the response to stdout.
 /// With `--wait` it waits for the full response (default); always waits currently.
-/// With `--json` it emits JSON (same structure as CliAction::Prompt with --output-format=json).
+/// With `--json` it emits JSON (same structure as `CliAction::Prompt` with --output-format=json).
 /// With `--thinking N` ou `--ultrathink` configura o orçamento de extended thinking.
 /// Quando thinking está ativo (override explícito, palavra-chave `ultrathink` no
 /// texto, ou default por modelo), o `CAPYBARA_SYSTEM_PROMPT` é anexado ao system
@@ -1259,17 +1260,14 @@ fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Erro
     let sessions_path = sessions_dir()?;
     // Find most-recently-modified session file
     let mut entries: Vec<_> = fs::read_dir(&sessions_path)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
         .collect();
     entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
     entries.reverse();
-    let session_path = match entries.first() {
-        Some(entry) => entry.path(),
-        None => {
-            println!("No sessions found.");
-            return Ok(());
-        }
+    let session_path = if let Some(entry) = entries.first() { entry.path() } else {
+        println!("No sessions found.");
+        return Ok(());
     };
     let session = runtime::Session::load_from_path(&session_path)
         .map_err(|e| format!("could not load session: {e}"))?;
@@ -1303,7 +1301,7 @@ fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Erro
 }
 
 /// `elai model get` — print the current resolved default model.
-fn run_model_get() -> Result<(), Box<dyn std::error::Error>> {
+fn run_model_get() {
     let model = suggested_default_model();
     // Check for a persisted override
     let override_model: Option<String> = std::env::var("ELAI_DEFAULT_OPENAI_MODEL").ok()
@@ -1313,7 +1311,6 @@ fn run_model_get() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("{model}");
     }
-    Ok(())
 }
 
 /// `elai model set MODEL` — persist the preferred model to `~/.elai/.env`.
@@ -1333,12 +1330,10 @@ fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
             .map(|l| if l.starts_with(&format!("{key}=")) { new_line.as_str() } else { l })
             .collect::<Vec<_>>()
             .join("\n") + "\n"
+    } else if existing.is_empty() || existing.ends_with('\n') {
+        format!("{existing}{new_line}\n")
     } else {
-        if existing.is_empty() || existing.ends_with('\n') {
-            format!("{existing}{new_line}\n")
-        } else {
-            format!("{existing}\n{new_line}\n")
-        }
+        format!("{existing}\n{new_line}\n")
     };
     std::fs::write(&env_path, &updated)?;
     println!("Model set to: {model}");
@@ -1347,23 +1342,17 @@ fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// `elai reply "answer"` — send a reply in the context of the most recent session.
-/// Implemented as a headless send (the session continuity is handled by LiveCli resumption).
+/// Implemented as a headless send (the session continuity is handled by `LiveCli` resumption).
 fn run_reply(answer: &str) -> Result<(), Box<dyn std::error::Error>> {
     run_headless_send(answer, true, false, None)
 }
 
 /// `elai status [--json]` — show elai version, current model, auth state, and cwd.
-fn run_status_cmd(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_status_cmd(json: bool) {
     let version = env!("CARGO_PKG_VERSION");
     let model = suggested_default_model();
-    let auth_info = auth::dispatch_auth_status(false).map_or_else(
-        |_| "unknown".to_string(),
-        |_| String::new(), // dispatch_auth_status prints itself when json=false
-    );
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "unknown".into());
-    let _ = auth_info;
+    auth::dispatch_auth_status(false);
+    let cwd = std::env::current_dir().map_or_else(|_| "unknown".into(), |p| p.display().to_string());
     if json {
         // Build JSON manually; auth info comes from collect_auth_info via dispatch
         let has_auth = has_any_auth();
@@ -1378,9 +1367,8 @@ fn run_status_cmd(json: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!("model  : {model}");
         println!("cwd    : {cwd}");
         println!("auth   :");
-        let _ = auth::dispatch_auth_status(false);
+        auth::dispatch_auth_status(false);
     }
-    Ok(())
 }
 
 fn run_verify_command() -> Result<(), Box<dyn std::error::Error>> {
@@ -1870,6 +1858,7 @@ fn run_repl(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 fn run_tui_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -2148,13 +2137,21 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::SetModel(m) => {
-                    app.model = m.clone();
-                    app.push_chat(tui::ChatEntry::SystemNote(format!(
-                        "✅ Modelo alterado para: {m}"
-                    )));
+                    let needs_go_key = metadata_for_model(&m)
+                        .is_some_and(|md| md.provider == ProviderKind::OpenCodeGo)
+                        && std::env::var_os("OPENCODE_GO_API_KEY")
+                            .is_none_or(|v| v.is_empty());
+                    if needs_go_key {
+                        app.open_auth_picker();
+                    } else {
+                        app.model.clone_from(&m);
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "✅ Modelo alterado para: {m}"
+                        )));
+                    }
                 }
                 tui::TuiAction::SetPermissions(p) => {
-                    app.permission_mode = p.clone();
+                    app.permission_mode.clone_from(&p);
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "✅ Permissões alteradas para: {p}"
                     )));
@@ -2201,9 +2198,9 @@ fn run_tui_repl(
                         "\u{2705} API key salva em ~/.elai/.env\n  Modelo padrão: {new_model}"
                     )));
                 }
-                tui::TuiAction::AuthComplete { label } => {
-                    let new_model = preferred_model_after_auth();
-                    app.model = new_model.clone();
+                tui::TuiAction::AuthComplete { label, model } => {
+                    let new_model = model.unwrap_or_else(preferred_model_after_auth);
+                    app.model.clone_from(&new_model);
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} {label}\n  Modelo padrão: {new_model}"
                     )));
@@ -2296,6 +2293,7 @@ fn append_budget_summary_to_memory(
     file.write_all(summary.as_bytes())
 }
 
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 fn handle_tui_slash_command(
     cmd: String,
     app: &mut tui::UiApp,
@@ -2344,8 +2342,9 @@ fn handle_tui_slash_command(
   /verify        {verify}\n\
   /theme gray <n> {theme_gray}\n\
   /swd [off|partial|full]  {swd}\n\
-  /keys          {keys}\n\
+  /auth          {auth_help}\n\
   /uninstall     {uninstall}\n\
+  /logout        {logout}\n\
   /version       {version}\n\
   /locale [pt-BR|en] {locale}\n\
   /exit          {exit}\n\
@@ -2366,8 +2365,9 @@ fn handle_tui_slash_command(
                 verify = rust_i18n::t!("tui.repl.help.verify"),
                 theme_gray = rust_i18n::t!("tui.repl.help.theme_gray"),
                 swd = rust_i18n::t!("tui.repl.help.swd"),
-                keys = rust_i18n::t!("tui.repl.help.keys"),
+                auth_help = rust_i18n::t!("tui.repl.help.auth_help"),
                 uninstall = rust_i18n::t!("tui.repl.help.uninstall"),
+                logout = rust_i18n::t!("tui.repl.help.logout"),
                 version = rust_i18n::t!("tui.repl.help.version"),
                 locale = rust_i18n::t!("tui.repl.help.locale"),
                 exit = rust_i18n::t!("tui.repl.help.exit"),
@@ -2377,7 +2377,7 @@ fn handle_tui_slash_command(
         }
         "status" => {
             let cost = estimate_tui_cost(app);
-            let msgs = session.lock().map(|g| g.messages.len()).unwrap_or(0);
+            let msgs = session.lock().map_or(0, |g| g.messages.len());
             app.push_chat(tui::ChatEntry::SystemNote(format!(
                 "{header}\n  {model:<11} {}\n  {permissions:<11} {}\n  {session:<11} {}\n  {messages:<11} {msgs}\n  {tokens:<11} {} / {tokens_out} {}\n  {cost_estimate:<11} ${cost:.4}",
                 app.model, app.permission_mode, app.session_id,
@@ -2395,12 +2395,19 @@ fn handle_tui_slash_command(
         "model" => {
             if let Some(model_name) = arg {
                 let m = model_name.to_string();
-                app.model = m.clone();
-                app.push_chat(tui::ChatEntry::SystemNote(
-                    rust_i18n::t!("tui.repl.feedback.model_changed", model = m).to_string(),
-                ));
+                let needs_go_key = metadata_for_model(&m)
+                    .is_some_and(|md| md.provider == ProviderKind::OpenCodeGo)
+                    && std::env::var_os("OPENCODE_GO_API_KEY").is_none_or(|v| v.is_empty());
+                if needs_go_key {
+                    app.open_auth_picker();
+                } else {
+                    app.model.clone_from(&m);
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        rust_i18n::t!("tui.repl.feedback.model_changed", model = m).to_string(),
+                    ));
+                }
             } else {
-                app.open_model_picker();
+                app.open_auth_picker();
             }
         }
         "permissions" => {
@@ -2454,9 +2461,7 @@ fn handle_tui_slash_command(
         "diff" => {
             let diff = Command::new("git")
                 .args(["diff", "--stat"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_else(|_| "git diff failed".to_string());
+                .output().map_or_else(|_| "git diff failed".to_string(), |o| String::from_utf8_lossy(&o.stdout).to_string());
             let out = if diff.trim().is_empty() {
                 rust_i18n::t!("tui.repl.feedback.no_git_changes").to_string()
             } else {
@@ -2494,8 +2499,7 @@ fn handle_tui_slash_command(
             let guard = session.lock().expect("session mutex poisoned");
             let ts = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs());
             let filename = format!("elai-export-{ts}.txt");
             let mut content = String::new();
             for msg in &guard.messages {
@@ -2518,7 +2522,7 @@ fn handle_tui_slash_command(
             }
             drop(guard);
             match fs::write(&filename, &content) {
-                Ok(_) => app.push_chat(tui::ChatEntry::SystemNote(
+                Ok(()) => app.push_chat(tui::ChatEntry::SystemNote(
                     rust_i18n::t!("tui.repl.feedback.export_ok", file = filename).to_string(),
                 )),
                 Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
@@ -2641,17 +2645,14 @@ fn handle_tui_slash_command(
             use crate::swd::SwdLevel;
             let current = SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed));
             let new_level = if let Some(level_str) = arg {
-                match SwdLevel::from_str(level_str) {
-                    Some(l) => l,
-                    None => {
-                        app.push_chat(tui::ChatEntry::SystemNote(
-                            rust_i18n::t!(
-                                "tui.repl.feedback.swd_invalid",
-                                level = level_str.to_string()
-                            ).to_string(),
-                        ));
-                        return;
-                    }
+                if let Some(l) = SwdLevel::from_str(level_str) { l } else {
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        rust_i18n::t!(
+                            "tui.repl.feedback.swd_invalid",
+                            level = level_str.to_string()
+                        ).to_string(),
+                    ));
+                    return;
                 }
             } else {
                 current.cycle()
@@ -2665,11 +2666,25 @@ fn handle_tui_slash_command(
                 ).to_string(),
             ));
         }
-        "keys" | "setup" => {
+        "auth" => {
             app.open_auth_picker();
         }
         "uninstall" => {
             app.open_uninstall_confirm();
+        }
+        "logout" => {
+            match auth::dispatch_logout() {
+                Ok(()) => {
+                    app.model.clear();
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "✅ Credenciais removidas. Escolha o provedor para autenticar novamente.".to_string(),
+                    ));
+                    app.open_auth_picker();
+                }
+                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
+                    format!("❌ Logout error: {e}"),
+                )),
+            }
         }
         "agents" => {
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2806,8 +2821,8 @@ fn handle_tui_slash_command(
                 }
                 None
             });
-            let by_model = arg.map_or(true, |a| a.contains("--by-model") || !a.contains("--by-project"));
-            let by_project = arg.map_or(false, |a| a.contains("--by-project"));
+            let by_model = arg.is_none_or(|a| a.contains("--by-model") || !a.contains("--by-project"));
+            let by_project = arg.is_some_and(|a| a.contains("--by-project"));
             let path = default_telemetry_path();
             let since_secs: Option<u64> = days.map(|d| {
                 SystemTime::now()
@@ -2826,7 +2841,7 @@ fn handle_tui_slash_command(
             use commands::providers::render_providers_dashboard;
             use runtime::{default_telemetry_path, load_entries};
 
-            let verbose = arg.map_or(false, |a| a.contains("--verbose"));
+            let verbose = arg.is_some_and(|a| a.contains("--verbose"));
             let path = default_telemetry_path();
             let output = match load_entries(&path, None) {
                 Ok(entries) => render_providers_dashboard(&entries, verbose),
@@ -2851,7 +2866,7 @@ fn handle_tui_slash_command(
                     }
                     Ok(content) => {
                         let parsed = dream::parse_memory_sections(&content);
-                        let force = arg.map_or(false, |a| a == "--force");
+                        let force = arg == Some("--force");
                         if parsed.old_entries.is_empty() && !force {
                             app.push_chat(tui::ChatEntry::SystemNote(format!(
                                 "Dream: nada a comprimir ({} entradas <= 20). Use /dream --force para forçar.",
@@ -3066,7 +3081,7 @@ fn handle_tui_slash_command(
                 app.push_chat(tui::ChatEntry::SystemNote(message));
             } else {
                 let locales: Vec<String> =
-                    SUPPORTED_LOCALES.iter().map(|s| s.to_string()).collect();
+                    SUPPORTED_LOCALES.iter().map(std::string::ToString::to_string).collect();
                 let current = rust_i18n::locale().to_string();
                 app.open_locale_picker(locales, &current);
             }
@@ -3272,6 +3287,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         )
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Enriquece o input com conteúdo de arquivos mencionados via `@<path>`.
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -3318,16 +3334,14 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                                 }
                             })
                         })
-                        .collect::<Vec<_>>()
-                        .join("");
+                        .collect::<String>();
                     if !response_text.is_empty() {
                         self.cache.put(key, CachedResponse {
                             response_json: response_text,
                             model: self.model.clone(),
                             created_at_ms: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0),
+                                .map_or(0, |d| d.as_millis() as u64),
                             hit_count: 0,
                         });
                     }
@@ -3385,11 +3399,12 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn emit_turn_telemetry(&self, summary: &runtime::TurnSummary, error_type: Option<&str>) {
         use runtime::{default_telemetry_path, now_iso8601, pricing_for_model, TelemetryEntry, TelemetryWriter};
         let usage = &summary.usage;
         let cost_usd = pricing_for_model(&self.model)
-            .map(|p| {
+            .map_or(0.0, |p| {
                 f64::from(usage.input_tokens) * p.input_cost_per_million / 1_000_000.0
                     + f64::from(usage.output_tokens) * p.output_cost_per_million / 1_000_000.0
                     + f64::from(usage.cache_creation_input_tokens)
@@ -3398,8 +3413,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     + f64::from(usage.cache_read_input_tokens)
                         * p.cache_read_cost_per_million
                         / 1_000_000.0
-            })
-            .unwrap_or(0.0);
+            });
         let project = std::env::current_dir()
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -3484,6 +3498,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_repl_command(
         &mut self,
         command: SlashCommand,
@@ -3607,9 +3622,8 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 let context_str = context.as_deref().unwrap_or("");
                 let prompt = format!(
                     "Generate a concise commit message, PR title, and PR body for the following changes.\n\
-                     Context: {}\n\nStaged:\n{}\n\nUnstaged:\n{}\n\n\
-                     Respond as JSON: {{\"commit_message\": \"...\", \"pr_title\": \"...\", \"pr_body\": \"...\"}}",
-                    context_str, staged_stat, unstaged_stat
+                     Context: {context_str}\n\nStaged:\n{staged_stat}\n\nUnstaged:\n{unstaged_stat}\n\n\
+                     Respond as JSON: {{\"commit_message\": \"...\", \"pr_title\": \"...\", \"pr_body\": \"...\"}}"
                 );
 
                 let response = self.run_internal_prompt_text(&prompt, false)
@@ -3618,7 +3632,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     .map_err(|e| std::io::Error::other(format!("AI returned invalid JSON: {e}\n--- response ---\n{response}")))?;
 
                 let request = CommitPushPrRequest {
-                    commit_message: parsed["commit_message"].as_str().map(|s| s.to_string()),
+                    commit_message: parsed["commit_message"].as_str().map(std::string::ToString::to_string),
                     pr_title: parsed["pr_title"].as_str().unwrap_or("Update").to_string(),
                     pr_body: parsed["pr_body"].as_str().unwrap_or("").to_string(),
                     branch_name_hint: String::new(),
@@ -3702,34 +3716,31 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn handle_cache_command(&mut self, subcommand: Option<&str>) {
-        match subcommand.map(str::trim).unwrap_or("stats") {
-            "clear" => {
-                self.cache.clear();
-                let _ = self.cache.flush();
-                println!("Cache cleared.");
-            }
-            _ => {
-                let s = self.cache.stats();
-                let oldest_age = s.oldest_entry_ms.map(|ms| {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    let age_secs = now.saturating_sub(ms) / 1000;
-                    format!("{age_secs}s ago")
-                });
-                println!(
-                    "Cache
-  Entries          {}
-  Total hits       {}
-  Oldest entry     {}",
-                    s.total_entries,
-                    s.total_hits,
-                    oldest_age.as_deref().unwrap_or("—"),
-                );
-            }
-        }
+        if subcommand.map_or("stats", str::trim) == "clear" {
+            self.cache.clear();
+            let _ = self.cache.flush();
+            println!("Cache cleared.");
+        } else {
+                      let s = self.cache.stats();
+                      let oldest_age = s.oldest_entry_ms.map(|ms| {
+                          let now = std::time::SystemTime::now()
+                              .duration_since(std::time::UNIX_EPOCH)
+                              .map_or(0, |d| d.as_millis() as u64);
+                          let age_secs = now.saturating_sub(ms) / 1000;
+                          format!("{age_secs}s ago")
+                      });
+                      println!(
+                          "Cache
+        Entries          {}
+        Total hits       {}
+        Oldest entry     {}",
+                          s.total_entries,
+                          s.total_hits,
+                          oldest_age.as_deref().unwrap_or("—"),
+                      );
+                  }
     }
 
     fn print_status(&self) {
@@ -4329,7 +4340,7 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
             message_count,
         });
     }
-    sessions.sort_by(|left, right| right.modified_epoch_secs.cmp(&left.modified_epoch_secs));
+    sessions.sort_by_key(|right| std::cmp::Reverse(right.modified_epoch_secs));
     Ok(sessions)
 }
 
@@ -4560,7 +4571,7 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
             } else {
                 preview
             };
-            lines.push(format!("  {}. {}", index + 1, file.path.display(),));
+            lines.push(format!("  {}. {}", index + 1, file.path.display()));
             lines.push(format!(
                 "     lines={} preview={}",
                 file.content.lines().count(),
@@ -4635,7 +4646,7 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
                 } else { idx += 1; }
             }
             "--qdrant-container" => {
-                if let Some(v) = rest.get(idx + 1) { args.qdrant_container = v.clone(); idx += 2; } else { idx += 1; }
+                if let Some(v) = rest.get(idx + 1) { args.qdrant_container.clone_from(v); idx += 2; } else { idx += 1; }
             }
             _ => { idx += 1; }
         }
@@ -4813,8 +4824,7 @@ fn command_exists(name: &str) -> bool {
     Command::new("which")
         .arg(name)
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn write_temp_text_file(
@@ -5490,7 +5500,7 @@ fn build_runtime_with_thinking(
     .with_model_name(model_name))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn build_runtime_for_tui(
     session: Session,
     model: String,
@@ -5675,6 +5685,7 @@ struct DefaultRuntimeClient {
 }
 
 impl DefaultRuntimeClient {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         model: String,
         enable_tools: bool,
@@ -5687,8 +5698,7 @@ impl DefaultRuntimeClient {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let orchestrate = env::var("ELAI_ORCHESTRATE")
             .ok()
-            .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(false);
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"));
         let client = if orchestrate {
             ProviderClient::orchestrated().map_err(|error| error.to_string())?
         } else {
@@ -5768,6 +5778,7 @@ impl ApiClient for DefaultRuntimeClient {
             } else {
                 None
             },
+            reasoning_effort: None,
         };
 
         // Clone sender before moving into async block.
@@ -5876,12 +5887,12 @@ impl ApiClient for DefaultRuntimeClient {
                                 // Modo compacto por padrão (uma linha por call); modo verboso
                                 // legacy só quando `ELAI_VERBOSE_TOOLS=1`, preservando o
                                 // output rico para scripts/tests que dependam dele.
-                                let rendered = if cli_tools_verbose() {
+                                let output_text = if cli_tools_verbose() {
                                     format!("\n{}", format_tool_call_start(&name, &input))
                                 } else {
                                     format_tool_call_compact(&name, &input)
                                 };
-                                writeln!(out, "{rendered}")
+                                writeln!(out, "{output_text}")
                                     .and_then(|()| out.flush())
                                     .map_err(|error| RuntimeError::new(error.to_string()))?;
                             }
@@ -5944,7 +5955,7 @@ impl ApiClient for DefaultRuntimeClient {
                                         let accepted = reply_rx.recv().unwrap_or(false);
 
                                         if accepted {
-                                            let txs = crate::swd::execute_file_actions(actions);
+                                            let txs = crate::swd::execute_file_actions(&actions);
                                             let _ = crate::swd::append_swd_log(&txs);
                                             let has_failures = txs.iter().any(|tx| {
                                                 matches!(
@@ -5965,7 +5976,7 @@ impl ApiClient for DefaultRuntimeClient {
                                         // Rejection note already sent by TUI handler.
                                     } else {
                                         // Non-TUI mode: execute directly (no preview).
-                                        let txs = crate::swd::execute_file_actions(actions);
+                                        let txs = crate::swd::execute_file_actions(&actions);
                                         let _ = crate::swd::append_swd_log(&txs);
                                         let has_failures = txs.iter().any(|tx| {
                                             matches!(
@@ -6012,6 +6023,7 @@ impl ApiClient for DefaultRuntimeClient {
                 .send_message(&MessageRequest {
                     stream: false,
                     thinking: None,
+                    reasoning_effort: None,
                     output_config: None,
                     ..message_request.clone()
                 })
@@ -6113,6 +6125,7 @@ fn slash_command_completion_candidates() -> Vec<String> {
         })
         .collect::<Vec<_>>();
     candidates.push("/vim".to_string());
+    candidates.push("/logout".to_string());
     candidates
 }
 
@@ -6230,8 +6243,7 @@ fn format_tool_result_compact(ok: bool) -> &'static str {
 /// Detecta se o usuário pediu output verboso de tools no modo CLI não-TUI.
 fn cli_tools_verbose() -> bool {
     std::env::var_os("ELAI_VERBOSE_TOOLS")
-        .map(|v| !v.is_empty() && v != "0")
-        .unwrap_or(false)
+        .is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
@@ -6707,6 +6719,7 @@ impl CliToolExecutor {
         self
     }
 
+    #[allow(clippy::too_many_lines)]
     fn execute_with_swd(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
         use std::sync::atomic::Ordering;
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -6736,7 +6749,7 @@ impl CliToolExecutor {
         } else {
             swd::snapshot(&path)
         };
-        let outcome = swd::verify_outcome(&before_hash, &after_hash, tool_ok);
+        let outcome = swd::verify_outcome(before_hash.as_ref(), after_hash.as_ref(), tool_ok);
 
         // Rollback if failed.
         if matches!(outcome, SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }) && !path.is_empty() {
@@ -6755,8 +6768,7 @@ impl CliToolExecutor {
                 *retry_count += 1;
                 let ts2 = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-                    .unwrap_or(0);
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
                 let tx_err = SwdTransaction {
                     tool_name: tool_name.to_string(),
                     path: path.clone(),
@@ -6765,7 +6777,7 @@ impl CliToolExecutor {
                     outcome: outcome.clone(),
                     timestamp_ms: ts2,
                 };
-                let _ = swd::append_swd_log(&[tx_err.clone()]);
+                let _ = swd::append_swd_log(std::slice::from_ref(&tx_err));
                 if let Some(ref sender) = self.tui_sender {
                     let _ = sender.send(tui::TuiMsg::SwdResult(tx_err));
                 }
@@ -6779,33 +6791,30 @@ impl CliToolExecutor {
                     after = after_hash.as_deref().unwrap_or("none"),
                 );
                 return Err(ToolError::new(hint));
-            } else {
-                let ts2 = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-                    .unwrap_or(0);
-                let tx_err = SwdTransaction {
-                    tool_name: tool_name.to_string(),
-                    path: path.clone(),
-                    before_hash: before_hash.clone(),
-                    after_hash: after_hash.clone(),
-                    outcome: outcome.clone(),
-                    timestamp_ms: ts2,
-                };
-                let _ = swd::append_swd_log(&[tx_err.clone()]);
-                if let Some(ref sender) = self.tui_sender {
-                    let _ = sender.send(tui::TuiMsg::SwdResult(tx_err));
-                }
-                return Err(ToolError::new(format!(
-                    "SWD max retries exceeded for {path}: {detail}. Manual intervention required."
-                )));
             }
+            let ts2 = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            let tx_err = SwdTransaction {
+                tool_name: tool_name.to_string(),
+                path: path.clone(),
+                before_hash: before_hash.clone(),
+                after_hash: after_hash.clone(),
+                outcome: outcome.clone(),
+                timestamp_ms: ts2,
+            };
+            let _ = swd::append_swd_log(std::slice::from_ref(&tx_err));
+            if let Some(ref sender) = self.tui_sender {
+                let _ = sender.send(tui::TuiMsg::SwdResult(tx_err));
+            }
+            return Err(ToolError::new(format!(
+                "SWD max retries exceeded for {path}: {detail}. Manual intervention required."
+            )));
         }
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let tx_record = SwdTransaction {
             tool_name: tool_name.to_string(),
             path: path.clone(),
@@ -6814,7 +6823,7 @@ impl CliToolExecutor {
             outcome,
             timestamp_ms: ts,
         };
-        let _ = swd::append_swd_log(&[tx_record.clone()]);
+        let _ = swd::append_swd_log(std::slice::from_ref(&tx_record));
 
         if let Some(ref sender) = self.tui_sender {
             let _ = sender.send(tui::TuiMsg::SwdResult(tx_record));
@@ -7099,7 +7108,7 @@ fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
 
     for msg in &session.messages {
         match msg.role {
-            runtime::MessageRole::System => {}
+            runtime::MessageRole::System | runtime::MessageRole::Tool => {}
             runtime::MessageRole::User => {
                 let text: String = msg
                     .blocks
@@ -7158,7 +7167,6 @@ fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
                     app.push_chat(tui::ChatEntry::ToolBatchEntry { items, closed: true });
                 }
             }
-            runtime::MessageRole::Tool => {}
         }
     }
 

@@ -40,7 +40,7 @@ impl AutoDreamConfig {
             }
         }
         if std::env::var("ELAI_AUTO_DREAM_DISABLED")
-            .map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         {
             cfg.enabled = false;
         }

@@ -229,6 +229,7 @@ impl TelemetryWorker {
     /// Spawn the worker and return the handle/shutdown pair.
     ///
     /// Requires an active tokio runtime (uses `tokio::spawn`).
+    #[must_use] 
     pub fn start() -> (TelemetryHandle, TelemetryShutdown) {
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TelemetryEvent>();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -259,18 +260,15 @@ async fn run_worker(
         tokio::select! {
             // Drain incoming events.
             event = event_rx.recv() => {
-                match event {
-                    Some(ev) => {
-                        buffer.push(ev);
-                        if buffer.len() >= FLUSH_THRESHOLD {
-                            flush_buffer(&mut buffer).await;
-                        }
-                    }
-                    None => {
-                        // Sender side dropped — flush and exit.
+                if let Some(ev) = event {
+                    buffer.push(ev);
+                    if buffer.len() >= FLUSH_THRESHOLD {
                         flush_buffer(&mut buffer).await;
-                        return;
                     }
+                } else {
+                    // Sender side dropped — flush and exit.
+                    flush_buffer(&mut buffer).await;
+                    return;
                 }
             }
             // Timer-based flush.
@@ -293,16 +291,15 @@ async fn run_worker(
 }
 
 async fn flush_buffer(buffer: &mut Vec<TelemetryEvent>) {
+    use tokio::io::AsyncWriteExt;
+
     if buffer.is_empty() {
         return;
     }
 
-    let path = match telemetry_file_path() {
-        Some(p) => p,
-        None => {
-            buffer.clear();
-            return;
-        }
+    let Some(path) = telemetry_file_path() else {
+        buffer.clear();
+        return;
     };
 
     // Ensure parent directory exists.
@@ -316,17 +313,13 @@ async fn flush_buffer(buffer: &mut Vec<TelemetryEvent>) {
     // Build JSONL lines.
     let mut lines = String::new();
     for event in buffer.drain(..) {
-        match serde_json::to_string(&event) {
-            Ok(json) => {
-                lines.push_str(&json);
-                lines.push('\n');
-            }
-            Err(_) => {}
+        if let Ok(json) = serde_json::to_string(&event) {
+            lines.push_str(&json);
+            lines.push('\n');
         }
     }
 
     // Append to file.
-    use tokio::io::AsyncWriteExt;
     let append_result = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -349,10 +342,7 @@ async fn maybe_rotate(path: &PathBuf) {
     const MAX_LINES: usize = 10_000;
     const KEEP_LINES: usize = 8_000;
 
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let Ok(content) = tokio::fs::read_to_string(path).await else { return };
 
     let all_lines: Vec<&str> = content.lines().collect();
     if all_lines.len() <= MAX_LINES {
@@ -373,6 +363,7 @@ fn telemetry_file_path() -> Option<PathBuf> {
 // ──────────────────────────── Helper ─────────────────────────────────────────
 
 /// Returns the current Unix time in milliseconds.
+#[allow(clippy::cast_possible_truncation)]
 #[must_use]
 pub fn now_millis() -> u64 {
     SystemTime::now()

@@ -57,6 +57,11 @@ pub struct MessageRequest {
     /// the model applies (high = thorough, low = fast/cheap).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_config: Option<OutputConfig>,
+    /// Reasoning effort for OpenAI-compatible models (`DeepSeek`, Kimi, GLM, etc.).
+    /// Values: `"low"`, `"medium"`, `"high"`, `"max"` (deepseek-v4 only).
+    /// Only sent when `Some` — the field is omitted from JSON otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 impl MessageRequest {
@@ -331,6 +336,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
         let json = serde_json::to_value(&request).unwrap();
@@ -349,6 +355,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: Some(ThinkingConfig::Adaptive),
+            reasoning_effort: None,
             output_config: Some(OutputConfig { effort: EffortLevel::High }),
         };
         let json = serde_json::to_value(&request).unwrap();

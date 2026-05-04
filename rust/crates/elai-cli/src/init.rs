@@ -400,7 +400,6 @@ fn build_embedder_with_progress(
                 .unwrap_or_else(|| "nomic-embed-text".to_string());
             let dim = match model.as_str() {
                 "all-minilm" => 384,
-                "nomic-embed-text" => 768,
                 "mxbai-embed-large" => 1024,
                 _ => 768,
             };

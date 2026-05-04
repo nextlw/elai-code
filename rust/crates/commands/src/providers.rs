@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use runtime::TelemetryEntry;
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,7 @@ pub enum ProviderStatus {
 }
 
 /// Confidence label based on sample size.
+#[must_use] 
 pub fn confidence_label(total_calls: u32) -> &'static str {
     if total_calls < 20 {
         "Low"
@@ -30,6 +33,7 @@ pub fn confidence_label(total_calls: u32) -> &'static str {
 
 /// Exponential Moving Average of latencies with given alpha.
 /// `ema[0] = latencies[0]; ema[i] = alpha * latencies[i] + (1-alpha) * ema[i-1]`
+#[must_use] 
 pub fn compute_ema_latency(latencies: &[f64], alpha: f64) -> f64 {
     if latencies.is_empty() {
         return 0.0;
@@ -42,6 +46,8 @@ pub fn compute_ema_latency(latencies: &[f64], alpha: f64) -> f64 {
 }
 
 /// Aggregate telemetry entries by provider field.
+#[must_use] 
+#[allow(clippy::cast_precision_loss)]
 pub fn aggregate_providers(entries: &[TelemetryEntry]) -> Vec<ProviderHealthSummary> {
     use std::collections::BTreeMap;
 
@@ -103,10 +109,11 @@ pub fn aggregate_providers(entries: &[TelemetryEntry]) -> Vec<ProviderHealthSumm
 }
 
 /// Return the `limit` most recent entries that have a provider (routing decisions).
-pub fn recent_routing_decisions<'a>(
-    entries: &'a [TelemetryEntry],
+#[must_use] 
+pub fn recent_routing_decisions(
+    entries: &[TelemetryEntry],
     limit: usize,
-) -> Vec<&'a TelemetryEntry> {
+) -> Vec<&TelemetryEntry> {
     let mut with_provider: Vec<&TelemetryEntry> = entries
         .iter()
         .filter(|e| e.provider.is_some())
@@ -117,10 +124,11 @@ pub fn recent_routing_decisions<'a>(
 }
 
 /// Return the `limit` most recent failed entries.
-pub fn recent_failures<'a>(
-    entries: &'a [TelemetryEntry],
+#[must_use] 
+pub fn recent_failures(
+    entries: &[TelemetryEntry],
     limit: usize,
-) -> Vec<&'a TelemetryEntry> {
+) -> Vec<&TelemetryEntry> {
     let mut failures: Vec<&TelemetryEntry> =
         entries.iter().filter(|e| !e.success).collect();
     failures.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -128,6 +136,7 @@ pub fn recent_failures<'a>(
 }
 
 /// Render the full providers dashboard as a String.
+#[must_use] 
 pub fn render_providers_dashboard(entries: &[TelemetryEntry], verbose: bool) -> String {
     let summaries = aggregate_providers(entries);
 
@@ -145,12 +154,13 @@ pub fn render_providers_dashboard(entries: &[TelemetryEntry], verbose: bool) -> 
     out.push_str(&"-".repeat(50));
     out.push('\n');
 
-    if let Some(l) = leader {
+        if let Some(l) = leader {
         let conf = confidence_label(l.total_calls);
-        out.push_str(&format!(
-            "  Leader: {} (Score: {:.1}) [{conf} Confidence]\n",
+        let _ = writeln!(
+            out,
+            "  Leader: {} (Score: {:.1}) [{conf} Confidence]",
             l.id, l.score
-        ));
+        );
     }
     out.push_str(&"-".repeat(50));
     out.push('\n');
@@ -175,27 +185,29 @@ pub fn render_providers_dashboard(entries: &[TelemetryEntry], verbose: bool) -> 
     let w_ema = h_ema.len();
     let w_success = h_success.len();
 
-    out.push_str(&format!(
-        "  {:<w_provider$} | {:<w_status$} | {:<w_ema$} | {:<w_success$}\n",
-        h_provider, h_status, h_ema, h_success
-    ));
-    out.push_str(&format!(
-        "  {}\n",
+    let _ = writeln!(
+        out,
+        "  {h_provider:<w_provider$} | {h_status:<w_status$} | {h_ema:<w_ema$} | {h_success:<w_success$}"
+    );
+    let _ = writeln!(
+        out,
+        "  {}",
         "-".repeat(w_provider + w_status + w_ema + w_success + 9)
-    ));
+    );
 
     for s in &summaries {
         let status_str = match s.status {
             ProviderStatus::Healthy => "Healthy".to_string(),
             ProviderStatus::Degraded { reason } => reason.to_string(),
         };
-        out.push_str(&format!(
-            "  {:<w_provider$} | {:<w_status$} | {:>w_ema$} | {:>w_success$}\n",
+        let _ = writeln!(
+            out,
+            "  {:<w_provider$} | {:<w_status$} | {:>w_ema$} | {:>w_success$}",
             s.id,
             status_str,
             format!("{:.0}ms", s.ema_latency_ms),
             format!("{:.1}%", s.success_rate * 100.0),
-        ));
+        );
     }
     out.push_str(&"-".repeat(50));
     out.push('\n');
@@ -212,10 +224,11 @@ pub fn render_providers_dashboard(entries: &[TelemetryEntry], verbose: bool) -> 
                     &e.timestamp
                 };
                 let provider = e.provider.as_deref().unwrap_or("?");
-                out.push_str(&format!(
-                    "  [{time}] {provider} chosen ({} in / {} out tokens)\n",
+                let _ = writeln!(
+                    out,
+                    "  [{time}] {provider} chosen ({} in / {} out tokens)",
                     e.input_tokens, e.output_tokens
-                ));
+                );
             }
             out.push_str(&"-".repeat(50));
             out.push('\n');
@@ -233,7 +246,7 @@ pub fn render_providers_dashboard(entries: &[TelemetryEntry], verbose: bool) -> 
                 };
                 let provider = e.provider.as_deref().unwrap_or("?");
                 let err = e.error_type.as_deref().unwrap_or("unknown error");
-                out.push_str(&format!("  [{time}] {provider} | {err}\n"));
+                let _ = writeln!(out, "  [{time}] {provider} | {err}");
             }
         }
     }

@@ -98,8 +98,7 @@ impl ResponseCache {
         let exists_and_fresh = self
             .entries
             .get(key.as_str())
-            .map(|e| now.saturating_sub(e.created_at_ms) < ttl)
-            .unwrap_or(false);
+            .is_some_and(|e| now.saturating_sub(e.created_at_ms) < ttl);
 
         if !exists_and_fresh {
             // Remove if present but expired.
@@ -195,6 +194,7 @@ impl ResponseCache {
     // Private helpers
     // ------------------------------------------------------------------
 
+    #[allow(clippy::cast_possible_wrap)]
     fn serialize(&self) -> JsonValue {
         let mut outer = BTreeMap::new();
         for (key, entry) in &self.entries {
@@ -265,7 +265,8 @@ impl ResponseCache {
 
 /// Returns `None` if ANY message contains `ToolUse` or `ToolResult` content.
 /// Otherwise returns a deterministic SHA-256 key over
-/// (messages, model, system_prompt).
+/// (messages, model, `system_prompt`).
+#[must_use] 
 pub fn generate_cache_key(
     messages: &[ConversationMessage],
     model: &str,
@@ -314,7 +315,7 @@ fn build_canonical_json(
 
     let msg_array: Vec<JsonValue> = messages
         .iter()
-        .map(|m| m.to_json())
+        .map(super::session::ConversationMessage::to_json)
         .collect();
     root.insert("messages".to_string(), JsonValue::Array(msg_array));
 
@@ -331,11 +332,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ pub use user_commands::{
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fmt::Write;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -681,6 +682,7 @@ pub enum SlashCommand {
 
 impl SlashCommand {
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
@@ -878,21 +880,21 @@ pub fn render_help_grouped_with(
         by_cat.entry(spec.category.order()).or_default().push(spec);
     }
     let mut out = String::from("Slash commands\n  [resume] means the command also works with --resume SESSION.json\n");
-    for (_, specs) in &by_cat {
+    for specs in by_cat.values() {
         if specs.is_empty() {
             continue;
         }
         let cat = specs[0].category;
-        out.push_str(&format!("\n{}\n", cat.label()));
+        let _ = writeln!(out, "\n{}", cat.label());
         for spec in specs {
             let display = spec.user_facing_name.unwrap_or(spec.name);
             let resume = if spec.resume_supported { " [resume]" } else { "" };
-            out.push_str(&format!("  /{display:<18} {}{resume}\n", spec.summary()));
+            let _ = writeln!(out, "  /{display:<18} {}{resume}", spec.summary());
         }
     }
     if let Some(reg) = user_commands {
         if reg.count() > 0 {
-            out.push_str(&format!("\n{}\n", SlashCategory::Custom.label()));
+            let _ = writeln!(out, "\n{}", SlashCategory::Custom.label());
             let mut customs: Vec<&user_commands::UserCommand> = reg.all().collect();
             customs.sort_by(|a, b| a.name.cmp(&b.name));
             for cmd in customs {
@@ -905,10 +907,11 @@ pub fn render_help_grouped_with(
                 } else {
                     format!("/{}", cmd.name)
                 };
-                out.push_str(&format!(
-                    "  [{scope_marker}] {display:<18} {}\n",
+                let _ = writeln!(
+                    out,
+                    "  [{scope_marker}] {display:<18} {}",
                     cmd.description
-                ));
+                );
             }
         }
     }
@@ -1294,6 +1297,7 @@ pub fn handle_commit_slash_command(
     ))
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn handle_commit_push_pr_slash_command(
     request: &CommitPushPrRequest,
     cwd: &Path,
@@ -1316,7 +1320,7 @@ pub fn handle_commit_push_pr_slash_command(
         };
         let next_branch = build_branch_name(hint);
         git_status_ok(cwd, &["switch", "-c", next_branch.as_str()])?;
-        branch = next_branch.clone();
+        branch.clone_from(&next_branch);
         reporter.report(&format!("Created branch: {next_branch}"));
         created_branch = true;
     }
@@ -1347,7 +1351,7 @@ pub fn handle_commit_push_pr_slash_command(
         );
     }
 
-    reporter.report(&format!("Pushing to origin/{}...", branch));
+    reporter.report(&format!("Pushing to origin/{branch}..."));
     git_status_ok(cwd, &["push", "--set-upstream", "origin", branch.as_str()])?;
 
     reporter.report("Creating pull request...");
@@ -1478,8 +1482,7 @@ fn branch_exists(cwd: &Path, branch: &str) -> bool {
         ])
         .current_dir(cwd)
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn current_branch(cwd: &Path) -> io::Result<String> {
@@ -1496,8 +1499,7 @@ fn command_exists(name: &str) -> bool {
     Command::new(name)
         .arg("--version")
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn write_temp_text_file(prefix: &str, extension: &str, contents: &str) -> io::Result<PathBuf> {
@@ -1948,9 +1950,8 @@ fn parse_skill_frontmatter(contents: &str) -> ParsedSkillFrontmatter {
                     .push(unquote_frontmatter_value(item.trim()));
                 i += 1;
                 continue;
-            } else {
-                in_incompat_list = false;
             }
+            in_incompat_list = false;
         }
 
         if let Some(value) = trimmed.strip_prefix("name:") {
@@ -2266,7 +2267,7 @@ pub fn handle_tools_slash_command(subcommand: Option<&str>) -> String {
             }
             lines.join("\n")
         }
-        None | Some("list") | Some("") => {
+        None | Some("list" | "") => {
             // Future: list active tools in current session.
             "Tools\n  Use `/tools why` to see rejected tools from the last turn.".to_string()
         }

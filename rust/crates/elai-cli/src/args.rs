@@ -89,6 +89,7 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, clap::Args, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct InitArgs {
     /// Backend de armazenamento vetorial
     #[arg(long, value_enum, default_value_t = IndexBackend::Sqlite)]
@@ -184,6 +185,8 @@ pub enum ModelCmd {
 
 #[derive(Debug, Clone, clap::Args, PartialEq, Eq)]
 #[group(required = false, multiple = false, id = "method")]
+#[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct LoginArgs {
     /// Login via Anthropic Console (creates an API key)
     #[arg(long, group = "method")]
@@ -191,25 +194,25 @@ pub struct LoginArgs {
     /// Login via claude.ai (Pro/Max/Team/Enterprise subscriber OAuth)
     #[arg(long, group = "method")]
     pub claudeai: bool,
-    /// Login via SSO (uses claude.ai flow with login_method=sso)
+    /// Login via SSO (uses claude.ai flow with `login_method=sso`)
     #[arg(long, group = "method")]
     pub sso: bool,
-    /// Pre-fill the e-mail on the OAuth login page (login_hint)
+    /// Pre-fill the e-mail on the OAuth login page (`login_hint`)
     #[arg(long)]
     pub email: Option<String>,
     /// Paste an Anthropic API key (sk-ant-...). Use --stdin to pipe; otherwise prompts securely.
     #[arg(long, group = "method")]
     pub api_key: bool,
-    /// Paste an ANTHROPIC_AUTH_TOKEN (Bearer token). Use --stdin to pipe.
+    /// Paste an `ANTHROPIC_AUTH_TOKEN` (Bearer token). Use --stdin to pipe.
     #[arg(long, group = "method")]
     pub token: bool,
-    /// Switch to AWS Bedrock (sets CLAUDE_CODE_USE_BEDROCK=1 in shell rc; AWS creds via standard chain)
+    /// Switch to AWS Bedrock (sets `CLAUDE_CODE_USE_BEDROCK=1` in shell rc; AWS creds via standard chain)
     #[arg(long, group = "method")]
     pub use_bedrock: bool,
-    /// Switch to Google Vertex AI (sets CLAUDE_CODE_USE_VERTEX=1)
+    /// Switch to Google Vertex AI (sets `CLAUDE_CODE_USE_VERTEX=1`)
     #[arg(long, group = "method")]
     pub use_vertex: bool,
-    /// Switch to Azure Foundry (sets CLAUDE_CODE_USE_FOUNDRY=1)
+    /// Switch to Azure Foundry (sets `CLAUDE_CODE_USE_FOUNDRY=1`)
     #[arg(long, group = "method")]
     pub use_foundry: bool,
     /// Print the OAuth URL but don't open a browser (CI / remote shells)
@@ -227,32 +230,11 @@ pub struct LoginArgs {
     /// Login OAuth via Codex/OpenAI (`codex login`) and import credentials
     #[arg(long, group = "method")]
     pub codex_oauth: bool,
-    /// Import Codex ChatGPT OAuth from ~/.codex/auth.json (or $CODEX_HOME/auth.json)
+    /// Import Codex `ChatGPT` OAuth from ~/.codex/auth.json (or $`CODEX_HOME/auth.json`)
     #[arg(long, group = "method")]
     pub import_codex: bool,
 }
 
-impl Default for LoginArgs {
-    fn default() -> Self {
-        Self {
-            console: false,
-            claudeai: false,
-            sso: false,
-            email: None,
-            api_key: false,
-            token: false,
-            use_bedrock: false,
-            use_vertex: false,
-            use_foundry: false,
-            no_browser: false,
-            stdin: false,
-            legacy_elai: false,
-            import_claude_code: false,
-            codex_oauth: false,
-            import_codex: false,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub enum AuthCmd {

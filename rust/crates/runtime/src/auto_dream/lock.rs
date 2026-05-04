@@ -3,7 +3,7 @@
 //! - `read_last_consolidated_at(root)` — lê mtime do lock; se ausente, retorna 0.
 //! - `try_acquire_lock(root)` — touch o arquivo (atualiza mtime para now). Retorna
 //!   o mtime ANTES do touch (para rollback). Se outro processo passou recente
-//!   (< HOLDER_STALE_MS) → retorna None (lock ocupado).
+//!   (< `HOLDER_STALE_MS`) → retorna None (lock ocupado).
 //! - `rollback_lock(root, prior_mtime)` — restaura mtime para `prior_mtime`.
 //! - `record_consolidation(root)` — touch (mtime = now), sem rollback semântico.
 
@@ -19,6 +19,7 @@ pub fn lock_path(root: &Path) -> PathBuf {
 }
 
 /// Lê mtime do lock em ms. 0 se ausente.
+#[allow(clippy::cast_possible_truncation)]
 pub fn read_last_consolidated_at(root: &Path) -> std::io::Result<u64> {
     let path = lock_path(root);
     if !path.is_file() {
@@ -78,8 +79,9 @@ pub fn record_consolidation(root: &Path) -> std::io::Result<()> {
     set_mtime(&path, current_ms())
 }
 
-/// Lista session files (em `<root>/.elai/sessions/*.json`) com mtime > since_ms.
+/// Lista session files (em `<root>/.elai/sessions/*.json`) com mtime > `since_ms`.
 /// Retorna nomes (sem extensão).
+#[allow(clippy::cast_possible_truncation)]
 pub fn list_sessions_touched_since(root: &Path, since_ms: u64) -> std::io::Result<Vec<String>> {
     let dir = root.join(".elai").join("sessions");
     if !dir.is_dir() {
@@ -92,10 +94,7 @@ pub fn list_sessions_touched_since(root: &Path, since_ms: u64) -> std::io::Resul
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+        let Ok(meta) = entry.metadata() else { continue };
         let mtime_ms = meta
             .modified()
             .ok()
@@ -110,12 +109,14 @@ pub fn list_sessions_touched_since(root: &Path, since_ms: u64) -> std::io::Resul
     Ok(out)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn current_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 fn set_mtime(path: &Path, ms: u64) -> std::io::Result<()> {
     let secs = (ms / 1000) as i64;
     let nanos = ((ms % 1000) * 1_000_000) as u32;

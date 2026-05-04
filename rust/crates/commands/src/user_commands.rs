@@ -130,16 +130,14 @@ pub fn parse_user_command(
             let key = key.trim();
             let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
             match key {
-                "description" => {
-                    if !value.is_empty() {
+                "description"
+                    if !value.is_empty() => {
                         description = value;
                     }
-                }
-                "argument-hint" | "argumentHint" => {
-                    if !value.is_empty() {
+                "argument-hint" | "argumentHint"
+                    if !value.is_empty() => {
                         argument_hint = Some(value);
                     }
-                }
                 _ => {}
             }
         }
@@ -180,7 +178,7 @@ fn is_valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        && s.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+        && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -252,7 +250,7 @@ fn date_iso8601() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     // Algoritmo de Fliegel & Van Flandern (adaptado para u64)
-    let days = (secs / 86_400) as i64; // dias desde 1970-01-01
+    let days = (secs / 86_400).cast_signed(); // dias desde 1970-01-01
     // Converter Julian Day Number para Y-M-D
     let jd = days + 2_440_588; // 2440588 = JDN de 1970-01-01
     let l = jd + 68_569;

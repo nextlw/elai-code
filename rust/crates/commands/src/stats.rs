@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use runtime::TelemetryEntry;
 
@@ -12,6 +13,8 @@ pub struct AggregatedStats {
 }
 
 impl AggregatedStats {
+    #[must_use] 
+    #[allow(clippy::cast_precision_loss)]
     pub fn avg_latency_ms(&self) -> f64 {
         if self.requests == 0 {
             0.0
@@ -40,6 +43,7 @@ where
 }
 
 /// Calculate totals across all entries.
+#[must_use] 
 pub fn overall_stats(entries: &[TelemetryEntry]) -> AggregatedStats {
     let mut totals = AggregatedStats::default();
     for entry in entries {
@@ -54,6 +58,7 @@ pub fn overall_stats(entries: &[TelemetryEntry]) -> AggregatedStats {
 
 /// Render an ASCII-aligned table.
 /// Columns: Key | Requests | Input Tok | Output Tok | Cost USD | Avg Latency
+#[must_use] 
 pub fn render_stats_table(title: &str, stats: &BTreeMap<String, AggregatedStats>) -> String {
     const HEADERS: [&str; 6] = [
         "Key",
@@ -136,6 +141,7 @@ pub fn render_stats_table(title: &str, stats: &BTreeMap<String, AggregatedStats>
 }
 
 /// Render the full stats report.
+#[must_use] 
 pub fn render_stats_report(
     entries: &[TelemetryEntry],
     by_model: bool,
@@ -149,7 +155,7 @@ pub fn render_stats_report(
     let mut out = String::new();
 
     if let Some(d) = days {
-        out.push_str(&format!("Stats (last {d} days)\n"));
+        let _ = writeln!(out, "Stats (last {d} days)");
     } else {
         out.push_str("Stats (all time)\n");
     }
@@ -157,10 +163,11 @@ pub fn render_stats_report(
     out.push('\n');
 
     let overall = overall_stats(entries);
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "Overall: {} requests | {} input tokens | {} output tokens | ${:.6} cost\n\n",
         overall.requests, overall.input_tokens, overall.output_tokens, overall.total_cost_usd
-    ));
+    );
 
     if by_model {
         let by_model_map = aggregate_by(entries, |e| e.model.clone());

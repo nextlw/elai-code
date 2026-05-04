@@ -173,6 +173,7 @@ where
         self
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn run_turn(
         &mut self,
         user_input: impl Into<String>,
@@ -218,11 +219,10 @@ where
                             MAX_PTL_RETRIES, err.message
                         )));
                     }
-                    match self.try_compact_for_ptl_retry(&err) {
-                        Ok(true) => continue,
-                        Ok(false) => return Err(err),
-                        Err(compact_err) => return Err(compact_err),
+                    if self.try_compact_for_ptl_retry(&err) {
+                        continue;
                     }
+                    return Err(err);
                 }
                 Err(err) => return Err(err),
             };
@@ -341,13 +341,13 @@ where
         compact_session(&self.session, config)
     }
 
-    fn try_compact_for_ptl_retry(&mut self, ptl_err: &RuntimeError) -> Result<bool, RuntimeError> {
+    fn try_compact_for_ptl_retry(&mut self, ptl_err: &RuntimeError) -> bool {
         if self.consecutive_compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES {
             eprintln!(
                 "[elai] auto-compact circuit breaker open after {} consecutive failures; not retrying",
                 self.consecutive_compact_failures
             );
-            return Ok(false);
+            return false;
         }
 
         eprintln!(
@@ -380,7 +380,7 @@ where
                 );
                 self.session = result.compacted_session;
                 self.consecutive_compact_failures = 0;
-                return Ok(true);
+                return true;
             }
         }
 
@@ -389,7 +389,7 @@ where
             "[elai] auto-compact removed 0 messages even with aggressive settings; circuit breaker count now {}",
             self.consecutive_compact_failures
         );
-        Ok(false)
+        false
     }
 
     pub fn reset_compact_failures(&mut self) {

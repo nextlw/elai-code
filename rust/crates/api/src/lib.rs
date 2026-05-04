@@ -24,8 +24,8 @@ pub use providers::elai_provider::{
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     default_thinking_config, detect_provider_kind, max_tokens_for_model,
-    model_supports_adaptive_thinking, model_supports_thinking, resolve_model_alias,
-    resolve_output_config, suggested_default_model, ProviderKind,
+    metadata_for_model, model_supports_adaptive_thinking, model_supports_thinking,
+    resolve_model_alias, resolve_output_config, suggested_default_model, ProviderKind,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{

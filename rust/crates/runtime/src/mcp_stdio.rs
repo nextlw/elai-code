@@ -495,8 +495,7 @@ impl McpServerManager {
     pub fn healthy(&self, server_name: &str) -> bool {
         self.servers
             .get(server_name)
-            .map(|s| s.initialized)
-            .unwrap_or(false)
+            .is_some_and(|s| s.initialized)
     }
 
     /// Iterates over all managed tools discovered so far (full metadata including description and

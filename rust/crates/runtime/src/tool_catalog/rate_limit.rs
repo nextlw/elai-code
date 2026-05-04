@@ -1,6 +1,6 @@
 //! Rate limiting via rolling window bucket (in-memory, per session).
 //!
-//! `RateLimitBucket` tracks call timestamps in a VecDeque and evicts entries
+//! `RateLimitBucket` tracks call timestamps in a `VecDeque` and evicts entries
 //! older than the configured window before each check. Thread-safety is the
 //! caller's responsibility (typically a Mutex in `RateLimiter`).
 
@@ -19,18 +19,19 @@ impl Default for RateLimit {
     fn default() -> Self {
         Self {
             max_calls: 60,
-            window: Duration::from_secs(60),
+            window: Duration::from_mins(1),
         }
     }
 }
 
-/// Rolling window bucket per tool id. Thread-safe via external Mutex (called from ToolExecutor).
+/// Rolling window bucket per tool id. Thread-safe via external Mutex (called from `ToolExecutor`).
 pub struct RateLimitBucket {
     pub config: RateLimit,
     calls: VecDeque<Instant>,
 }
 
 impl RateLimitBucket {
+    #[must_use] 
     pub fn new(config: RateLimit) -> Self {
         Self {
             config,
@@ -45,8 +46,7 @@ impl RateLimitBucket {
         while self
             .calls
             .front()
-            .map(|t| now.duration_since(*t) >= self.config.window)
-            .unwrap_or(false)
+            .is_some_and(|t| now.duration_since(*t) >= self.config.window)
         {
             self.calls.pop_front();
         }
@@ -54,7 +54,7 @@ impl RateLimitBucket {
         if self.calls.len() >= self.config.max_calls as usize {
             // Time until the window opens = oldest + window - now
             let oldest = *self.calls.front().unwrap();
-            let retry_after = self.config.window - now.duration_since(oldest);
+            let retry_after = self.config.window.checked_sub(now.duration_since(oldest)).unwrap();
             Err(retry_after)
         } else {
             self.calls.push_back(now);
@@ -73,6 +73,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             buckets: HashMap::new(),
@@ -81,6 +82,7 @@ impl RateLimiter {
         }
     }
 
+    #[must_use] 
     pub fn with_overrides(overrides: HashMap<String, RateLimit>) -> Self {
         Self {
             overrides,
@@ -116,6 +118,7 @@ static SESSION_RATE_LIMITER: Mutex<Option<RateLimiter>> = Mutex::new(None);
 
 /// Initialises the session-scoped rate limiter with per-tool overrides.
 /// Call once during bootstrap, before any tool executions.
+#[allow(clippy::implicit_hasher)]
 pub fn init_rate_limiter(overrides: HashMap<String, RateLimit>) {
     *SESSION_RATE_LIMITER.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some(RateLimiter::with_overrides(overrides));

@@ -41,15 +41,15 @@ pub enum AuthMethod {
     AnthropicAuthToken {
         token: String,
     },
-    /// API key da OpenAI (sk-... ou sk-proj-...) colada pelo usuário no
-    /// AuthPicker. Persistida em `~/.config/elai/credentials.json` e usada
+    /// API key da `OpenAI` (sk-... ou sk-proj-...) colada pelo usuário no
+    /// `AuthPicker`. Persistida em `~/.config/elai/credentials.json` e usada
     /// pelo `OpenAiCompatProvider` como fallback quando `OPENAI_API_KEY` não
     /// está presente no ambiente.
     OpenAiApiKey {
         api_key: String,
     },
     /// Credenciais OAuth importadas do Codex (`~/.codex/auth.json`) para uso
-    /// no provider OpenAI compatível. O refresh permanece de responsabilidade
+    /// no provider `OpenAI` compatível. O refresh permanece de responsabilidade
     /// do próprio Codex CLI; aqui apenas reutilizamos o access token.
     OpenAiCodexOAuth {
         token_set: OAuthTokenSet,

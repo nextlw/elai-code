@@ -125,13 +125,13 @@ pub fn dispatch_login(args: &LoginArgs) -> Result<(), AuthError> {
         return login_paste_auth_token(args);
     }
     if args.use_bedrock {
-        return toggle_3p(AuthMethod::Bedrock, "CLAUDE_CODE_USE_BEDROCK");
+        return toggle_3p(&AuthMethod::Bedrock, "CLAUDE_CODE_USE_BEDROCK");
     }
     if args.use_vertex {
-        return toggle_3p(AuthMethod::Vertex, "CLAUDE_CODE_USE_VERTEX");
+        return toggle_3p(&AuthMethod::Vertex, "CLAUDE_CODE_USE_VERTEX");
     }
     if args.use_foundry {
-        return toggle_3p(AuthMethod::Foundry, "CLAUDE_CODE_USE_FOUNDRY");
+        return toggle_3p(&AuthMethod::Foundry, "CLAUDE_CODE_USE_FOUNDRY");
     }
     if args.import_claude_code {
         return import_claude_code_login();
@@ -150,11 +150,73 @@ pub fn dispatch_login(args: &LoginArgs) -> Result<(), AuthError> {
 
 pub fn dispatch_logout() -> Result<(), AuthError> {
     clear_auth_method().map_err(AuthError::Io)?;
+
+    // Also clear persisted API keys from ~/.elai/.env.
+    clear_elai_dotenv().map_err(AuthError::Io)?;
+
+    // Unset env vars in current process so the next send doesn't pick
+    // up stale keys.
+    for key in &[
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "OPENCODE_GO_API_KEY",
+    ] {
+        std::env::remove_var(key);
+    }
+
     println!("Cleared saved authentication.");
     Ok(())
 }
 
-pub fn dispatch_auth_status(json: bool) -> Result<(), AuthError> {
+/// Remove todas as chaves de API conhecidas de `~/.elai/.env`, preservando
+/// apenas comentários.
+fn clear_elai_dotenv() -> io::Result<()> {
+    use std::io::Write;
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME not set"))?;
+    let env_path = home.join(".elai").join(".env");
+    let Ok(existing) = std::fs::read_to_string(&env_path) else {
+        return Ok(());
+    };
+    let known_keys: &[&str] = &[
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY", "OPENAI_BASE_URL",
+        "XAI_API_KEY", "XAI_BASE_URL",
+        "OPENCODE_GO_API_KEY", "OPENCODE_GO_BASE_URL",
+        "ELAI_DEFAULT_OPENAI_MODEL", "ELAI_DEFAULT_ANTHROPIC_MODEL",
+        "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL",
+    ];
+    let kept: Vec<&str> = existing
+        .lines()
+        .filter(|l| {
+            let k = l.trim_start_matches("export ").split('=').next().unwrap_or("").trim();
+            !known_keys.contains(&k)
+        })
+        .collect();
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&env_path)?;
+    writeln!(f, "# Elai Code \u{2014} API keys")?;
+    for line in &kept {
+        if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            writeln!(f, "{line}")?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+pub fn dispatch_auth_status(json: bool) {
     let info = collect_auth_info();
     if json {
         let value = auth_info_to_json(&info);
@@ -166,10 +228,9 @@ pub fn dispatch_auth_status(json: bool) -> Result<(), AuthError> {
     } else {
         print_auth_info_text(&info);
     }
-    Ok(())
 }
 
-pub fn dispatch_auth_list() -> Result<(), AuthError> {
+pub fn dispatch_auth_list() {
     println!("Available login methods:");
     println!();
     println!("  console     OAuth via Anthropic Console — creates an API key");
@@ -189,7 +250,6 @@ pub fn dispatch_auth_list() -> Result<(), AuthError> {
     println!("  codex-oauth Open browser login via `codex login` and import");
     println!("  import-codex Import Codex ChatGPT OAuth from ~/.codex/auth.json");
     println!("  legacy-elai (deprecated) elai.dev OAuth flow");
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -394,8 +454,8 @@ fn login_paste_auth_token(args: &LoginArgs) -> Result<(), AuthError> {
     Ok(())
 }
 
-fn toggle_3p(method: AuthMethod, env_var: &str) -> Result<(), AuthError> {
-    save_auth_method(&method).map_err(AuthError::Io)?;
+fn toggle_3p(method: &AuthMethod, env_var: &str) -> Result<(), AuthError> {
+    save_auth_method(method).map_err(AuthError::Io)?;
     println!("Switched auth to {method:?}.");
     println!("Add to your shell rc to enable: export {env_var}=1");
     println!("Then restart elai.");
@@ -432,7 +492,7 @@ fn import_claude_code_login() -> Result<(), AuthError> {
                             .map(ToOwned::to_owned);
                         let expires_at = oauth.get("expiresAt")
                             .or_else(|| oauth.get("expires_at"))
-                            .and_then(|v| v.as_u64());
+                            .and_then(serde_json::Value::as_u64);
                         let scopes: Vec<String> = oauth.get("scopes")
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|s| s.as_str().map(ToOwned::to_owned)).collect())
@@ -626,6 +686,45 @@ fn run_codex_login(
 // Public helpers for TUI auth picker (no stdin/tty interaction)
 // ---------------------------------------------------------------------------
 
+/// Persiste um par chave=valor em `~/.elai/.env`, preservando outras chaves.
+fn merge_elai_dotenv_key(key: &str, value: &str) -> io::Result<()> {
+    use std::io::Write;
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME not set"))?;
+    let dir = home.join(".elai");
+    std::fs::create_dir_all(&dir)?;
+    let env_path = dir.join(".env");
+    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| {
+            let k = l.trim_start_matches("export ").split('=').next().unwrap_or("").trim();
+            k != key
+        })
+        .map(String::from)
+        .collect();
+    lines.push(format!("{key}={value}"));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&env_path)?;
+    writeln!(f, "# Elai Code \u{2014} API keys")?;
+    for line in &lines {
+        if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            writeln!(f, "{line}")?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 /// Save an Anthropic API key (sk-ant-...) pasted directly by the user in the TUI.
 pub fn save_pasted_api_key(value: &str) -> Result<(), AuthError> {
     let v = value.trim();
@@ -639,7 +738,7 @@ pub fn save_pasted_api_key(value: &str) -> Result<(), AuthError> {
     .map_err(AuthError::Io)
 }
 
-/// Save an ANTHROPIC_AUTH_TOKEN bearer pasted directly by the user in the TUI.
+/// Save an `ANTHROPIC_AUTH_TOKEN` bearer pasted directly by the user in the TUI.
 pub fn save_pasted_auth_token(value: &str) -> Result<(), AuthError> {
     let v = value.trim();
     if v.is_empty() {
@@ -649,7 +748,7 @@ pub fn save_pasted_auth_token(value: &str) -> Result<(), AuthError> {
         .map_err(AuthError::Io)
 }
 
-/// Save an OpenAI API key (sk-... ou sk-proj-...) pasted directly by the user
+/// Save an `OpenAI` API key (sk-... ou sk-proj-...) pasted directly by the user
 /// in the TUI. Persiste em `~/.config/elai/credentials.json` para que o
 /// `OpenAiCompatProvider` use como fallback quando `OPENAI_API_KEY` não está
 /// no ambiente.
@@ -662,12 +761,36 @@ pub fn save_pasted_openai_key(value: &str) -> Result<(), AuthError> {
         .map_err(AuthError::Io)
 }
 
-/// Save a third-party auth method (Bedrock / Vertex / Foundry) from the TUI.
-pub fn save_3p(method: AuthMethod) -> Result<(), AuthError> {
-    save_auth_method(&method).map_err(AuthError::Io)
+/// Save an `OpenCode` Go API key pasted by the user in the TUI. Persists to
+/// `~/.elai/.env` as `OPENCODE_GO_API_KEY`.
+pub fn save_pasted_opencode_go_key(value: &str) -> Result<(), AuthError> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(AuthError::InvalidInput("OpenCode Go API key is empty".into()));
+    }
+    std::env::set_var("OPENCODE_GO_API_KEY", v);
+    merge_elai_dotenv_key("OPENCODE_GO_API_KEY", v).map_err(AuthError::Io)?;
+    Ok(())
 }
 
-/// Make `toggle_3p` accessible from the TUI (uses save_3p internally).
+/// Save an xAI (Grok) API key pasted by the user in the TUI. Persists to
+/// `~/.elai/.env` as `XAI_API_KEY`.
+pub fn save_pasted_xai_key(value: &str) -> Result<(), AuthError> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(AuthError::InvalidInput("xAI API key is empty".into()));
+    }
+    std::env::set_var("XAI_API_KEY", v);
+    merge_elai_dotenv_key("XAI_API_KEY", v).map_err(AuthError::Io)?;
+    Ok(())
+}
+
+/// Save a third-party auth method (Bedrock / Vertex / Foundry) from the TUI.
+pub fn save_3p(method: &AuthMethod) -> Result<(), AuthError> {
+    save_auth_method(method).map_err(AuthError::Io)
+}
+
+/// Make `toggle_3p` accessible from the TUI (uses `save_3p` internally).
 pub fn save_3p_named(env_var: &str) -> Result<(), AuthError> {
     let method = match env_var {
         "CLAUDE_CODE_USE_BEDROCK" => AuthMethod::Bedrock,
@@ -675,7 +798,7 @@ pub fn save_3p_named(env_var: &str) -> Result<(), AuthError> {
         "CLAUDE_CODE_USE_FOUNDRY" => AuthMethod::Foundry,
         _ => return Err(AuthError::InvalidInput(format!("unknown env var: {env_var}"))),
     };
-    save_3p(method)
+    save_3p(&method)
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,7 +1252,7 @@ mod tests {
     fn dispatch_auth_list_prints_all_methods() {
         // Capture stdout isn't easy in tests without a wrapper, but we can
         // verify the function runs without error.
-        dispatch_auth_list().expect("auth list should not error");
+        dispatch_auth_list();
     }
 
     #[test]

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::types::ProviderCapability;
 use crate::error::ApiError;
-use crate::providers::{codex_bridge, elai_provider, openai_compat};
+use crate::providers::{codex_bridge, elai_provider, go_client, openai_compat};
 use crate::types::{
     ContentBlockDelta, MessageResponse, MessageRequest, OutputContentBlock, StreamEvent, Usage,
 };
@@ -113,8 +113,8 @@ impl UnifiedProvider for OpenAiUnifiedAdapter {
     }
 }
 
-/// Adapter wrapping `CodexBridgeClient` so orchestrator can delegate OpenAI
-/// requests through local `codex exec` when using ChatGPT auth.
+/// Adapter wrapping `CodexBridgeClient` so orchestrator can delegate `OpenAI`
+/// requests through local `codex exec` when using `ChatGPT` auth.
 pub struct CodexBridgeUnifiedAdapter {
     client: codex_bridge::CodexBridgeClient,
     provider_id: String,
@@ -160,6 +160,53 @@ impl UnifiedProvider for CodexBridgeUnifiedAdapter {
     }
 }
 
+/// Adapter wrapping `GoClient` so orchestrator can use OpenCode Go models.
+pub struct GoUnifiedAdapter {
+    client: go_client::GoClient,
+    provider_id: String,
+    capabilities: HashSet<ProviderCapability>,
+}
+
+impl GoUnifiedAdapter {
+    #[must_use]
+    pub fn new(client: go_client::GoClient) -> Self {
+        let mut caps = HashSet::new();
+        caps.insert(ProviderCapability::ToolCalling);
+        caps.insert(ProviderCapability::Streaming);
+        Self {
+            client,
+            provider_id: "opencode-go".to_string(),
+            capabilities: caps,
+        }
+    }
+}
+
+#[async_trait]
+impl UnifiedProvider for GoUnifiedAdapter {
+    fn id(&self) -> &str {
+        &self.provider_id
+    }
+
+    fn capabilities(&self) -> &HashSet<ProviderCapability> {
+        &self.capabilities
+    }
+
+    async fn send_message(&self, request: &MessageRequest) -> Result<MessageResponse, ApiError> {
+        self.client.send_message(request).await
+    }
+
+    async fn stream_message(&self, request: &MessageRequest) -> Result<MessageResponse, ApiError> {
+        let mut stream_req = request.clone();
+        stream_req.stream = true;
+        let mut stream = self.client.stream_message(&stream_req).await?;
+        collect_go_stream(&mut stream).await
+    }
+
+    async fn health_check(&self) -> Result<(), ApiError> {
+        Ok(())
+    }
+}
+
 fn empty_response() -> MessageResponse {
     MessageResponse {
         id: String::new(),
@@ -186,7 +233,7 @@ async fn collect_elai_stream(
     while let Some(event) = stream.next_event().await? {
         events.push(event);
     }
-    collect_stream_events(events)
+    Ok(collect_stream_events(events))
 }
 
 async fn collect_openai_stream(
@@ -196,7 +243,7 @@ async fn collect_openai_stream(
     while let Some(event) = stream.next_event().await? {
         events.push(event);
     }
-    collect_stream_events(events)
+    Ok(collect_stream_events(events))
 }
 
 async fn collect_codex_bridge_stream(
@@ -206,10 +253,20 @@ async fn collect_codex_bridge_stream(
     while let Some(event) = stream.next_event().await? {
         events.push(event);
     }
-    collect_stream_events(events)
+    Ok(collect_stream_events(events))
 }
 
-fn collect_stream_events(events: Vec<StreamEvent>) -> Result<MessageResponse, ApiError> {
+async fn collect_go_stream(
+    stream: &mut go_client::MessageStream,
+) -> Result<MessageResponse, ApiError> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next_event().await? {
+        events.push(event);
+    }
+    Ok(collect_stream_events(events))
+}
+
+fn collect_stream_events(events: Vec<StreamEvent>) -> MessageResponse {
     let mut response: Option<MessageResponse> = None;
     let mut content_texts: Vec<(u32, String)> = Vec::new();
     // index → (id, name, accumulated_json)
@@ -287,5 +344,5 @@ fn collect_stream_events(events: Vec<StreamEvent>) -> Result<MessageResponse, Ap
     if let Some(u) = usage {
         resp.usage = u;
     }
-    Ok(resp)
+    resp
 }

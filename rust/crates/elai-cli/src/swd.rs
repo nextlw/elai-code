@@ -201,29 +201,26 @@ pub fn snapshot(path: &str) -> (Option<String>, Option<Vec<u8>>) {
 
 /// Restores a file to its before-state. If `before` is `None`, deletes the file.
 pub fn rollback(path: &str, before: Option<&[u8]>) -> io::Result<()> {
-    match before {
-        Some(content) => {
-            if let Some(parent) = Path::new(path).parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent)?;
-                }
+    if let Some(content) = before {
+        if let Some(parent) = Path::new(path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(path, content)
         }
-        None => {
-            if Path::new(path).exists() {
-                std::fs::remove_file(path)?;
-            }
-            Ok(())
+        std::fs::write(path, content)
+    } else {
+        if Path::new(path).exists() {
+            std::fs::remove_file(path)?;
         }
+        Ok(())
     }
 }
 
 // ─── Verify ──────────────────────────────────────────────────
 
 pub fn verify_outcome(
-    before_hash: &Option<String>,
-    after_hash: &Option<String>,
+    before_hash: Option<&String>,
+    after_hash: Option<&String>,
     tool_ok: bool,
 ) -> SwdOutcome {
     if !tool_ok {
@@ -233,8 +230,7 @@ pub fn verify_outcome(
     }
     match (before_hash, after_hash) {
         (b, a) if b == a => SwdOutcome::Noop,
-        (_, Some(_)) => SwdOutcome::Verified,
-        (Some(_), None) => SwdOutcome::Verified, // deletion
+        (_, Some(_)) | (Some(_), None) => SwdOutcome::Verified,
         (None, None) => SwdOutcome::Noop,
     }
 }
@@ -291,12 +287,9 @@ pub fn parse_file_actions(text: &str) -> Vec<FileAction> {
         };
         let block_start = start_idx + tag_len;
 
-        let end_idx = match text[block_start..].find(end_tag) {
-            Some(i) => block_start + i,
-            None => {
-                cursor = start_idx + 1;
-                continue;
-            }
+        let end_idx = if let Some(i) = text[block_start..].find(end_tag) { block_start + i } else {
+            cursor = start_idx + 1;
+            continue;
         };
 
         let block = &text[block_start..end_idx];
@@ -336,13 +329,13 @@ pub fn parse_file_actions(text: &str) -> Vec<FileAction> {
 
 /// Executes a `Vec<FileAction>` transactionally, rolling back already-applied
 /// operations if any subsequent action fails.
-pub fn execute_file_actions(actions: Vec<FileAction>) -> Vec<SwdTransaction> {
+pub fn execute_file_actions(actions: &[FileAction]) -> Vec<SwdTransaction> {
     let ts = now_ms();
     let mut transactions: Vec<SwdTransaction> = Vec::new();
     let mut snapshots_before: Vec<(String, Option<String>, Option<Vec<u8>>)> = Vec::new();
 
     // Phase 1: snapshot all before
-    for action in &actions {
+    for action in actions {
         let (hash, content) = snapshot(&action.path);
         snapshots_before.push((action.path.clone(), hash, content));
     }
@@ -364,14 +357,11 @@ pub fn execute_file_actions(actions: Vec<FileAction>) -> Vec<SwdTransaction> {
             let _ = rollback(path, before_bytes.as_deref());
         }
         for (i, action) in actions.iter().enumerate() {
-            let outcome = if i < fail_idx {
-                SwdOutcome::RolledBack
-            } else if i == fail_idx {
-                SwdOutcome::Failed {
+            let outcome = match i.cmp(&fail_idx) {
+                std::cmp::Ordering::Equal => SwdOutcome::Failed {
                     reason: format!("execution failed for {}", action.path),
-                }
-            } else {
-                SwdOutcome::RolledBack
+                },
+                _ => SwdOutcome::RolledBack,
             };
             let (_, before_hash, _) = &snapshots_before[i];
             transactions.push(SwdTransaction {
@@ -391,22 +381,21 @@ pub fn execute_file_actions(actions: Vec<FileAction>) -> Vec<SwdTransaction> {
 
             // Validate CONTENT_HASH if declared.
             let outcome = if let Some(declared) = &action.content_hash {
-                if after_hash.as_deref() != Some(declared.as_str()) {
+                if after_hash.as_deref() == Some(declared.as_str()) {
+                    verify_outcome(before_hash.as_ref(), after_hash.as_ref(), true)
+                } else {
                     SwdOutcome::Drift {
                         detail: format!(
                             "hash mismatch: declared={}, actual={}",
                             &declared[..8.min(declared.len())],
                             after_hash
                                 .as_deref()
-                                .map(|h| &h[..8.min(h.len())])
-                                .unwrap_or("none")
+                                .map_or("none", |h| &h[..8.min(h.len())])
                         ),
                     }
-                } else {
-                    verify_outcome(before_hash, &after_hash, true)
                 }
             } else {
-                verify_outcome(before_hash, &after_hash, true)
+                verify_outcome(before_hash.as_ref(), after_hash.as_ref(), true)
             };
 
             transactions.push(SwdTransaction {
@@ -452,8 +441,7 @@ fn execute_file_action_inner(action: &FileAction) -> io::Result<()> {
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 // ─── Log ─────────────────────────────────────────────────────
@@ -485,8 +473,8 @@ pub fn append_swd_log(txs: &[SwdTransaction]) -> io::Result<()> {
             tx.tool_name,
             tx.path,
             tx.outcome.as_str(),
-            tx.before_hash.as_deref().map(|h| format!("\"{h}\"")).unwrap_or_else(|| "null".to_string()),
-            tx.after_hash.as_deref().map(|h| format!("\"{h}\"")).unwrap_or_else(|| "null".to_string()),
+            tx.before_hash.as_deref().map_or_else(|| "null".to_string(), |h| format!("\"{h}\"")),
+            tx.after_hash.as_deref().map_or_else(|| "null".to_string(), |h| format!("\"{h}\"")),
         );
         file.write_all(line.as_bytes())?;
     }

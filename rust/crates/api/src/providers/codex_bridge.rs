@@ -12,7 +12,7 @@ use crate::types::{
 };
 
 const DEFAULT_CODEX_COMMAND: &str = "codex";
-const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_mins(2);
 
 #[derive(Debug, Clone, Copy)]
 struct CodexExecCapabilities {
@@ -265,6 +265,7 @@ pub struct MessageStream {
 }
 
 impl MessageStream {
+    #[allow(clippy::needless_pass_by_value)]
     fn from_response(response: MessageResponse) -> Self {
         let request_id = response.request_id.clone();
         let mut events = Vec::new();
@@ -274,6 +275,7 @@ impl MessageStream {
         }));
 
         for (index, block) in response.content.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
             let index = index as u32;
             events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
                 index,
@@ -381,7 +383,7 @@ fn render_input_block(block: &InputContentBlock) -> String {
     match block {
         InputContentBlock::Text { text } => text.clone(),
         InputContentBlock::ToolUse { id, name, input } => {
-            format!("[tool_use id={id} name={name} input={}]", input)
+            format!("[tool_use id={id} name={name} input={input}]")
         }
         InputContentBlock::ToolResult {
             tool_use_id,
@@ -432,6 +434,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             thinking: None,
+            reasoning_effort: None,
             output_config: None,
         };
 

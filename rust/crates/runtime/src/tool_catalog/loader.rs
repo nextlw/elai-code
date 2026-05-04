@@ -26,6 +26,7 @@ pub struct RateLimitConfig {
 
 impl RateLimitConfig {
     /// Converts TOML config into the runtime `RateLimit`.
+    #[must_use] 
     pub fn into_rate_limit(self) -> RateLimit {
         RateLimit {
             max_calls: self.max,
@@ -64,6 +65,7 @@ impl ToolCatalog {
     /// `$HOME/.elai/tools/` → ancestors → cwd (cwd has highest precedence).
     ///
     /// Mirrors the discovery logic in `discover_skill_roots` from `skills.rs`.
+    #[must_use] 
     pub fn load(cwd: &Path) -> Self {
         let roots = discover_tool_roots(cwd);
         let mut merged = ToolCatalog::default();
@@ -82,10 +84,10 @@ impl ToolCatalog {
                                     existing.priority = ov.priority;
                                 }
                                 if ov.category.is_some() {
-                                    existing.category = ov.category.clone();
+                                    existing.category.clone_from(&ov.category);
                                 }
                                 if ov.embedding_hints.is_some() {
-                                    existing.embedding_hints = ov.embedding_hints.clone();
+                                    existing.embedding_hints.clone_from(&ov.embedding_hints);
                                 }
                                 if ov.enabled.is_some() {
                                     existing.enabled = ov.enabled;
@@ -105,10 +107,12 @@ impl ToolCatalog {
         merged
     }
 
+    #[must_use] 
     pub fn priority_for(&self, id: &str) -> Option<i32> {
         self.overrides.iter().find(|o| o.id == id)?.priority
     }
 
+    #[must_use] 
     pub fn enabled(&self, id: &str) -> bool {
         self.overrides
             .iter()
@@ -129,7 +133,7 @@ impl ToolCatalog {
     /// Resolve an alias to its canonical name.
     /// Returns the input unchanged if no alias is defined.
     pub fn resolve_alias<'a>(&'a self, name: &'a str) -> &'a str {
-        self.aliases.get(name).map(String::as_str).unwrap_or(name)
+        self.aliases.get(name).map_or(name, String::as_str)
     }
 }
 
@@ -139,7 +143,7 @@ fn discover_tool_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
 
     let push = |v: &mut Vec<PathBuf>, p: PathBuf| {
-        if p.is_dir() && !v.iter().any(|d| *d == p) {
+        if p.is_dir() && !v.contains(&p) {
             v.push(p);
         }
     };

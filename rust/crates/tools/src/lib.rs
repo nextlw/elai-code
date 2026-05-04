@@ -20,6 +20,7 @@ pub enum MatcherPattern {
 
 impl MatcherPattern {
     /// Returns `true` if this pattern matches `name`.
+    #[must_use] 
     pub fn matches(&self, name: &str) -> bool {
         match self {
             Self::Exact(s) => s == name,
@@ -1654,7 +1655,7 @@ struct ProviderRuntimeClient {
 
 impl ProviderRuntimeClient {
     fn new(model: &str, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
-        let model = resolve_model_alias(model).to_string();
+        let model = resolve_model_alias(model).clone();
         let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
@@ -1685,6 +1686,7 @@ impl ApiClient for ProviderRuntimeClient {
             stream: true,
             thinking: None,
             output_config: None,
+            reasoning_effort: None,
         };
 
         self.runtime.block_on(async {
@@ -2676,8 +2678,7 @@ fn command_exists(command: &str) -> bool {
         .arg("-lc")
         .arg(format!("command -v {command} >/dev/null 2>&1"))
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2954,6 +2955,7 @@ fn dr_client(timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
 }
 
 fn dr_activate(key: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
     let base_url = dr_base_url();
     let base = base_url.trim_end_matches('/');
 
@@ -2963,7 +2965,7 @@ fn dr_activate(key: &str) -> Result<String, String> {
     // 401/403 = key errada; qualquer outra resposta = auth OK.
     // Lê o primeiro byte do stream pra confirmar que o SSE funciona,
     // depois fecha a conexão (não consome a pesquisa completa).
-    let test_url = format!("{}/v1/chat/completions", base);
+    let test_url = format!("{base}/v1/chat/completions");
     let test_body = serde_json::json!({
         "model": "jina-deepsearch-v1",
         "messages": [{"role": "user", "content": "ping"}],
@@ -2974,32 +2976,30 @@ fn dr_activate(key: &str) -> Result<String, String> {
         .post(&test_url)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream")
-        .header("Authorization", format!("Bearer {}", key))
+        .header("Authorization", format!("Bearer {key}"))
         .json(&test_body)
         .send()
-        .map_err(|e| format!("Serviço inacessível ({}): {}", base, e))?;
+        .map_err(|e| format!("Serviço inacessível ({base}): {e}"))?;
 
     let status = auth_resp.status().as_u16();
     if status == 401 || status == 403 {
         return Err(format!(
-            "API key inválida (HTTP {}). A key fornecida não é reconhecida pelo serviço.\n\
-             Verifique a key correta nas configurações do Railway.",
-            status
+            "API key inválida (HTTP {status}). A key fornecida não é reconhecida pelo serviço.\n\
+             Verifique a key correta nas configurações do Railway."
         ));
     }
     if !auth_resp.status().is_success() {
         let s = auth_resp.status();
         let body = auth_resp.text().unwrap_or_default();
-        return Err(format!("Serviço retornou HTTP {}: {}", s, body));
+        return Err(format!("Serviço retornou HTTP {s}: {body}"));
     }
 
     // Confirma que o stream SSE realmente entrega dados (não buffer da response inteira).
-    use std::io::{BufRead, BufReader};
     let mut reader = BufReader::new(auth_resp);
     let mut first_line = String::new();
     let n = reader
         .read_line(&mut first_line)
-        .map_err(|e| format!("Falha ao ler stream SSE: {}", e))?;
+        .map_err(|e| format!("Falha ao ler stream SSE: {e}"))?;
 
     if n == 0 {
         return Err("Conexão SSE fechou sem dados — stream não funcionou.".to_string());
@@ -3014,9 +3014,8 @@ fn dr_activate(key: &str) -> Result<String, String> {
     Ok(format!(
         "✓ DeepResearch ativada com sucesso!\n\
          API key salva no .env local.\n\
-         URL do serviço: {}\n\
-         Agora use: DeepResearch({{\"query\": \"sua pergunta de pesquisa\"}})",
-        base_url
+         URL do serviço: {base_url}\n\
+         Agora use: DeepResearch({{\"query\": \"sua pergunta de pesquisa\"}})"
     ))
 }
 
@@ -3026,14 +3025,14 @@ fn dr_save_env_key(key: &str, value: &str) -> Result<(), String> {
         .join(".env");
 
     let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
-    let key_prefix = format!("{}=", key);
+    let key_prefix = format!("{key}=");
 
     let new_content = if existing.lines().any(|l| l.starts_with(&key_prefix)) {
         existing
             .lines()
             .map(|l| {
                 if l.starts_with(&key_prefix) {
-                    format!("{}={}", key, value)
+                    format!("{key}={value}")
                 } else {
                     l.to_string()
                 }
@@ -3042,7 +3041,7 @@ fn dr_save_env_key(key: &str, value: &str) -> Result<(), String> {
             .join("\n")
     } else {
         let sep = if existing.ends_with('\n') || existing.is_empty() { "" } else { "\n" };
-        format!("{}{}{}={}\n", existing, sep, key, value)
+        format!("{existing}{sep}{key}={value}\n")
     };
 
     std::fs::write(&env_path, new_content).map_err(|e| e.to_string())
@@ -3061,13 +3060,14 @@ fn dr_research(
 
     with_task_default(
         TaskType::LocalWorkflow,
-        format!("DeepResearch: {}", query),
+        format!("DeepResearch: {query}"),
         "DeepResearch",
         None,
         |reporter| dr_run_with_reporter(&query_owned, &api_key, &effort, language.as_deref(), reporter),
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn dr_run_with_reporter(
     query: &str,
     api_key: &str,
@@ -3075,6 +3075,8 @@ fn dr_run_with_reporter(
     language: Option<&str>,
     reporter: &runtime::TaskProgressReporter,
 ) -> Result<String, String> {
+    use std::fmt::Write;
+    use std::io::{BufRead, BufReader};
     let base_url = dr_base_url();
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let lang = language.unwrap_or("pt-BR");
@@ -3095,20 +3097,18 @@ fn dr_run_with_reporter(
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream")
-        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Authorization", format!("Bearer {api_key}"))
         .json(&body)
         .send()
-        .map_err(|e| format!("Falha na requisição: {}", e))?;
+        .map_err(|e| format!("Falha na requisição: {e}"))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
+        return Err(format!("HTTP {status}: {text}"));
     }
 
     reporter.report("📡 Stream aberto, recebendo eventos…");
-
-    use std::io::{BufRead, BufReader};
 
     let reader = BufReader::new(response);
     let mut thinking = String::new();
@@ -3160,11 +3160,11 @@ fn dr_run_with_reporter(
             if !q.is_empty() {
                 let trimmed = if q.chars().count() > 80 {
                     let s: String = q.chars().take(77).collect();
-                    format!("{}…", s)
+                    format!("{s}…")
                 } else {
                     q.to_string()
                 };
-                reporter.report(&format!("🔎 Query: {}", trimmed));
+                reporter.report(&format!("🔎 Query: {trimmed}"));
             }
         }
 
@@ -3210,12 +3210,11 @@ fn dr_run_with_reporter(
                     }
                 }
             }
-            "error" => {
-                if !content.is_empty() {
+            "error"
+                if !content.is_empty() => {
                     error_msg = Some(content.to_string());
                     reporter.report(&format!("❌ Erro: {}", dr_tail(content, 80)));
                 }
-            }
             _ => {}
         }
 
@@ -3247,7 +3246,7 @@ fn dr_run_with_reporter(
         ));
     }
 
-    let mut out = format!("=== Deep Research: {} ===\n\n", query);
+    let mut out = format!("=== Deep Research: {query} ===\n\n");
 
     if !thinking.is_empty() {
         out.push_str("[Raciocínio do Agente de Pesquisa]\n");
@@ -3256,9 +3255,9 @@ fn dr_run_with_reporter(
     }
 
     if !visited_urls.is_empty() {
-        out.push_str(&format!("[URLs Visitadas: {}]\n", visited_urls.len()));
+        let _ = writeln!(out, "[URLs Visitadas: {}]", visited_urls.len());
         for u in &visited_urls {
-            out.push_str(&format!("- {}\n", u));
+            let _ = writeln!(out, "- {u}");
         }
         out.push('\n');
     }
@@ -3281,7 +3280,7 @@ fn dr_run_with_reporter(
     if !citations.is_empty() {
         out.push_str("\n[Citações]\n");
         for (i, (title, u)) in citations.iter().enumerate() {
-            out.push_str(&format!("{}. {} — {}\n", i + 1, title, u));
+            let _ = writeln!(out, "{}. {} — {}", i + 1, title, u);
         }
     }
 
