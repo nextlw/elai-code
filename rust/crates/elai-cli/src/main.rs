@@ -1989,6 +1989,7 @@ fn run_tui_repl(
 
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
+    let _ = tui::apply_mouse_capture(&mut terminal, app.mouse_capture_enabled);
 
     // State shared between TUI loop and runtime thread: the active session.
     let session = Arc::new(std::sync::Mutex::new(Session::new()));
@@ -2177,9 +2178,16 @@ fn run_tui_repl(
                 }
                 tui::TuiAction::EnterReadMode => {
                     app.read_mode = true;
+                    let _ = tui::apply_mouse_capture(&mut terminal, false);
                 }
                 tui::TuiAction::ExitReadMode => {
                     app.read_mode = false;
+                    let _ = tui::apply_mouse_capture(&mut terminal, app.mouse_capture_enabled);
+                }
+                tui::TuiAction::SyncMouseCapture => {
+                    if !app.read_mode {
+                        let _ = tui::apply_mouse_capture(&mut terminal, app.mouse_capture_enabled);
+                    }
                 }
                 tui::TuiAction::CopyToClipboard(text) => {
                     copy_to_clipboard(&text);

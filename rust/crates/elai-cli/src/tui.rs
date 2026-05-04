@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use syntect::easy::HighlightLines;
@@ -48,7 +48,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    Wrap,
 };
 use ratatui::Terminal;
 use ratatui_cheese::fieldset::{Fieldset, FieldsetFill, FieldsetStyles};
@@ -473,6 +472,9 @@ pub struct UiApp {
     pub history_backup: String,
     pub spinner_frame: usize,
     pub read_mode: bool,
+    /// Captura de mouse no terminal: `true` = roda rola o chat; `false` = seleção/cópia mais livre.
+    /// Padrão: `false`; ligue com `ELAI_TUI_MOUSE_CAPTURE=1` ou **F9** durante a sessão.
+    pub mouse_capture_enabled: bool,
     pub swd_level: Arc<AtomicU8>,
     pub budget_pct: f32,
     pub budget_cost_usd: f64,
@@ -499,6 +501,10 @@ impl UiApp {
         recent_sessions: Vec<(String, usize)>,
         swd_level: Arc<AtomicU8>,
     ) -> Self {
+        let mouse_capture_enabled = env::var("ELAI_TUI_MOUSE_CAPTURE")
+            .ok()
+            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"));
+
         Self {
             model,
             permission_mode,
@@ -520,6 +526,7 @@ impl UiApp {
             history_backup: String::new(),
             spinner_frame: 0,
             read_mode: false,
+            mouse_capture_enabled,
             swd_level,
             budget_pct: 0.0,
             budget_cost_usd: 0.0,
@@ -1302,18 +1309,38 @@ fn first_selectable_row(rows: &[PaletteRow]) -> usize {
 
 // ─── Terminal lifecycle helpers ───────────────────────────────────────────────
 
-/// Enter alternate screen + raw mode with mouse capture for scroll events.
-/// Text selection still works via Shift+drag in most terminals.
+/// Enter alternate screen + raw mode (sem captura de mouse por padrão — ver `apply_mouse_capture`).
 pub fn enter_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     Ok(())
 }
 
+/// Ativa ou desativa a captura de mouse no backend crossterm (rolagem do chat via roda).
+/// Preferência do usuário fica em `UiApp::mouse_capture_enabled`; em modo leitura o terminal
+/// fica sempre sem captura para liberar seleção/cópia nativa.
+pub fn apply_mouse_capture(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    enabled: bool,
+) -> io::Result<()> {
+    let w = terminal.backend_mut();
+    if enabled {
+        execute!(w, EnableMouseCapture)?;
+    } else {
+        execute!(w, DisableMouseCapture)?;
+    }
+    Ok(())
+}
+
 /// Restore terminal on exit (always call even on error).
 pub fn leave_tui(stdout: &mut impl io::Write) -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen)?;
+    execute!(
+        stdout,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     Ok(())
 }
 
@@ -1329,6 +1356,8 @@ pub enum TuiAction {
     CopyToClipboard(String),
     EnterReadMode,
     ExitReadMode,
+    /// Reaplica `UiApp::mouse_capture_enabled` no terminal (após toggle ou sair do modo leitura).
+    SyncMouseCapture,
     SetupComplete,
     AuthComplete { label: String },
     Uninstall,
@@ -1467,6 +1496,11 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         }
         (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
             return TuiAction::EnterReadMode;
+        }
+        // F9: alterna captura de mouse (evita Ctrl+M, que em muitos terminais = Enter/CR).
+        (KeyModifiers::NONE, KeyCode::F(9)) => {
+            app.mouse_capture_enabled = !app.mouse_capture_enabled;
+            return TuiAction::SyncMouseCapture;
         }
         // Ctrl+Y: copia a última mensagem do assistente para a área de transferência.
         (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
@@ -3767,6 +3801,19 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
             format!("  {}", rust_i18n::t!("tui.side_panel.slash_palette")),
             muted,
         )),
+        Line::from(Span::styled(
+            format!(
+                "  {}",
+                if app.read_mode {
+                    rust_i18n::t!("tui.side_panel.read_mode_hint")
+                } else if app.mouse_capture_enabled {
+                    rust_i18n::t!("tui.side_panel.mouse_on_hint")
+                } else {
+                    rust_i18n::t!("tui.side_panel.mouse_off_hint")
+                }
+            ),
+            muted,
+        )),
         Line::from(Span::raw("")),
         Line::from(vec![
             Span::raw("  "),
@@ -3815,7 +3862,10 @@ fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = chat_to_lines(app, inner.width as usize);
+    let mut lines = chat_to_lines(app, inner.width as usize);
+    // Reserva uma linha "gutter" no fim do histórico para evitar que a última
+    // linha útil fique colada (ou visualmente coberta) pela faixa inferior.
+    lines.push(Line::from(""));
     let total = lines.len();
     let visible = inner.height as usize;
     let max_scroll = total.saturating_sub(visible);
@@ -3825,7 +3875,9 @@ fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
 
     let display: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
 
-    let paragraph = Paragraph::new(display).wrap(Wrap { trim: false });
+    // As linhas do chat já vêm pré-quebradas por `chat_to_lines`/`wrap_text`.
+    // Evitar wrap aqui mantém `total` e `max_scroll` em sincronia com o render.
+    let paragraph = Paragraph::new(display);
     frame.render_widget(paragraph, inner);
 
     // Scrollbar.
@@ -4079,7 +4131,7 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
             Some(3) => theme().link,
             Some(_) => theme().text_secondary,
             None if bold => theme().warn,
-            _ => theme().text_secondary,
+            _ => theme().text_primary,
         })
     };
 
@@ -4812,6 +4864,7 @@ fn draw_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         HelpBinding::new("F3", "perm"),
         HelpBinding::new("F4", "sessão"),
         HelpBinding::new("Ctrl+R", "leitura"),
+        HelpBinding::new("F9", "mouse"),
         HelpBinding::new("Ctrl+C", "sair"),
     ];
     let help = Help::default()

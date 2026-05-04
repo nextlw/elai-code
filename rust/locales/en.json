@@ -150,6 +150,9 @@
       "run_init": "Run /init to create a ELAI.md",
       "shortcuts": "F2 switch model · F3 permissions",
       "slash_palette": "Ctrl+K slash palette",
+      "mouse_on_hint": "Mouse: on (wheel scroll) · F9 for select/copy",
+      "mouse_off_hint": "Mouse: off (free select) · F9 for wheel scroll",
+      "read_mode_hint": "Read mode on · any key to exit",
       "recent_activity_header": "Recent activity",
       "no_recent": "No recent activity",
       "session_msgs": "%{count} msgs"
