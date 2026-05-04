@@ -104,6 +104,20 @@ Declarative TOML-based tool definitions, MatcherPattern wildcards, a 5-stage sel
 - Real-time USD cost display in the status bar
 - Markdown rendering with syntax highlighting
 
+#### TUI Preview
+
+**Main screen**
+
+![Elai TUI main screen](assets/Tela_elai.png)
+
+**Command palette and grouped slash commands**
+
+![Elai TUI command palette](assets/nova_tui_options.png)
+
+**Tools and workflow screen**
+
+![Elai TUI tools screen](assets/screen_tools.png)
+
 ### Session & Permissions
 
 - Persistent sessions with resumption and compaction

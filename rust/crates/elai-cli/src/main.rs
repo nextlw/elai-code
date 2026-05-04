@@ -4652,6 +4652,12 @@ fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
+fn sync_codex_bridge_exec_policy(permission_mode: PermissionMode) {
+    std::env::set_var("ELAI_CODEX_BRIDGE_SANDBOX", permission_mode.as_str());
+    // Bridge non-interativo: evitar bloqueio aguardando aprovação.
+    std::env::set_var("ELAI_CODEX_BRIDGE_APPROVAL", "never");
+}
+
 fn render_diff_report() -> Result<String, Box<dyn std::error::Error>> {
     let output = std::process::Command::new("git")
         .args(["diff", "--", ":(exclude).omx"])
@@ -5467,6 +5473,7 @@ fn build_runtime_with_thinking(
             tool_registry.clone(),
             progress_reporter,
             Arc::clone(&swd_level),
+            permission_mode,
         )?
         .with_thinking_opt(thinking),
         CliToolExecutor::new(
@@ -5506,6 +5513,7 @@ fn build_runtime_for_tui(
             tool_registry.clone(),
             None,
             Arc::clone(&swd_level),
+            permission_mode,
         )?
         .with_tui_sender(tui_msg_tx.clone())
         .with_thinking_opt(thinking_override),
@@ -5663,6 +5671,7 @@ struct DefaultRuntimeClient {
     swd_level: Arc<std::sync::atomic::AtomicU8>,
     correction_ctx: crate::swd::CorrectionContext,
     thinking_override: Option<ThinkingConfig>,
+    permission_mode: PermissionMode,
 }
 
 impl DefaultRuntimeClient {
@@ -5674,6 +5683,7 @@ impl DefaultRuntimeClient {
         tool_registry: GlobalToolRegistry,
         progress_reporter: Option<InternalPromptProgressReporter>,
         swd_level: Arc<std::sync::atomic::AtomicU8>,
+        permission_mode: PermissionMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let orchestrate = env::var("ELAI_ORCHESTRATE")
             .ok()
@@ -5697,6 +5707,7 @@ impl DefaultRuntimeClient {
             swd_level,
             correction_ctx: crate::swd::CorrectionContext::new(),
             thinking_override: None,
+            permission_mode,
         })
     }
 
@@ -5720,6 +5731,7 @@ impl DefaultRuntimeClient {
 impl ApiClient for DefaultRuntimeClient {
     #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        sync_codex_bridge_exec_policy(self.permission_mode);
         if let Some(progress_reporter) = &self.progress_reporter {
             progress_reporter.mark_model_phase();
         }

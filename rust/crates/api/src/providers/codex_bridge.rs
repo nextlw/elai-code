@@ -21,6 +21,12 @@ struct CodexExecCapabilities {
 }
 
 #[derive(Debug, Clone)]
+struct CodexExecPolicy {
+    sandbox_mode: String,
+    approval_policy: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CodexBridgeClient {
     codex_command: String,
     exec_timeout: Duration,
@@ -97,7 +103,8 @@ impl CodexBridgeClient {
         model: &str,
         prompt: &str,
     ) -> Result<std::process::Output, ApiError> {
-        let variants = exec_arg_variants(self.capabilities, model, prompt);
+        let policy = resolve_exec_policy();
+        let variants = exec_arg_variants(self.capabilities, model, prompt, &policy);
         let mut last_output: Option<std::process::Output> = None;
         for args in variants {
             let output = self.run_exec_once(&args).await?;
@@ -144,24 +151,76 @@ impl CodexBridgeClient {
 }
 
 fn detect_exec_capabilities(codex_command: &str) -> CodexExecCapabilities {
-    let output = std::process::Command::new(codex_command)
+    let exec_help = std::process::Command::new(codex_command)
         .arg("exec")
         .arg("--help")
         .output();
-    let Ok(output) = output else {
+    let Ok(exec_help) = exec_help else {
         return CodexExecCapabilities {
             supports_sandbox: true,
-            supports_ask_for_approval: false,
+            supports_ask_for_approval: true,
         };
     };
-    let help = String::from_utf8_lossy(&output.stdout);
+    let exec_help_text = String::from_utf8_lossy(&exec_help.stdout);
+    // `--ask-for-approval` pode estar no help global e não no subcomando `exec`.
+    let global_help = std::process::Command::new(codex_command)
+        .arg("--help")
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .unwrap_or_default();
     CodexExecCapabilities {
-        supports_sandbox: help.contains("--sandbox"),
-        supports_ask_for_approval: help.contains("--ask-for-approval"),
+        supports_sandbox: exec_help_text.contains("--sandbox"),
+        supports_ask_for_approval: exec_help_text.contains("--ask-for-approval")
+            || global_help.contains("--ask-for-approval"),
     }
 }
 
-fn exec_arg_variants(caps: CodexExecCapabilities, model: &str, prompt: &str) -> Vec<Vec<String>> {
+fn resolve_exec_policy() -> CodexExecPolicy {
+    let sandbox_mode = std::env::var("ELAI_CODEX_BRIDGE_SANDBOX")
+        .ok()
+        .unwrap_or_else(|| "read-only".to_string());
+    let sandbox_mode = match sandbox_mode.as_str() {
+        "read-only" | "workspace-write" | "danger-full-access" => sandbox_mode,
+        _ => "read-only".to_string(),
+    };
+
+    let approval_policy = std::env::var("ELAI_CODEX_BRIDGE_APPROVAL")
+        .ok()
+        .unwrap_or_else(|| "never".to_string());
+    let approval_policy = match approval_policy.as_str() {
+        "untrusted" | "on-failure" | "on-request" | "never" => approval_policy,
+        _ => "never".to_string(),
+    };
+
+    CodexExecPolicy {
+        sandbox_mode,
+        approval_policy,
+    }
+}
+
+fn exec_arg_variants(
+    caps: CodexExecCapabilities,
+    model: &str,
+    prompt: &str,
+    policy: &CodexExecPolicy,
+) -> Vec<Vec<String>> {
+    let mut global_first = vec![];
+    if caps.supports_ask_for_approval {
+        global_first.push("--ask-for-approval".to_string());
+        global_first.push(policy.approval_policy.clone());
+    }
+    global_first.extend(vec![
+        "exec".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+    ]);
+    if caps.supports_sandbox {
+        global_first.push("--sandbox".to_string());
+        global_first.push(policy.sandbox_mode.clone());
+    }
+    global_first.push(prompt.to_string());
+
     let mut first = vec![
         "exec".to_string(),
         "--model".to_string(),
@@ -169,11 +228,11 @@ fn exec_arg_variants(caps: CodexExecCapabilities, model: &str, prompt: &str) -> 
     ];
     if caps.supports_sandbox {
         first.push("--sandbox".to_string());
-        first.push("read-only".to_string());
+        first.push(policy.sandbox_mode.clone());
     }
     if caps.supports_ask_for_approval {
         first.push("--ask-for-approval".to_string());
-        first.push("never".to_string());
+        first.push(policy.approval_policy.clone());
     }
     first.push(prompt.to_string());
 
@@ -184,7 +243,7 @@ fn exec_arg_variants(caps: CodexExecCapabilities, model: &str, prompt: &str) -> 
     ];
     if caps.supports_sandbox {
         second.push("--sandbox".to_string());
-        second.push("read-only".to_string());
+        second.push(policy.sandbox_mode.clone());
     }
     second.push(prompt.to_string());
 
@@ -195,7 +254,7 @@ fn exec_arg_variants(caps: CodexExecCapabilities, model: &str, prompt: &str) -> 
         prompt.to_string(),
     ];
 
-    vec![first, second, third]
+    vec![global_first, first, second, third]
 }
 
 #[derive(Debug)]
