@@ -257,7 +257,14 @@ fn persist_locale(lang: &str) -> Result<(), String> {
 }
 
 fn has_any_auth() -> bool {
-    let env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "OPENCODE_GO_API_KEY"];
+    let env_keys = [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "OPENCODE_GO_API_KEY",
+        "OPENCODE_API_KEY",
+    ];
     if env_keys
         .iter()
         .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
@@ -281,6 +288,8 @@ fn elai_env_fill_missing_from_file(path: &Path) {
         "XAI_BASE_URL",
         "OPENCODE_GO_API_KEY",
         "OPENCODE_GO_BASE_URL",
+        "OPENCODE_API_KEY",
+        "OPENCODE_BASE_URL",
     ];
     let Ok(contents) = fs::read_to_string(path) else {
         return;
@@ -1999,7 +2008,14 @@ fn run_tui_repl(
             if let Ok(outcome) = thread_done_rx.try_recv() {
                 app.thinking = false;
                 if let Err(e) = outcome {
-                    app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}")));
+                    if is_opencode_subscription_quota_error(&e) {
+                        app.push_chat(tui::ChatEntry::SystemNote(
+                            "⚠️ Quota do OpenCode Go esgotada. Selecione um modelo free do OpenCode Zen para continuar.".to_string(),
+                        ));
+                        app.open_opencode_zen_free_models();
+                    } else {
+                        app.push_chat(tui::ChatEntry::SystemNote(format!("❌ {e}")));
+                    }
                 }
                 // Persist session.
                 {
@@ -2254,6 +2270,12 @@ fn preferred_model_after_auth() -> String {
         )) => env_or("ELAI_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         _ => suggested_default_model(),
     }
+}
+
+fn is_opencode_subscription_quota_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("subscriptionusagelimiterror")
+        || lower.contains("subscription quota exceeded")
 }
 
 fn append_budget_summary_to_memory(

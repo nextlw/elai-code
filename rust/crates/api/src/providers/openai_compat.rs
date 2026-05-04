@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -19,6 +19,7 @@ pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_LM_STUDIO_BASE_URL: &str = "http://localhost:1234/v1";
 pub const DEFAULT_GO_CHAT_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+pub const DEFAULT_OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -38,6 +39,7 @@ const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 const OLLAMA_ENV_VARS: &[&str] = &["OLLAMA_API_KEY", "OLLAMA_BASE_URL"];
 const LM_STUDIO_ENV_VARS: &[&str] = &["LMSTUDIO_API_KEY", "LMSTUDIO_BASE_URL"];
 const GO_ENV_VARS: &[&str] = &["OPENCODE_GO_API_KEY"];
+const OPENCODE_ZEN_ENV_VARS: &[&str] = &["OPENCODE_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -97,6 +99,16 @@ impl OpenAiCompatConfig {
     }
 
     #[must_use]
+    pub const fn opencode_zen() -> Self {
+        Self {
+            provider_name: "OpenCode Zen",
+            api_key_env: "OPENCODE_API_KEY",
+            base_url_env: "OPENCODE_BASE_URL",
+            default_base_url: DEFAULT_OPENCODE_ZEN_BASE_URL,
+        }
+    }
+
+    #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
@@ -104,6 +116,7 @@ impl OpenAiCompatConfig {
             "Ollama" => OLLAMA_ENV_VARS,
             "LM Studio" => LM_STUDIO_ENV_VARS,
             "OpenCode Go" => GO_ENV_VARS,
+            "OpenCode Zen" => OPENCODE_ZEN_ENV_VARS,
             _ => &[],
         }
     }
@@ -114,6 +127,13 @@ impl OpenAiCompatConfig {
     #[must_use]
     pub fn is_local(self) -> bool {
         matches!(self.provider_name, "Ollama" | "LM Studio")
+    }
+
+    /// OpenCode Zen exposes free models through the same OpenAI-compatible API
+    /// using Bearer `public` when no paid `OPENCODE_API_KEY` is configured.
+    #[must_use]
+    pub fn allows_public_access(self) -> bool {
+        matches!(self.provider_name, "OpenCode Zen")
     }
 
     /// Placeholder de API key usado por providers locais quando o usuário
@@ -171,6 +191,9 @@ impl OpenAiCompatClient {
         // presente nas requests (alguns servidores rejeitam request sem header).
         if config.is_local() {
             return Ok(Self::new(config.local_api_key_placeholder(), config));
+        }
+        if config.allows_public_access() {
+            return Ok(Self::new("public", config));
         }
         Err(ApiError::missing_credentials(
             config.provider_name,
@@ -418,7 +441,7 @@ impl StreamState {
             self.message_started = true;
             events.push(StreamEvent::MessageStart(MessageStartEvent {
                 message: MessageResponse {
-                    id: chunk.id.clone(),
+                    id: message_id_or_synthetic(&chunk.id),
                     kind: "message".to_string(),
                     role: "assistant".to_string(),
                     content: Vec::new(),
@@ -618,8 +641,35 @@ impl ToolCallState {
     }
 }
 
+fn synthetic_chat_completion_id() -> String {
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("chatcmpl_{ns}")
+}
+
+fn message_id_or_synthetic(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        synthetic_chat_completion_id()
+    } else {
+        t.to_string()
+    }
+}
+
+fn tool_call_id_or_synthetic(raw: &str, index: usize) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        format!("tool_call_{index}")
+    } else {
+        t.to_string()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
+    #[serde(default)]
     id: String,
     model: String,
     choices: Vec<ChatChoice>,
@@ -645,6 +695,7 @@ struct ChatMessage {
 
 #[derive(Debug, Deserialize)]
 struct ResponseToolCall {
+    #[serde(default)]
     id: String,
     function: ResponseToolFunction,
 }
@@ -665,6 +716,7 @@ struct OpenAiUsage {
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionChunk {
+    #[serde(default)]
     id: String,
     #[serde(default)]
     model: Option<String>,
@@ -860,16 +912,16 @@ fn normalize_response(
     if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
         content.push(OutputContentBlock::Text { text });
     }
-    for tool_call in choice.message.tool_calls {
+    for (idx, tool_call) in choice.message.tool_calls.into_iter().enumerate() {
         content.push(OutputContentBlock::ToolUse {
-            id: tool_call.id,
+            id: tool_call_id_or_synthetic(&tool_call.id, idx),
             name: tool_call.function.name,
             input: parse_tool_arguments(&tool_call.function.arguments),
         });
     }
 
     Ok(MessageResponse {
-        id: response.id,
+        id: message_id_or_synthetic(&response.id),
         kind: "message".to_string(),
         role: choice.message.role,
         content,
@@ -1063,13 +1115,13 @@ impl StringExt for String {
 mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        openai_secret_from_auth_method, openai_tool_choice, parse_tool_arguments, OpenAiCompatClient,
-        OpenAiCompatConfig,
+        normalize_response, openai_secret_from_auth_method, openai_tool_choice, parse_sse_frame,
+        parse_tool_arguments, ChatCompletionResponse, OpenAiCompatClient, OpenAiCompatConfig,
     };
     use crate::error::ApiError;
     use crate::types::{
-        InputContentBlock, InputMessage, MessageRequest, ToolChoice, ToolDefinition,
-        ToolResultContentBlock,
+        InputContentBlock, InputMessage, MessageRequest, OutputContentBlock, ToolChoice,
+        ToolDefinition, ToolResultContentBlock,
     };
     use serde_json::json;
     use std::sync::{Mutex, OnceLock};
@@ -1201,6 +1253,15 @@ mod tests {
     }
 
     #[test]
+    fn opencode_zen_uses_public_key_without_env() {
+        let _lock = env_lock();
+        std::env::remove_var("OPENCODE_API_KEY");
+        std::env::remove_var("OPENCODE_BASE_URL");
+        OpenAiCompatClient::from_env(OpenAiCompatConfig::opencode_zen())
+            .expect("free Zen models should work with public auth");
+    }
+
+    #[test]
     fn endpoint_builder_accepts_base_urls_and_full_endpoints() {
         assert_eq!(
             chat_completions_endpoint("https://api.x.ai/v1"),
@@ -1249,5 +1310,53 @@ mod tests {
     fn normalizes_stop_reasons() {
         assert_eq!(normalize_finish_reason("stop"), "end_turn");
         assert_eq!(normalize_finish_reason("tool_calls"), "tool_use");
+    }
+
+    #[test]
+    fn sse_chunk_without_top_level_id_deserializes() {
+        let chunk = parse_sse_frame(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#)
+            .expect("parse frame")
+            .expect("chunk present");
+        assert!(chunk.id.is_empty());
+        assert_eq!(
+            chunk
+                .choices
+                .first()
+                .and_then(|c| c.delta.content.as_deref()),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn normalize_maps_missing_tool_call_ids() {
+        let raw = r#"{
+            "id": "",
+            "model": "test-model",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2}
+        }"#;
+        let parsed: ChatCompletionResponse = serde_json::from_str(raw).expect("json");
+        let msg = normalize_response("fallback-model", parsed).expect("normalize");
+        assert!(!msg.id.is_empty());
+        assert_eq!(msg.id.strip_prefix("chatcmpl_").is_some(), true);
+        match msg.content.as_slice() {
+            [OutputContentBlock::ToolUse { id, name, .. }] => {
+                assert_eq!(id, "tool_call_0");
+                assert_eq!(name, "read_file");
+            }
+            other => panic!("expected single ToolUse, got {other:?}"),
+        }
     }
 }

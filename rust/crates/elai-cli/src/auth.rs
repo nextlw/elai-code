@@ -162,6 +162,7 @@ pub fn dispatch_logout() -> Result<(), AuthError> {
         "OPENAI_API_KEY",
         "XAI_API_KEY",
         "OPENCODE_GO_API_KEY",
+        "OPENCODE_API_KEY",
     ] {
         std::env::remove_var(key);
     }
@@ -187,6 +188,7 @@ fn clear_elai_dotenv() -> io::Result<()> {
         "OPENAI_API_KEY", "OPENAI_BASE_URL",
         "XAI_API_KEY", "XAI_BASE_URL",
         "OPENCODE_GO_API_KEY", "OPENCODE_GO_BASE_URL",
+        "OPENCODE_API_KEY", "OPENCODE_BASE_URL",
         "ELAI_DEFAULT_OPENAI_MODEL", "ELAI_DEFAULT_ANTHROPIC_MODEL",
         "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL",
     ];

@@ -37,6 +37,8 @@ pub enum ProviderKind {
     LmStudio,
     /// `OpenCode` Go — OpenAI-compatible chat API at `opencode.ai/zen/go/v1`.
     OpenCodeGo,
+    /// `OpenCode` Zen — OpenAI-compatible API at `opencode.ai/zen/v1`.
+    OpenCodeZen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,20 @@ pub struct ProviderMetadata {
     pub base_url_env: &'static str,
     pub default_base_url: &'static str,
 }
+
+const OPENCODE_GO_METADATA: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::OpenCodeGo,
+    auth_env: "OPENCODE_GO_API_KEY",
+    base_url_env: "OPENCODE_GO_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
+};
+
+const OPENCODE_ZEN_METADATA: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::OpenCodeZen,
+    auth_env: "OPENCODE_API_KEY",
+    base_url_env: "OPENCODE_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_OPENCODE_ZEN_BASE_URL,
+};
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     (
@@ -212,13 +228,21 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     ),
     (
         "minimax-m2.7",
-        ProviderMetadata {
-            provider: ProviderKind::OpenCodeGo,
-            auth_env: "OPENCODE_GO_API_KEY",
-            base_url_env: "OPENCODE_GO_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
-        },
+        OPENCODE_GO_METADATA,
     ),
+    ("kimi-k2.5", OPENCODE_GO_METADATA),
+    ("glm-5.1", OPENCODE_GO_METADATA),
+    ("deepseek-v4-flash", OPENCODE_GO_METADATA),
+    ("qwen3.5-plus", OPENCODE_GO_METADATA),
+    ("mimo-v2-omni", OPENCODE_GO_METADATA),
+    ("mimo-v2.5-pro", OPENCODE_GO_METADATA),
+    ("mimo-v2.5", OPENCODE_GO_METADATA),
+    ("big-pickle", OPENCODE_ZEN_METADATA),
+    ("minimax-m2.5-free", OPENCODE_ZEN_METADATA),
+    ("hy3-preview-free", OPENCODE_ZEN_METADATA),
+    ("ling-2.6-flash-free", OPENCODE_ZEN_METADATA),
+    ("trinity-large-preview-free", OPENCODE_ZEN_METADATA),
+    ("nemotron-3-super-free", OPENCODE_ZEN_METADATA),
 ];
 
 /// Reconhece um prefixo `<provider>:<model>` que força o roteamento para um
@@ -234,6 +258,7 @@ pub fn parse_local_provider_prefix(model: &str) -> Option<(ProviderKind, String)
         "ollama" => ProviderKind::Ollama,
         "lmstudio" | "lm-studio" | "lm_studio" => ProviderKind::LmStudio,
         "go" | "opencode-go" | "opencode_go" => ProviderKind::OpenCodeGo,
+        "zen" | "opencode-zen" | "opencode_zen" => ProviderKind::OpenCodeZen,
         _ => return None,
     };
     let bare = rest.trim();
@@ -266,7 +291,11 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::LmStudio | ProviderKind::OpenCodeGo => trimmed,
+                ProviderKind::OpenAi
+                | ProviderKind::Ollama
+                | ProviderKind::LmStudio
+                | ProviderKind::OpenCodeGo
+                | ProviderKind::OpenCodeZen => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -296,6 +325,7 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
                 base_url_env: "OPENCODE_GO_BASE_URL",
                 default_base_url: openai_compat::DEFAULT_GO_CHAT_BASE_URL,
             },
+            ProviderKind::OpenCodeZen => OPENCODE_ZEN_METADATA,
             _ => unreachable!("parse_local_provider_prefix returns unexpected kind"),
         });
     }
@@ -349,6 +379,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     }
     if openai_compat::has_api_key("OPENCODE_GO_API_KEY") {
         return ProviderKind::OpenCodeGo;
+    }
+    if openai_compat::has_api_key("OPENCODE_API_KEY") {
+        return ProviderKind::OpenCodeZen;
     }
     // Local providers como último recurso: se o usuário setou explicitamente
     // o base_url de um provider local, assume que está rodando ele.
@@ -449,6 +482,18 @@ pub fn suggested_default_model() -> String {
     if openai_compat::has_api_key("XAI_API_KEY") {
         return "grok-3".to_string();
     }
+    if openai_compat::has_api_key("OPENCODE_GO_API_KEY") {
+        return std::env::var("ELAI_DEFAULT_OPENCODE_GO_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "kimi-k2.6".to_string());
+    }
+    if openai_compat::has_api_key("OPENCODE_API_KEY") {
+        return std::env::var("ELAI_DEFAULT_OPENCODE_ZEN_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "trinity-large-preview-free".to_string());
+    }
     // Providers locais — preferimos Ollama se ambos estiverem indicados via env.
     if std::env::var_os("OLLAMA_BASE_URL").is_some() {
         return std::env::var("ELAI_DEFAULT_OLLAMA_MODEL")
@@ -479,8 +524,18 @@ use crate::types::{EffortLevel, OutputConfig, ThinkingConfig};
 /// providers do not.
 #[must_use]
 pub fn model_supports_thinking(model: &str) -> bool {
-    // Local providers never support Anthropic-style thinking.
-    if parse_local_provider_prefix(model).is_some() {
+    // Local/OpenCode-compatible providers never support Anthropic-style thinking.
+    if parse_local_provider_prefix(model).is_some()
+        || metadata_for_model(model).is_some_and(|metadata| {
+            matches!(
+                metadata.provider,
+                ProviderKind::Ollama
+                    | ProviderKind::LmStudio
+                    | ProviderKind::OpenCodeGo
+                    | ProviderKind::OpenCodeZen
+            )
+        })
+    {
         return false;
     }
     let canonical = resolve_model_alias(model);
@@ -579,8 +634,8 @@ pub fn resolve_output_config(effort_override: Option<EffortLevel>) -> Option<Out
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_provider_kind, max_tokens_for_model, parse_local_provider_prefix,
-        resolve_model_alias, suggested_default_model, ProviderKind,
+        detect_provider_kind, max_tokens_for_model, metadata_for_model, model_supports_thinking,
+        parse_local_provider_prefix, resolve_model_alias, suggested_default_model, ProviderKind,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -637,6 +692,29 @@ mod tests {
 
         // Prefixo sem nome de modelo → None (evita aceitar "ollama:" sozinho).
         assert!(parse_local_provider_prefix("ollama:").is_none());
+    }
+
+    #[test]
+    fn parses_opencode_zen_prefix() {
+        let (kind, name) = parse_local_provider_prefix("opencode-zen:big-pickle").unwrap();
+        assert_eq!(kind, ProviderKind::OpenCodeZen);
+        assert_eq!(name, "big-pickle");
+        assert_eq!(
+            resolve_model_alias("zen:trinity-large-preview-free"),
+            "trinity-large-preview-free"
+        );
+    }
+
+    #[test]
+    fn opencode_zen_free_models_route_without_thinking() {
+        let metadata = metadata_for_model("trinity-large-preview-free").unwrap();
+        assert_eq!(metadata.provider, ProviderKind::OpenCodeZen);
+        assert_eq!(
+            detect_provider_kind("nemotron-3-super-free"),
+            ProviderKind::OpenCodeZen
+        );
+        assert!(!model_supports_thinking("big-pickle"));
+        assert!(!model_supports_thinking("zen:minimax-m2.5-free"));
     }
 
     #[test]

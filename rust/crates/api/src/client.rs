@@ -43,6 +43,7 @@ pub enum ProviderClient {
     /// Servidor LM Studio local.
     LmStudio(OpenAiCompatClient),
     Go(GoClient),
+    OpenCodeZen(OpenAiCompatClient),
     Orchestrated(Arc<ProviderOrchestrator>),
 }
 
@@ -82,6 +83,9 @@ impl ProviderClient {
                 OpenAiCompatConfig::lm_studio(),
             )?)),
             ProviderKind::OpenCodeGo => Ok(Self::Go(GoClient::from_env()?)),
+            ProviderKind::OpenCodeZen => Ok(Self::OpenCodeZen(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::opencode_zen(),
+            )?)),
         }
     }
 
@@ -201,6 +205,22 @@ impl ProviderClient {
                         max_concurrency: 4,
                     },
                 );
+                priority += 1;
+                registered_any = true;
+            }
+        }
+
+        if openai_compat::has_api_key("OPENCODE_API_KEY") {
+            if let Ok(client) = OpenAiCompatClient::from_env(OpenAiCompatConfig::opencode_zen()) {
+                orchestrator.register_provider(
+                    Box::new(OpenAiUnifiedAdapter::new(client, "opencode-zen")),
+                    ProviderConfig {
+                        id: "opencode-zen".to_string(),
+                        priority,
+                        enabled: true,
+                        max_concurrency: 4,
+                    },
+                );
                 registered_any = true;
             }
         }
@@ -213,6 +233,7 @@ impl ProviderClient {
                     "OPENAI_API_KEY",
                     "XAI_API_KEY",
                     "OPENCODE_GO_API_KEY",
+                    "OPENCODE_API_KEY",
                     "OLLAMA_BASE_URL",
                     "LMSTUDIO_BASE_URL",
                 ],
@@ -231,6 +252,7 @@ impl ProviderClient {
             Self::Ollama(_) => ProviderKind::Ollama,
             Self::LmStudio(_) => ProviderKind::LmStudio,
             Self::Go(_) => ProviderKind::OpenCodeGo,
+            Self::OpenCodeZen(_) => ProviderKind::OpenCodeZen,
         }
     }
 
@@ -243,7 +265,8 @@ impl ProviderClient {
             Self::Xai(client)
             | Self::OpenAi(client)
             | Self::Ollama(client)
-            | Self::LmStudio(client) => send_via_provider(client, request).await,
+            | Self::LmStudio(client)
+            | Self::OpenCodeZen(client) => send_via_provider(client, request).await,
             Self::CodexBridge(client) => client.send_message(request).await,
             Self::Go(client) => client.send_message(request).await,
             Self::Orchestrated(orchestrator) => {
@@ -265,7 +288,8 @@ impl ProviderClient {
             Self::Xai(client)
             | Self::OpenAi(client)
             | Self::Ollama(client)
-            | Self::LmStudio(client) => stream_via_provider(client, request)
+            | Self::LmStudio(client)
+            | Self::OpenCodeZen(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
             Self::CodexBridge(client) => client

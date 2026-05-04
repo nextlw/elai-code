@@ -324,6 +324,14 @@ pub(crate) struct ProviderAuthGroup {
     methods: &'static [AuthMethodChoice],
 }
 
+fn opencode_zen_provider_group() -> ProviderAuthGroup {
+    ProviderAuthGroup {
+        name: "OpenCode Zen (free)",
+        id: "opencode-zen",
+        methods: &[],
+    }
+}
+
 fn provider_auth_groups() -> Vec<ProviderAuthGroup> {
     vec![
         ProviderAuthGroup {
@@ -352,6 +360,7 @@ fn provider_auth_groups() -> Vec<ProviderAuthGroup> {
             id: "opencode-go",
             methods: &[AuthMethodChoice::PasteOpenCodeGoKey],
         },
+        opencode_zen_provider_group(),
         ProviderAuthGroup {
             name: "xAI (Grok)",
             id: "xai",
@@ -403,6 +412,8 @@ fn is_provider_connected(group: &ProviderAuthGroup) -> bool {
         "opencode-go" => {
             std::env::var_os("OPENCODE_GO_API_KEY").is_some_and(|v| !v.is_empty())
         }
+        // The upstream OpenCode client uses Bearer `public` for free Zen models.
+        "opencode-zen" => true,
         "xai" => {
             std::env::var_os("XAI_API_KEY").is_some_and(|v| !v.is_empty())
         }
@@ -1177,6 +1188,15 @@ impl UiApp {
     pub fn open_auth_picker(&mut self) {
         self.overlay = Some(OverlayKind::AuthPicker {
             step: AuthStep::ProviderList { selected: 0 },
+        });
+    }
+
+    pub fn open_opencode_zen_free_models(&mut self) {
+        self.overlay = Some(OverlayKind::AuthPicker {
+            step: AuthStep::ConnectedModels {
+                provider: opencode_zen_provider_group(),
+                selected: 0,
+            },
         });
     }
 
@@ -3238,12 +3258,28 @@ const OPENAI_CODEX_MODELS: &[&str] = &[
 
 const OPENCODE_GO_MODELS: &[&str] = &[
     "kimi-k2.6",
+    "kimi-k2.5",
+    "glm-5.1",
     "glm-5",
     "deepseek-v4-pro",
+    "deepseek-v4-flash",
     "qwen3.6-plus",
+    "qwen3.5-plus",
     "mimo-v2-pro",
+    "mimo-v2-omni",
+    "mimo-v2.5-pro",
+    "mimo-v2.5",
     "minimax-m2.5",
     "minimax-m2.7",
+];
+
+const OPENCODE_ZEN_FREE_MODELS: &[&str] = &[
+    "trinity-large-preview-free",
+    "big-pickle",
+    "minimax-m2.5-free",
+    "hy3-preview-free",
+    "ling-2.6-flash-free",
+    "nemotron-3-super-free",
 ];
 
 const XAI_MODELS: &[&str] = &[
@@ -3256,6 +3292,7 @@ fn provider_models(group: &ProviderAuthGroup) -> Vec<&'static str> {
     match group.id {
         "openai" => OPENAI_CODEX_MODELS.to_vec(),
         "opencode-go" => OPENCODE_GO_MODELS.to_vec(),
+        "opencode-zen" => OPENCODE_ZEN_FREE_MODELS.to_vec(),
         "xai" => XAI_MODELS.to_vec(),
         "anthropic" | "bedrock" | "vertex" | "foundry" => ANTHROPIC_MODELS.to_vec(),
         _ => vec![],
