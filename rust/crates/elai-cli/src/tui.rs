@@ -3555,7 +3555,7 @@ pub fn render(
             .constraints([
                 Constraint::Length(12),         // header
                 Constraint::Min(3),             // chat body
-                Constraint::Length(2),          // margin between chat and status (≈24px)
+                Constraint::Length(1),          // margin between chat and status
                 Constraint::Length(1),          // status footer
                 Constraint::Length(input_area_h), // input (grows with content)
             ])
