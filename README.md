@@ -16,13 +16,26 @@
 
 ## Install
 
-**macOS / Linux**
+**macOS — Homebrew (recomendado)**
+
+```sh
+brew install nextlw/elai/elai
+```
+
+**macOS / Linux — script**
 
 ```sh
 curl -fsSL https://get.nexcode.live | sh
 ```
 
-**Windows** (PowerShell)
+**Windows — Scoop (recomendado)**
+
+```powershell
+scoop bucket add nextlw https://github.com/nextlw/homebrew-elai
+scoop install nextlw/elai
+```
+
+**Windows — PowerShell**
 
 ```powershell
 irm https://get.nexcode.live/ps | iex
@@ -34,11 +47,19 @@ irm https://get.nexcode.live/ps | iex
 powershell -Command "irm https://get.nexcode.live/ps | iex"
 ```
 
-All three commands download the latest binary from the latest GitHub release, install it, and add it to your PATH. The `get.nexcode.live` endpoint is a Cloudflare Worker that detects the client User-Agent and serves the matching install script (`install.sh` for shells, `install.ps1` for PowerShell). You can force a script explicitly:
+O script detecta automaticamente o Homebrew (macOS) e o Scoop (Windows) e usa o gerenciador de pacotes quando disponível. Você pode forçar o download direto do binário com:
 
 ```sh
-curl -fsSL https://get.nexcode.live/sh | sh    # always serve install.sh
-irm https://get.nexcode.live/ps | iex          # always serve install.ps1
+ELAI_NO_BREW=1 curl -fsSL https://get.nexcode.live | sh    # macOS/Linux sem brew
+$env:ELAI_NO_SCOOP=1; irm https://get.nexcode.live/ps | iex  # Windows sem scoop
+```
+
+**Atualizar**
+
+```sh
+brew upgrade nextlw/elai/elai        # macOS Homebrew
+scoop update elai                    # Windows Scoop
+curl -fsSL https://get.nexcode.live | sh  # script (qualquer plataforma)
 ```
 
 After installing, open a new terminal and run:
