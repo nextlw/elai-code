@@ -51,15 +51,10 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.1.7
+## What's New — v1.1.8
 
-- refactor(tui): enhance mega eyes spinner for a more natural feel
-- feat(tui): add mega eyes spinner with 12 variations
-- refactor(tests): streamline test code and improve assertions
-- feat(cli): ultrathink, rodapé de thinking localizado e melhorias estruturais
-- fix(build): pass &cfg by reference in run_script call sites
-- feat(script-runner): add new crate + fix TUI compact events and spinner
-- feat(compaction): implement optional OpenAI summarization for session compaction
+- refactor(tui): enhance system note line wrapping for improved readability
+- refactor(tui): update spinner states and remove unused spinner functions
 
 ---
 
