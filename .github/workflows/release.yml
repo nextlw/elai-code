@@ -285,7 +285,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nextlw/homebrew-elai
-          token: ${{ secrets.NEXCODE_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-elai
 
       - name: Update Formula/elai.rb
