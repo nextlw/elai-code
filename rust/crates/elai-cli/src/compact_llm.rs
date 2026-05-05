@@ -53,6 +53,7 @@ fn format_messages_for_summary(messages: &[ConversationMessage]) -> String {
                     };
                     parts.push(format!("{prefix}{tool_name}: {output}"));
                 }
+                ContentBlock::Thinking { .. } => {}
             }
         }
         let body = parts.join("\n");

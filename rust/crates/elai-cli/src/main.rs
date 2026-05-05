@@ -5271,6 +5271,7 @@ fn render_export_text(session: &Session) -> String {
                         "[tool_result id={tool_use_id} name={tool_name} error={is_error}] {output}"
                     ));
                 }
+                ContentBlock::Thinking { .. } => {}
             }
         }
         lines.push(String::new());
@@ -7361,6 +7362,9 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         }],
                         is_error: *is_error,
                     },
+                    ContentBlock::Thinking { thinking } => {
+                        InputContentBlock::Thinking { thinking: thinking.clone() }
+                    }
                 })
                 .collect::<Vec<_>>();
             (!content.is_empty()).then(|| InputMessage {
@@ -7523,7 +7527,7 @@ fn push_user_blocks(app: &mut tui::UiApp, blocks: &[runtime::ContentBlock], max:
                     "{mark} `{tool_name}` · resultado\n{body}"
                 )));
             }
-            runtime::ContentBlock::ToolUse { .. } => {}
+            runtime::ContentBlock::ToolUse { .. } | runtime::ContentBlock::Thinking { .. } => {}
         }
     }
 }
@@ -7596,6 +7600,7 @@ fn push_assistant_blocks(
                     "{mark} `{tool_name}` · resultado\n{body}"
                 )));
             }
+            runtime::ContentBlock::Thinking { .. } => {}
         }
     }
     if !pending_tools.is_empty() {

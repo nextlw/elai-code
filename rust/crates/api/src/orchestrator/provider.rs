@@ -272,6 +272,8 @@ fn collect_stream_events(events: Vec<StreamEvent>) -> MessageResponse {
     // index → (id, name, accumulated_json)
     let mut pending_tool_uses: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
     let mut finalized_tool_uses: Vec<(u32, String, String, String)> = Vec::new();
+    // index → accumulated thinking text
+    let mut pending_thinking: BTreeMap<u32, String> = BTreeMap::new();
     let mut stop_reason: Option<String> = None;
     let mut stop_sequence: Option<String> = None;
     let mut usage: Option<Usage> = None;
@@ -290,8 +292,10 @@ fn collect_stream_events(events: Vec<StreamEvent>) -> MessageResponse {
                         pending_tool_uses
                             .insert(e.index, (id.clone(), name.clone(), String::new()));
                     }
-                    OutputContentBlock::Thinking { .. }
-                    | OutputContentBlock::RedactedThinking { .. } => {}
+                    OutputContentBlock::Thinking { .. } => {
+                        pending_thinking.insert(e.index, String::new());
+                    }
+                    OutputContentBlock::RedactedThinking { .. } => {}
                 }
             }
             StreamEvent::ContentBlockDelta(e) => match e.delta {
@@ -305,8 +309,12 @@ fn collect_stream_events(events: Vec<StreamEvent>) -> MessageResponse {
                         entry.2.push_str(&partial_json);
                     }
                 }
-                ContentBlockDelta::ThinkingDelta { .. }
-                | ContentBlockDelta::SignatureDelta { .. } => {}
+                ContentBlockDelta::ThinkingDelta { thinking } => {
+                    if let Some(entry) = pending_thinking.get_mut(&e.index) {
+                        entry.push_str(&thinking);
+                    }
+                }
+                ContentBlockDelta::SignatureDelta { .. } => {}
             },
             StreamEvent::ContentBlockStop(e) => {
                 if let Some((id, name, json)) = pending_tool_uses.remove(&e.index) {
@@ -323,10 +331,19 @@ fn collect_stream_events(events: Vec<StreamEvent>) -> MessageResponse {
     }
 
     let mut resp = response.unwrap_or_else(empty_response);
-    let mut content: Vec<OutputContentBlock> = content_texts
-        .into_iter()
-        .map(|(_, text)| OutputContentBlock::Text { text })
-        .collect();
+
+    // Thinking blocks come first in the content array so they precede text/tool_uses.
+    let thinking_text: String = pending_thinking.into_values().collect::<Vec<_>>().concat();
+    let mut content: Vec<OutputContentBlock> = Vec::new();
+    if !thinking_text.is_empty() {
+        content.push(OutputContentBlock::Thinking { thinking: thinking_text, signature: None });
+    }
+
+    content.extend(
+        content_texts
+            .into_iter()
+            .map(|(_, text)| OutputContentBlock::Text { text }),
+    );
 
     finalized_tool_uses.sort_by_key(|(index, _, _, _)| *index);
     for (_, id, name, json) in finalized_tool_uses {

@@ -416,11 +416,15 @@ struct StreamState {
     model: String,
     message_started: bool,
     text_phase: TextBlockPhase,
+    thinking_phase: TextBlockPhase,
     finished: bool,
     stop_reason: Option<String>,
     usage: Option<Usage>,
     tool_calls: BTreeMap<u32, ToolCallState>,
 }
+
+// Block index reserved for thinking content (never collides with text=0 or tool_calls=1+).
+const THINKING_BLOCK_INDEX: u32 = 999;
 
 impl StreamState {
     fn new(model: String) -> Self {
@@ -428,6 +432,7 @@ impl StreamState {
             model,
             message_started: false,
             text_phase: TextBlockPhase::Idle,
+            thinking_phase: TextBlockPhase::Idle,
             finished: false,
             stop_reason: None,
             usage: None,
@@ -469,6 +474,23 @@ impl StreamState {
         }
 
         for choice in chunk.choices {
+            if let Some(reasoning) = choice.delta.reasoning_content.filter(|v| !v.is_empty()) {
+                if self.thinking_phase == TextBlockPhase::Idle {
+                    self.thinking_phase = TextBlockPhase::Active;
+                    events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                        index: THINKING_BLOCK_INDEX,
+                        content_block: OutputContentBlock::Thinking {
+                            thinking: String::new(),
+                            signature: None,
+                        },
+                    }));
+                }
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: THINKING_BLOCK_INDEX,
+                    delta: ContentBlockDelta::ThinkingDelta { thinking: reasoning },
+                }));
+            }
+
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 if self.text_phase == TextBlockPhase::Idle {
                     self.text_phase = TextBlockPhase::Active;
@@ -533,6 +555,12 @@ impl StreamState {
         self.finished = true;
 
         let mut events = Vec::new();
+        if self.thinking_phase == TextBlockPhase::Active {
+            self.thinking_phase = TextBlockPhase::Closed;
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index: THINKING_BLOCK_INDEX,
+            }));
+        }
         if self.text_phase == TextBlockPhase::Active {
             self.text_phase = TextBlockPhase::Closed;
             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
@@ -737,6 +765,8 @@ struct ChunkDelta {
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
     tool_calls: Vec<DeltaToolCall>,
 }
 
@@ -809,6 +839,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
         "assistant" => {
             let mut text = String::new();
             let mut tool_calls = Vec::new();
+            let mut thinking = String::new();
             for block in &message.content {
                 match block {
                     InputContentBlock::Text { text: value } => text.push_str(value),
@@ -821,6 +852,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                         }
                     })),
                     InputContentBlock::ToolResult { .. } => {}
+                    InputContentBlock::Thinking { thinking: t } => thinking.push_str(t),
                 }
             }
             if text.is_empty() && tool_calls.is_empty() {
@@ -836,6 +868,10 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                 }
                 if !tool_calls.is_empty() {
                     obj.insert("tool_calls".to_string(), Value::Array(tool_calls));
+                }
+                // Kimi/DeepSeek: include reasoning_content when thinking was captured.
+                if !thinking.is_empty() {
+                    obj.insert("reasoning_content".to_string(), Value::String(thinking));
                 }
                 vec![Value::Object(obj)]
             }
@@ -857,7 +893,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                     "tool_call_id": tool_use_id,
                     "content": flatten_tool_result_content(content),
                 })),
-                InputContentBlock::ToolUse { .. } => None,
+                InputContentBlock::ToolUse { .. } | InputContentBlock::Thinking { .. } => None,
             })
             .collect(),
     }

@@ -50,6 +50,9 @@ pub enum AssistantEvent {
         name: String,
         input: String,
     },
+    Thinking {
+        thinking: String,
+    },
     Usage(TokenUsage),
     MessageStop,
 }
@@ -465,6 +468,8 @@ fn build_assistant_message(
     let mut finished = false;
     let mut usage = None;
 
+    let mut thinking = String::new();
+
     for event in events {
         match event {
             AssistantEvent::TextDelta(delta) => text.push_str(&delta),
@@ -472,11 +477,16 @@ fn build_assistant_message(
                 flush_text_block(&mut text, &mut blocks);
                 blocks.push(ContentBlock::ToolUse { id, name, input });
             }
+            AssistantEvent::Thinking { thinking: t } => thinking.push_str(&t),
             AssistantEvent::Usage(value) => usage = Some(value),
             AssistantEvent::MessageStop => {
                 finished = true;
             }
         }
+    }
+
+    if !thinking.is_empty() {
+        blocks.insert(0, ContentBlock::Thinking { thinking });
     }
 
     flush_text_block(&mut text, &mut blocks);

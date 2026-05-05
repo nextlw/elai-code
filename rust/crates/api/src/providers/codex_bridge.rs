@@ -402,6 +402,7 @@ fn render_input_block(block: &InputContentBlock) -> String {
                 "[tool_result tool_use_id={tool_use_id} is_error={is_error}] {rendered}"
             )
         }
+        InputContentBlock::Thinking { .. } => String::new(),
     }
 }
 

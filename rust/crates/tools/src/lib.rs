@@ -1804,6 +1804,9 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         }],
                         is_error: *is_error,
                     },
+                    ContentBlock::Thinking { thinking } => {
+                        InputContentBlock::Thinking { thinking: thinking.clone() }
+                    }
                 })
                 .collect::<Vec<_>>();
             (!content.is_empty()).then(|| InputMessage {
@@ -1838,7 +1841,12 @@ fn push_output_block(
             };
             pending_tools.insert(block_index, (id, name, initial_input));
         }
-        OutputContentBlock::Thinking { .. } | OutputContentBlock::RedactedThinking { .. } => {}
+        OutputContentBlock::Thinking { thinking, .. } => {
+            if !thinking.is_empty() {
+                events.push(AssistantEvent::Thinking { thinking });
+            }
+        }
+        OutputContentBlock::RedactedThinking { .. } => {}
     }
 }
 
