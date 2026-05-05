@@ -885,10 +885,11 @@ fn translate_message(message: &InputMessage, needs_reasoning_content: bool) -> V
                     obj.insert("tool_calls".to_string(), Value::Array(tool_calls));
                 }
                 // Kimi/DeepSeek require reasoning_content on every assistant message when
-                // reasoning is enabled — use captured thinking or fall back to empty string
-                // so that history messages from before thinking was captured don't 400.
+                // reasoning is enabled. Use captured thinking or a single-space placeholder
+                // so history messages from before thinking was captured don't 400.
                 if needs_reasoning_content || !thinking.is_empty() {
-                    obj.insert("reasoning_content".to_string(), Value::String(thinking));
+                    let value = if thinking.is_empty() { " ".to_string() } else { thinking };
+                    obj.insert("reasoning_content".to_string(), Value::String(value));
                 }
                 vec![Value::Object(obj)]
             }
@@ -1266,6 +1267,45 @@ mod tests {
         assert!(
             assistant.get("tool_calls").is_none(),
             "empty tool_calls breaks OpenAI Chat Completions"
+        );
+    }
+
+    #[test]
+    fn kimi_assistant_tool_call_includes_reasoning_content() {
+        let payload = build_chat_completion_request(&MessageRequest {
+            model: "kimi-k2-thinking".to_string(),
+            max_tokens: 256,
+            system: None,
+            messages: vec![
+                InputMessage::user_text("hi"),
+                InputMessage {
+                    role: "assistant".to_string(),
+                    content: vec![InputContentBlock::ToolUse {
+                        id: "call_1".to_string(),
+                        name: "search".to_string(),
+                        input: json!({"q": "test"}),
+                    }],
+                },
+                InputMessage::user_tool_result("call_1", "result", false),
+            ],
+            tools: None,
+            tool_choice: None,
+            stream: true,
+            thinking: None,
+            reasoning_effort: None,
+            output_config: None,
+        });
+
+        let assistant = &payload["messages"][1];
+        assert_eq!(assistant["role"], json!("assistant"));
+        assert!(
+            assistant.get("reasoning_content").is_some(),
+            "kimi-k2-* assistant tool_call message must include reasoning_content; payload was: {payload}"
+        );
+        // Empty placeholder is fine; only the field's presence matters to Moonshot.
+        assert!(
+            !assistant["reasoning_content"].as_str().unwrap_or("").is_empty(),
+            "reasoning_content fallback must be non-empty"
         );
     }
 
