@@ -227,7 +227,6 @@ impl OpenAiCompatClient {
         let request = MessageRequest {
             stream: false,
             thinking: None,
-            reasoning_effort: None,
             output_config: None,
             ..request.clone()
         };
@@ -800,8 +799,19 @@ struct ErrorBody {
     message: Option<String>,
 }
 
+/// Returns true when the model or explicit reasoning_effort implies that every
+/// assistant message in the history MUST carry a `reasoning_content` field.
+/// Kimi (Moonshot AI) and DeepSeek thinking models enforce this requirement.
+fn model_needs_reasoning_content(request: &MessageRequest) -> bool {
+    if request.reasoning_effort.is_some() {
+        return true;
+    }
+    let m = request.model.to_ascii_lowercase();
+    m.starts_with("kimi-k2") || m.contains("deepseek-v4") || m.starts_with("glm-5")
+}
+
 fn build_chat_completion_request(request: &MessageRequest) -> Value {
-    let needs_reasoning_content = request.reasoning_effort.is_some();
+    let needs_reasoning_content = model_needs_reasoning_content(request);
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
         messages.push(json!({
@@ -830,6 +840,10 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
     }
     if let Some(tool_choice) = &request.tool_choice {
         payload["tool_choice"] = openai_tool_choice(tool_choice);
+    }
+
+    if let Some(effort) = &request.reasoning_effort {
+        payload["reasoning_effort"] = json!(effort);
     }
 
     payload
