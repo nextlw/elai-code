@@ -5222,13 +5222,34 @@ fn lines_for_thinking_block(app: &UiApp, text: &str, finished: bool) -> Vec<Line
     result
 }
 
-fn lines_for_system_note(note: &str) -> Vec<Line<'static>> {
+fn lines_for_system_note(note: &str, wrap_width: usize) -> Vec<Line<'static>> {
+    let style = Style::default().fg(theme().warn);
+    let indent = "  ";
+    let inner_width = wrap_width.saturating_sub(indent.len());
     let mut result = Vec::new();
     for line in note.lines() {
-        result.push(Line::from(Span::styled(
-            format!("  {line}"),
-            Style::default().fg(theme().warn),
-        )));
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut col: usize = 0;
+        let mut first = true;
+        for word in line.split_whitespace() {
+            let wlen = word.chars().count();
+            let need = if col > 0 { 1 + wlen } else { wlen };
+            if col > 0 && col + need > inner_width {
+                result.push(Line::from(std::mem::take(&mut spans)));
+                col = 0;
+                first = true;
+            }
+            if first {
+                spans.push(Span::styled(format!("{indent}{word}"), style));
+                first = false;
+            } else {
+                spans.push(Span::styled(format!(" {word}"), style));
+            }
+            col += need;
+        }
+        if !spans.is_empty() || line.trim().is_empty() {
+            result.push(Line::from(spans));
+        }
     }
     result.push(Line::from(""));
     result
@@ -5452,7 +5473,7 @@ fn lines_for_chat_entry(app: &UiApp, entry: &ChatEntry, wrap_width: usize) -> Ve
         ChatEntry::ThinkingBlock { text, finished } => {
             lines_for_thinking_block(app, text, *finished)
         }
-        ChatEntry::SystemNote(note) => lines_for_system_note(note.as_str()),
+        ChatEntry::SystemNote(note) => lines_for_system_note(note.as_str(), wrap_width),
         ChatEntry::SwdLogEntry { transactions, mode } => {
             lines_for_swd_log(transactions.as_slice(), *mode)
         }
