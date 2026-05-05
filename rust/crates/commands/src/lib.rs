@@ -2281,7 +2281,7 @@ pub fn handle_slash_command(
             use script_runner::{run_script, ScriptConfig};
             let mut cfg = ScriptConfig::new(&script);
             cfg.update = update;
-            let result = run_script(&script, args.as_deref(), cfg, |_| {});
+            let result = run_script(&script, args.as_deref(), &cfg, |_| {});
             let msg = match result {
                 Ok(output) => format!(
                     "Run\n  Script           {script}\n  Args             {}\n  Update           {}\n\n{}",

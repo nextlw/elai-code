@@ -3775,7 +3775,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 use script_runner::{run_script, ScriptConfig};
                 let mut cfg = ScriptConfig::new(&script);
                 cfg.update = update;
-                match run_script(&script, args.as_deref(), cfg, |_| {}) {
+                match run_script(&script, args.as_deref(), &cfg, |_| {}) {
                     Ok(output) => println!("{output}"),
                     Err(e) => eprintln!("run: {e}"),
                 }
