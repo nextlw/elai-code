@@ -106,8 +106,8 @@ fn roll_stats(rng: &mut Mulberry32, rarity: Rarity) -> HashMap<StatName, u8> {
 
 // ── Main entry ────────────────────────────────────────────────────────────────
 
-/// Deterministically generates `CompanionBones` from a user identifier.
-/// Given the same `user_id`, this always returns the same companion appearance.
+/// Determinístico para o usuário: sorteia rarity/pokemon_id/eye/hat/shiny/stats
+/// usando apenas `user_id` como semente. Útil como fallback antes da escolha.
 #[must_use]
 pub fn roll_bones(user_id: &str) -> CompanionBones {
     let seed = hash_string(user_id);
@@ -117,13 +117,37 @@ pub fn roll_bones(user_id: &str) -> CompanionBones {
     let pokemon_id = (rng.next_usize(POKEMON_COUNT as usize) + 1) as u16;
     let eye = ALL_EYES[rng.next_usize(ALL_EYES.len())];
     let hat = ALL_HATS[rng.next_usize(ALL_HATS.len())];
-    // Shiny: ~5% chance regardless of rarity
     let shiny = rng.next_f64() < 0.05;
     let stats = roll_stats(&mut rng, rarity);
 
     CompanionBones {
         rarity,
         pokemon_id,
+        eye,
+        hat,
+        shiny,
+        stats,
+    }
+}
+
+/// Determinístico para `(user_id, pokemon_id)`: cada mascote escolhido por um
+/// mesmo usuário tem rarity/stats/eye/hat/shiny próprios. Garante variação
+/// entre os 151 cards no picker e que a escolha seja idempotente.
+#[must_use]
+pub fn roll_bones_for(user_id: &str, pokemon_id: u16) -> CompanionBones {
+    let combined = format!("{user_id}:{pokemon_id}");
+    let seed = hash_string(&combined);
+    let mut rng = Mulberry32::new(seed);
+
+    let rarity = roll_rarity(&mut rng);
+    let eye = ALL_EYES[rng.next_usize(ALL_EYES.len())];
+    let hat = ALL_HATS[rng.next_usize(ALL_HATS.len())];
+    let shiny = rng.next_f64() < 0.05;
+    let stats = roll_stats(&mut rng, rarity);
+
+    CompanionBones {
+        rarity,
+        pokemon_id: pokemon_id.clamp(1, POKEMON_COUNT),
         eye,
         hat,
         shiny,

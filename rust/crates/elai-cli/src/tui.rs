@@ -148,6 +148,10 @@ pub enum TuiMsg {
     /// Bloco ANSI cru (ex.: sprite Pokémon). Empurrado como `ChatEntry::AnsiBlock`.
     #[allow(dead_code)]
     AnsiBlock(String),
+    /// Companion totalmente resolvido (após o LLM gerar nome/personalidade).
+    /// Atualiza o painel de stats e o sprite no header.
+    #[allow(dead_code)]
+    CompanionLoaded(runtime::buddy::Companion),
     /// Update da "linha viva" de uma task. O TUI substitui in-place a entry
     /// existente com mesmo `task_id` (scan reverso ≤ 8 entries) ou faz push.
     TaskProgress {
@@ -639,6 +643,9 @@ pub struct UiApp {
     /// draw — usado depois de overlays de tela cheia (ex.: buddy picker) que
     /// invalidam o buffer interno do ratatui.
     pub force_clear: bool,
+    /// Companion ativo do usuário — carregado em background na inicialização.
+    /// Usado pelo header (sprite) e pelo painel lateral (stats).
+    pub companion: Option<runtime::buddy::Companion>,
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub history_backup: String,
@@ -795,6 +802,7 @@ impl UiApp {
             indexed_paths: Vec::new(),
             should_quit: false,
             force_clear: false,
+            companion: load_initial_companion(),
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
@@ -1081,6 +1089,9 @@ impl UiApp {
             }
             TuiMsg::AnsiBlock(ansi) => {
                 self.push_chat(ChatEntry::AnsiBlock(ansi));
+            }
+            TuiMsg::CompanionLoaded(c) => {
+                self.companion = Some(c);
             }
             TuiMsg::TaskProgress {
                 task_id,
@@ -4436,17 +4447,6 @@ fn draw_header_divider(frame: &mut ratatui::Frame, area: Rect) {
     frame.render_widget(block, area);
 }
 
-// Mascote + "ELAI" (sem o ".CODE" gigante). Sem indent fixo: centralizado via Alignment::Center.
-const ELAI_ASCII: &str = "\
-██████████████████   ███████╗██╗      █████╗ ██╗\n\
-████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║\n\
-████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
-████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
-██████████████████   ███████╗███████╗██║  ██║██║\n\
-";
-
-// Largura do bloco mascote+ELAI (cada linha do ELAI_ASCII).
-const ELAI_BLOCK_WIDTH: usize = 48;
 
 /// Encurta o caminho atual:
 /// 1. Substitui `$HOME` por `~`.
@@ -4498,23 +4498,27 @@ fn shorten_cwd(max_width: usize) -> String {
     s
 }
 
-fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
-    let text_area = area;
+// Mascote + "ELAI" — banner ASCII original do header.
+const ELAI_ASCII: &str = "\
+██████████████████   ███████╗██╗      █████╗ ██╗\n\
+████████▓▓▄▄▓▓▄▄▓▓   ██╔════╝██║     ██╔══██╗██║\n\
+████████▓▓██▓▓██▓▓   █████╗  ██║     ███████║██║\n\
+████████▓▓▀▀▓▓▀▀▓▓   ██╔══╝  ██║     ██╔══██║██║\n\
+██████████████████   ███████╗███████╗██║  ██║██║\n\
+";
 
-    // corpo do mascote e texto ELAI.CODE: laranja claro
+const ELAI_BLOCK_WIDTH: usize = 48;
+
+fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     let body_style = Style::default().fg(theme().easter_egg.body);
-    // olhos (▄ ▀ e █ depois de ▓): laranja saturado
     let eye_style = Style::default().fg(theme().easter_egg.warm);
-    // ▓ células: cavidade dos olhos — marrom escuro visível
     let dot_style = Style::default().fg(theme().easter_egg.dark);
     let dim = Style::default().fg(theme().text_secondary);
 
     let username = whoami_user();
-    // Texto vai centralizado na coluna; reserva apenas 1 col de respiro de cada lado.
-    let cwd_budget = (text_area.width as usize).saturating_sub(2);
+    let cwd_budget = (area.width as usize).saturating_sub(2);
     let cwd = shorten_cwd(cwd_budget);
 
-    // Margem mínima de 1 linha acima do mascote.
     let mut lines: Vec<Line> = vec![Line::from(Span::raw(""))];
     lines.extend(ELAI_ASCII.lines().map(|l| {
         #[derive(Clone, Copy, PartialEq)]
@@ -4523,11 +4527,9 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
             Dot,
             Eye,
         }
-
         let mut spans: Vec<Span> = Vec::new();
         let mut current = String::new();
         let mut seg = Seg::Body;
-
         for ch in l.chars() {
             let next = match ch {
                 '▓' => Seg::Dot,
@@ -4561,10 +4563,6 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
         }
         Line::from(spans)
     }));
-
-    // Braços do mascote + linha de fechamento do "ELAI" (╚══════╝...).
-    // Largura total = 7 + 3 + 2 + 3 + 4 + 27 = 46 chars; padding para 48 mantém
-    // o alinhamento vertical com as linhas do mascote/ELAI sob `Alignment::Center`.
     lines.push(Line::from(vec![
         Span::raw("         "),
         Span::styled("███", body_style),
@@ -4574,23 +4572,19 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
         Span::styled("╚══════╝╚══════╝╚═╝  ╚═╝╚═╝", body_style),
         Span::raw(" ".repeat(ELAI_BLOCK_WIDTH.saturating_sub(46))),
     ]));
-
     lines.push(Line::from(Span::raw("")));
-    lines.push(Line::from(vec![
-        Span::styled(
-            rust_i18n::t!("tui.header.welcome", username = username).to_string(),
-            Style::default()
-                .fg(theme().easter_egg.warm)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        rust_i18n::t!("tui.header.welcome", username = username).to_string(),
+        Style::default()
+            .fg(theme().easter_egg.warm)
+            .add_modifier(Modifier::BOLD),
+    )]));
     lines.push(Line::from(Span::styled(cwd, dim)));
 
     let paragraph = Paragraph::new(lines)
         .block(Block::default())
         .alignment(Alignment::Center);
-    frame.render_widget(paragraph, text_area);
+    frame.render_widget(paragraph, area);
 }
 
 fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
@@ -4606,42 +4600,42 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(Span::styled(
-            format!("  {}", rust_i18n::t!("tui.side_panel.run_init")),
-            muted,
-        )),
-        Line::from(Span::styled(
-            format!("  {}", rust_i18n::t!("tui.side_panel.shortcuts")),
-            muted,
-        )),
-        Line::from(Span::styled(
-            format!("  {}", rust_i18n::t!("tui.side_panel.slash_palette")),
-            muted,
-        )),
-        Line::from(Span::styled(
-            format!(
-                "  {}",
-                if app.read_mode {
-                    rust_i18n::t!("tui.side_panel.read_mode_hint")
-                } else if app.mouse_capture_enabled {
-                    rust_i18n::t!("tui.side_panel.mouse_on_hint")
-                } else {
-                    rust_i18n::t!("tui.side_panel.mouse_off_hint")
-                }
-            ),
-            muted,
-        )),
-        Line::from(Span::raw("")),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                rust_i18n::t!("tui.side_panel.recent_activity_header").to_string(),
-                Style::default()
-                    .fg(theme().primary_accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
     ];
+    lines.push(Line::from(Span::styled(
+        format!("  {}", rust_i18n::t!("tui.side_panel.run_init")),
+        muted,
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", rust_i18n::t!("tui.side_panel.shortcuts")),
+        muted,
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", rust_i18n::t!("tui.side_panel.slash_palette")),
+        muted,
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {}",
+            if app.read_mode {
+                rust_i18n::t!("tui.side_panel.read_mode_hint")
+            } else if app.mouse_capture_enabled {
+                rust_i18n::t!("tui.side_panel.mouse_on_hint")
+            } else {
+                rust_i18n::t!("tui.side_panel.mouse_off_hint")
+            }
+        ),
+        muted,
+    )));
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            rust_i18n::t!("tui.side_panel.recent_activity_header").to_string(),
+            Style::default()
+                .fg(theme().primary_accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
 
     if app.recent_sessions.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -5129,6 +5123,8 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
 
 /// Onboarding: renderiza a dica atual centralizada quando `app.chat` está vazio.
 fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
+    use ansi_to_tui::IntoText;
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     let Some((tip, idx, total)) = app.current_tip() else {
         return lines;
@@ -5146,6 +5142,40 @@ fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
         .add_modifier(Modifier::BOLD);
     let body_style = Style::default().fg(theme().text_primary);
     let dim = Style::default().fg(theme().text_secondary);
+
+    // Mascote centralizado acima das dicas. Cada sprite tem ~28 cols de largura;
+    // calcula o pad para centralizar horizontalmente na largura do chat.
+    if let Some(comp) = app.companion.as_ref() {
+        let raw = runtime::buddy::sprite_for_id(comp.pokemon_id);
+        if let Ok(sprite_text) = raw.into_text() {
+            let sprite_width = sprite_text
+                .lines
+                .iter()
+                .map(|l| l.width())
+                .max()
+                .unwrap_or(0);
+            let sprite_pad = " ".repeat(width.saturating_sub(sprite_width) / 2);
+            lines.push(Line::from(Span::raw("")));
+            for sprite_line in sprite_text.lines {
+                let mut spans: Vec<Span<'static>> = vec![Span::raw(sprite_pad.clone())];
+                spans.extend(sprite_line.spans);
+                lines.push(Line::from(spans));
+            }
+            // Linha-resumo (Nome · Mascote #ID) centralizada abaixo do sprite.
+            let summary = comp.summary_line();
+            let summary_w = summary.chars().count();
+            let summary_pad = " ".repeat(width.saturating_sub(summary_w) / 2);
+            lines.push(Line::from(vec![
+                Span::raw(summary_pad),
+                Span::styled(
+                    summary,
+                    Style::default()
+                        .fg(theme().easter_egg.warm)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+    }
 
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(Span::raw("")));
@@ -7517,6 +7547,29 @@ fn whoami_user() -> String {
     env::var("USER")
         .or_else(|_| env::var("USERNAME"))
         .unwrap_or_else(|_| "User".to_string())
+}
+
+/// Reconstrói um `Companion` síncrono (sem chamar LLM) a partir do que está em
+/// disco — usado pelo header/painel de stats antes do hatch de background
+/// terminar. Se não houver registro, usa apenas `roll_bones`.
+fn load_initial_companion() -> Option<runtime::buddy::Companion> {
+    let user_id = whoami_user();
+    let stored = runtime::buddy::load_stored_companion();
+    let bones = match stored.as_ref().and_then(|s| s.pokemon_id) {
+        Some(id) => runtime::buddy::roll_bones_for(&user_id, id),
+        None => runtime::buddy::roll_bones(&user_id),
+    };
+    let (soul, hatched_at) = match stored {
+        Some(s) => (s.soul, s.hatched_at),
+        None => (
+            runtime::buddy::CompanionSoul {
+                name: runtime::buddy::pokemon_name(bones.pokemon_id).to_string(),
+                personality: String::new(),
+            },
+            0,
+        ),
+    };
+    Some(runtime::buddy::Companion::from_parts(bones, soul, hatched_at))
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

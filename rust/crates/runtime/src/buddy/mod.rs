@@ -21,7 +21,7 @@ pub mod hatch;
 pub mod sprites;
 pub mod types;
 
-pub use generator::roll_bones;
+pub use generator::{roll_bones, roll_bones_for};
 pub use hatch::{
     load_or_hatch, load_stored_companion, save_pokemon_choice, save_stored_companion,
     update_pokemon_id,

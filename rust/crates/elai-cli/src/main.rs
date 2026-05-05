@@ -2198,15 +2198,14 @@ fn run_tui_repl(
             };
 
             if let Ok(companion) = companion {
-                // Envia o sprite ANSI via canal dedicado — o renderer parseia
-                // com `ansi-to-tui` e produz Line/Span coloridos no chat.
-                let sprite = runtime::buddy::sprite_for_id(companion.pokemon_id).to_string();
-                let _ = buddy_tx.send(tui::TuiMsg::AnsiBlock(sprite));
-                let mut msg = companion.summary_line();
+                // O sprite vai pro header (CompanionLoaded). Notifica nascimento.
                 if is_new {
-                    msg.push_str("\n✨ Seu companheiro nasceu!");
+                    let _ = buddy_tx.send(tui::TuiMsg::SystemNote(format!(
+                        "✨ Seu companheiro nasceu: {}",
+                        companion.summary_line()
+                    )));
                 }
-                let _ = buddy_tx.send(tui::TuiMsg::SystemNote(msg));
+                let _ = buddy_tx.send(tui::TuiMsg::CompanionLoaded(companion));
             }
         });
     }
@@ -2820,21 +2819,18 @@ fn handle_buddy_slash(arg: Option<&str>, app: &mut tui::UiApp) {
                     )));
                     return;
                 }
-                let mut bones = runtime::buddy::roll_bones(&user_id);
-                bones.pokemon_id = id;
+                let bones = runtime::buddy::roll_bones_for(&user_id, id);
                 if let Some(stored) = runtime::buddy::load_stored_companion() {
                     let companion = runtime::buddy::Companion::from_parts(
                         bones,
                         stored.soul,
                         stored.hatched_at,
                     );
-                    let sprite =
-                        runtime::buddy::sprite_for_id(companion.pokemon_id).to_string();
-                    app.push_chat(tui::ChatEntry::AnsiBlock(sprite));
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "✨ Mascote atualizado: {}",
                         companion.summary_line()
                     )));
+                    app.companion = Some(companion);
                 }
             } else {
                 app.push_chat(tui::ChatEntry::SystemNote("Seleção cancelada.".into()));
@@ -2844,10 +2840,10 @@ fn handle_buddy_slash(arg: Option<&str>, app: &mut tui::UiApp) {
             let stored = runtime::buddy::load_stored_companion();
             match stored {
                 Some(s) => {
-                    let mut bones = runtime::buddy::roll_bones(&user_id);
-                    if let Some(id) = s.pokemon_id {
-                        bones.pokemon_id = id;
-                    }
+                    let bones = match s.pokemon_id {
+                        Some(id) => runtime::buddy::roll_bones_for(&user_id, id),
+                        None => runtime::buddy::roll_bones(&user_id),
+                    };
                     let companion =
                         runtime::buddy::Companion::from_parts(bones, s.soul, s.hatched_at);
                     let sprite =

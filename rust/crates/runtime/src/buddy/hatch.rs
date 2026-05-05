@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::generator::roll_bones;
+use super::generator::{roll_bones, roll_bones_for};
 use super::types::{
     pokemon_name, Companion, CompanionBones, CompanionSoul, PokemonId, StoredCompanion,
 };
@@ -112,8 +112,7 @@ pub fn save_pokemon_choice<E, F>(
 where
     F: FnOnce(&str) -> Result<String, E>,
 {
-    let mut bones = roll_bones(user_id);
-    bones.pokemon_id = chosen;
+    let bones = roll_bones_for(user_id, chosen);
     let prompt = hatch_prompt(&bones);
     let raw = call_llm(&prompt)?;
     let soul = parse_soul_from_response(&raw, &bones);
@@ -166,11 +165,13 @@ pub fn load_or_hatch<E, F>(user_id: &str, call_llm: F) -> Result<Companion, E>
 where
     F: FnOnce(&str) -> Result<String, E>,
 {
-    let mut bones = roll_bones(user_id);
     if let Some(stored) = load_stored_companion() {
-        if let Some(id) = stored.pokemon_id {
-            bones.pokemon_id = id;
-        }
+        // Quando há um pokemon_id escolhido, deriva os bones daquele id.
+        // Sem id (legado), cai no `roll_bones(user_id)` deterministico.
+        let bones = match stored.pokemon_id {
+            Some(id) => roll_bones_for(user_id, id),
+            None => roll_bones(user_id),
+        };
         return Ok(Companion::from_parts(bones, stored.soul, stored.hatched_at));
     }
     hatch_with_llm(user_id, call_llm)
