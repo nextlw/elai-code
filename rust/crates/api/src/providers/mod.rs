@@ -237,8 +237,26 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     ("mimo-v2-omni", OPENCODE_GO_METADATA),
     ("mimo-v2.5-pro", OPENCODE_GO_METADATA),
     ("mimo-v2.5", OPENCODE_GO_METADATA),
+    // ── OpenCode Zen (free / managed tier) ──────────────────────────────────
     ("big-pickle", OPENCODE_ZEN_METADATA),
+    // minimax free
+    ("minimax-m2.1", OPENCODE_ZEN_METADATA),
+    ("minimax-m2.1-free", OPENCODE_ZEN_METADATA),
     ("minimax-m2.5-free", OPENCODE_ZEN_METADATA),
+    // mimo free
+    ("mimo-v2-flash-free", OPENCODE_ZEN_METADATA),
+    ("mimo-v2-omni-free", OPENCODE_ZEN_METADATA),
+    ("mimo-v2-pro-free", OPENCODE_ZEN_METADATA),
+    // kimi free / thinking
+    ("kimi-k2", OPENCODE_ZEN_METADATA),
+    ("kimi-k2-thinking", OPENCODE_ZEN_METADATA),
+    ("kimi-k2.5-free", OPENCODE_ZEN_METADATA),
+    // glm free
+    ("glm-5-free", OPENCODE_ZEN_METADATA),
+    ("glm-4.7-free", OPENCODE_ZEN_METADATA),
+    // qwen free
+    ("qwen3.6-plus-free", OPENCODE_ZEN_METADATA),
+    // outros free
     ("hy3-preview-free", OPENCODE_ZEN_METADATA),
     ("ling-2.6-flash-free", OPENCODE_ZEN_METADATA),
     ("trinity-large-preview-free", OPENCODE_ZEN_METADATA),

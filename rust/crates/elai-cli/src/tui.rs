@@ -3614,12 +3614,30 @@ const OPENCODE_GO_MODELS: &[&str] = &[
 ];
 
 const OPENCODE_ZEN_FREE_MODELS: &[&str] = &[
-    "trinity-large-preview-free",
+    // destaque / flagship free
     "big-pickle",
+    // minimax
+    "minimax-m2.1",
+    "minimax-m2.1-free",
     "minimax-m2.5-free",
+    // mimo (xiaomi)
+    "mimo-v2-flash-free",
+    "mimo-v2-omni-free",
+    "mimo-v2-pro-free",
+    // kimi / moonshot
+    "kimi-k2",
+    "kimi-k2-thinking",
+    "kimi-k2.5-free",
+    // glm (zhipu)
+    "glm-5-free",
+    "glm-4.7-free",
+    // qwen (alibaba)
+    "qwen3.6-plus-free",
+    // arcee / outros
+    "trinity-large-preview-free",
+    "nemotron-3-super-free",
     "hy3-preview-free",
     "ling-2.6-flash-free",
-    "nemotron-3-super-free",
 ];
 
 const XAI_MODELS: &[&str] = &["grok-4.1.1", "grok-4.1", "grok-4"];
