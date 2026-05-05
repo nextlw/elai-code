@@ -262,81 +262,130 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
-  # ── Atualiza Formula/elai.rb automaticamente ───────────────────────────────
+  # ── Atualiza homebrew-elai (Formula) e scoop bucket ──────────────────────────
   update-formula:
-    name: Update Homebrew formula
+    name: Update Homebrew formula + Scoop bucket
     needs: [release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Download checksums
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "$TAG" --pattern checksums.txt --output checksums.txt
+          gh release download "$TAG" \
+            --repo nextlw/elai-code \
+            --pattern checksums.txt \
+            --output checksums.txt
           cat checksums.txt
+
+      # ── Homebrew: push para nextlw/homebrew-elai ──────────────────────────
+      - name: Checkout homebrew-elai
+        uses: actions/checkout@v4
+        with:
+          repository: nextlw/homebrew-elai
+          token: ${{ secrets.GITHUB_TOKEN_CLASSIC }}
+          path: homebrew-elai
 
       - name: Update Formula/elai.rb
         env:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#v}"
+          SHA_MACOS_ARM64=$(grep "elai-macos-arm64$"  checksums.txt | awk '{print $1}')
+          SHA_MACOS_X86=$(grep   "elai-macos-x86_64$" checksums.txt | awk '{print $1}')
+          SHA_LINUX_ARM64=$(grep "elai-linux-arm64$"  checksums.txt | awk '{print $1}')
+          SHA_LINUX_X86=$(grep   "elai-linux-x86_64$" checksums.txt | awk '{print $1}')
 
-          SHA_MACOS_ARM64=$(grep "elai-macos-arm64$"    checksums.txt | awk '{print $1}')
-          SHA_MACOS_X86=$(grep  "elai-macos-x86_64$"   checksums.txt | awk '{print $1}')
-          SHA_LINUX_X86=$(grep  "elai-linux-x86_64$"   checksums.txt | awk '{print $1}')
-          SHA_LINUX_ARM64=$(grep "elai-linux-arm64$"   checksums.txt | awk '{print $1}')
+          mkdir -p homebrew-elai/Formula
+          cat > homebrew-elai/Formula/elai.rb <<FORMULA
+class Elai < Formula
+  desc "CLI de agente de IA"
+  homepage "https://github.com/nextlw/elai-code"
+  version "${VERSION}"
+  license "MIT"
 
-          cat > Formula/elai.rb <<FORMULA
-          class Elai < Formula
-            desc "CLI de agente de IA"
-            homepage "https://github.com/nextlw/elai-code"
-            version "${VERSION}"
-            license "MIT"
+  on_macos do
+    on_arm do
+      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-arm64"
+      sha256 "${SHA_MACOS_ARM64}"
+    end
+    on_intel do
+      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-x86_64"
+      sha256 "${SHA_MACOS_X86}"
+    end
+  end
 
-            on_macos do
-              on_arm do
-                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-arm64"
-                sha256 "${SHA_MACOS_ARM64}"
-              end
-              on_intel do
-                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-x86_64"
-                sha256 "${SHA_MACOS_X86}"
-              end
-            end
+  on_linux do
+    on_arm do
+      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-arm64"
+      sha256 "${SHA_LINUX_ARM64}"
+    end
+    on_intel do
+      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-x86_64"
+      sha256 "${SHA_LINUX_X86}"
+    end
+  end
 
-            on_linux do
-              on_arm do
-                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-arm64"
-                sha256 "${SHA_LINUX_ARM64}"
-              end
-              on_intel do
-                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-x86_64"
-                sha256 "${SHA_LINUX_X86}"
-              end
-            end
+  def install
+    bin.install Dir["elai-*"].first => "elai"
+  end
 
-            def install
-              bin.install Dir["elai-*"].first => "elai"
-            end
+  test do
+    assert_match version.to_s, shell_output("\#{bin}/elai --version")
+  end
+end
+FORMULA
 
-            test do
-              assert_match version.to_s, shell_output("\#{bin}/elai --version")
-            end
-          end
-          FORMULA
-
-      - name: Commit updated formula
+      - name: Commit + push homebrew-elai
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          cd homebrew-elai
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/elai.rb
-          git diff --staged --quiet || git commit -m "chore: update homebrew formula to ${TAG}"
+          git diff --staged --quiet || git commit -m "chore: update formula to ${TAG}"
+          git push origin main
+
+      # ── Scoop: atualiza bucket/elai.json no próprio elai-code ─────────────
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: elai-code
+
+      - name: Update bucket/elai.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          SHA_WIN=$(grep "elai-windows-x86_64.exe$" checksums.txt | awk '{print $1}')
+
+          python3 - <<PYEOF
+import json
+version = "${VERSION}"
+sha     = "${SHA_WIN}"
+path    = "elai-code/bucket/elai.json"
+with open(path) as f:
+    m = json.load(f)
+m["version"] = version
+m["architecture"]["64bit"]["url"] = (
+    f"https://github.com/nextlw/elai-code/releases/download/v{version}/elai-windows-x86_64.exe"
+)
+m["architecture"]["64bit"]["hash"] = sha
+with open(path, "w") as f:
+    json.dump(m, f, indent=2)
+    f.write("\n")
+PYEOF
+
+      - name: Commit + push elai-code (scoop bucket)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd elai-code
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/elai.json
+          git diff --staged --quiet || git commit -m "chore: update scoop bucket to ${TAG}"
           git push origin main
