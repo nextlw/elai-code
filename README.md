@@ -31,7 +31,7 @@ curl -fsSL https://get.nexcode.live | sh
 **Windows — Scoop (recomendado)**
 
 ```powershell
-scoop bucket add nextlw https://github.com/nextlw/homebrew-elai
+scoop bucket add nextlw https://github.com/nextlw/elai-code
 scoop install nextlw/elai
 ```
 
@@ -47,19 +47,13 @@ irm https://get.nexcode.live/ps | iex
 powershell -Command "irm https://get.nexcode.live/ps | iex"
 ```
 
-O script detecta automaticamente o Homebrew (macOS) e o Scoop (Windows) e usa o gerenciador de pacotes quando disponível. Você pode forçar o download direto do binário com:
-
-```sh
-ELAI_NO_BREW=1 curl -fsSL https://get.nexcode.live | sh    # macOS/Linux sem brew
-$env:ELAI_NO_SCOOP=1; irm https://get.nexcode.live/ps | iex  # Windows sem scoop
-```
-
 **Atualizar**
 
 ```sh
-brew upgrade nextlw/elai/elai        # macOS Homebrew
-scoop update elai                    # Windows Scoop
-curl -fsSL https://get.nexcode.live | sh  # script (qualquer plataforma)
+brew upgrade nextlw/elai/elai             # macOS Homebrew
+scoop update elai                         # Windows Scoop
+curl -fsSL https://get.nexcode.live | sh  # macOS/Linux script
+irm https://get.nexcode.live/ps | iex     # Windows script
 ```
 
 After installing, open a new terminal and run:
