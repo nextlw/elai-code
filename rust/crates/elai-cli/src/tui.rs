@@ -628,7 +628,9 @@ pub struct UiApp {
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub history_backup: String,
-    pub spinner_state: SpinnerState,
+    /// Olhos animados para o rodapé "thinking" (olhinhos mexendo).
+    pub think_eyes_spinner: SpinnerState,
+    pub tool_spinner: SpinnerState,
     pub dots_spinner: SpinnerState,
     pub last_tick: Instant,
     /// Índice aleatório da frase atual no rodapé thinking.
@@ -657,375 +659,97 @@ pub struct UiApp {
     pub ultrathink_active: bool,
 }
 
-/// Creates an animated eyes spinner with 2 dots (◉) that move together.
-/// Sequence: neutral → left → right → up → down → blink → repeat.
-/// 
-/// The dots move in sync to avoid "strabismus" effect.
-/// Blinking reduces dot height (─ ·) for a natural blink effect.
-pub fn make_eye_dots_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    // 20 frames: neutral (2) + left (3) + right (3) + up (3) + down (3) + blink (3) + pause (3)
-    let frames: Vec<String> = vec![
-        // Neutral - dots together, eyes open
-        "  ·  ·  ".into(),
-        "  ·  ·  ".into(),
-        // Look left - both dots shift left together
-        " ·  ·  ".into(),
-        "·  ·   ".into(),
-        " ·  ·  ".into(),
-        // Look right - both dots shift right together
-        "  · ·  ".into(),
-        "   · · ".into(),
-        "  · ·  ".into(),
-        // Look up - both dots shift up together
-        " ·   · ".into(),
-        "─ ·  ·".into(),
-        " ·   · ".into(),
-        // Look down - both dots shift down together
-        "  · ·  ".into(),
-        " ·   · ".into(),
-        "─ ·  ·".into(),
-        // Blink - height reduces
-        "─     ─".into(),
-        "·     ·".into(),
-        "─     ─".into(),
-        // Pause before cycle
-        "  ·  ·  ".into(),
-        "  ·  ·  ".into(),
-        "  ·  ·  ".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(90))
-}
-
-/// Creates a cute ASCII eyes spinner for the thinking indicator.
-/// 
-/// Uses fixed-width ASCII art for maximum terminal compatibility.
-/// Inspired by anime-style "thinking" faces.
-/// 
-/// Animation: blinks and looks around in a cute way.
-/// 
-/// Frames:
-/// ```txt
-/// ( · · ) - normal eyes
-/// ( - - ) - closing
-/// ( ^ ^ ) - looking up
-/// ( v v ) - looking down
-/// ( < < ) - looking left
-/// ( > > ) - looking right
-/// ```
-pub fn make_ascii_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    // 16 frames - cute anime-style eyes that blink and look around
-    let frames: Vec<String> = vec![
-        // Normal (2 frames)
-        "( · · )".into(),
-        "( · · )".into(),
-        // Blink animation (4 frames: open -> closed -> closed -> open)
-        "( · · )".into(),
-        "( - - )".into(),
-        "( - - )".into(),
-        "( · · )".into(),
-        // Look up (2 frames)
-        "( ^ ^ )".into(),
-        "( ^ ^ )".into(),
-        // Look right (2 frames)
-        "( > > )".into(),
-        "( > > )".into(),
-        // Look down (2 frames)
-        "( v v )".into(),
-        "( v v )".into(),
-        // Look left (2 frames)
-        "( < < )".into(),
-        "( < < )".into(),
-        // Normal (2 frames) - back to center
-        "( · · )".into(),
-        "( · · )".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(120))
-}
-
-/// Creates a minimalist dots spinner - simple and clean.
-/// 
-/// Frames: `(..)` → `(--)` → `(..)` → `(oo)`
-/// 
-/// Best for: terminals with limited Unicode support.
-pub fn make_minimal_dots_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "(..)".into(),
-        "(--)".into(),
-        "(..)".into(),
-        "(oo)".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(200))
-}
-
-/// Creates a bracket-style spinner - very terminal-native.
-/// 
-/// Frames: `[ .. ]` → `[ -- ]` → `[ .. ]`
-/// 
-/// Best for: pure ASCII environments, maximum compatibility.
-pub fn make_bracket_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "[ .. ]".into(),
-        "[ -- ]".into(),
-        "[ .. ]".into(),
-        "[..]".into(),
-        "[..]".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(180))
-}
-
-/// Creates a cute emoji-style eyes spinner.
-/// 
-/// Uses combining characters for anime aesthetic.
-/// Frames: `(˶˶)` → `(- -)` → `(^^)`
-/// 
-/// Best for: modern terminals with emoji support.
-pub fn make_cute_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "(˶˶)".into(),
-        "( - )".into(),
-        "(^^)".into(),
-        "( · )".into(),
-        "(˶˶)".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(150))
-}
-
-/// Creates an eyes looking side-to-side spinner.
-/// 
-/// Frames: `(<<)` → `(..)` → `(>>)` → `(..)`
-/// 
-/// Best for: when you want more movement feel.
-pub fn make_side_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "(<<)".into(),
-        "(..)".into(),
-        "(>>)".into(),
-        "(..)".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(160))
-}
-
-/// Creates an eyes spinner with simple blink and up-look.
-/// Frames: `( .. )` → `( -- )` → `( .. )` → `( ^^ )`
-pub fn make_simple_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "( .. )".into(),
-        "( -- )".into(),
-        "( .. )".into(),
-        "( ^^ )".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(180))
-}
-
-/// Creates a cute face eyes spinner with expressions.
-/// Frames: `( o.o )` → `( -.- )` → `( o.o )` → `( ^.^ )`
-pub fn make_cute_face_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "( o.o )".into(),
-        "( -.- )".into(),
-        "( o.o )".into(),
-        "( ^.^ )".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(180))
-}
-
-/// Creates a bracket-style eyes spinner with up-look.
-/// Frames: `[ .. ]` → `[ -- ]` → `[ .. ]` → `[ ^^ ]`
-pub fn make_bracket_up_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "[ .. ]".into(),
-        "[ -- ]".into(),
-        "[ .. ]".into(),
-        "[ ^^ ]".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(180))
-}
-
-/// Creates an open/close blink eyes spinner.
-/// 
-/// Frames: `( . . )` → `( - - )` → `( o o )` → `( - - )`
-/// 
-/// Best for: classic "thinking" animation feel.
-pub fn make_blink_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "( . . )".into(),
-        "( - - )".into(),
-        "( . . )".into(),
-        "( o o )".into(),
-        "( - - )".into(),
-        "( . . )".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(140))
-}
-
-/// Creates a simple bullet eyes spinner.
-/// 
-/// Frames: `[●  ]` → `[ ● ]` → `[  ●]` → `[ ● ]`
-/// 
-/// Best for: movement-focused, smaller footprint.
-pub fn make_bullet_eyes_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "[●  ]".into(),
-        "[ ● ]".into(),
-        "[  ●]".into(),
-        "[ ● ]".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(100))
-}
-
-/// Creates a thinking face spinner.
-/// 
-/// Frames: `(*_*)` → `(-_-)` → `(*_*)` → `(o_o)`
-/// 
-/// Best for: playful, expressive thinking.
-pub fn make_thinking_face_spinner() -> SpinnerState {
-    use std::time::Duration;
-
-    let frames: Vec<String> = vec![
-        "(*_*)".into(),
-        "(-_-)".into(),
-        "(*_*)".into(),
-        "(o_o)".into(),
-        "(-_-)".into(),
-        "(*_*)".into(),
-    ];
-
-    SpinnerState::custom(frames, Duration::from_millis(150))
-}
-
-/// Creates a mega diverse eyes spinner that feels like a living "thinking" face.
-/// 
-/// Key design principles:
-/// - SLOW timing (200-300ms per frame) for natural feel
-/// - Organic transitions between expressions
-/// - One cohesive animated character, not 12 styles alternating
-/// - Variable timing to avoid mechanical feeling
-/// - Total cycle: ~30 seconds
+/// Spinner de "rosto pensando" com timing orgânico.
+///
+/// Timing real via repetição de frames (base = 80ms por tick):
+///   piscada rápida     = 1 tick  (80ms)
+///   saccade (movimento)= 1 tick  (80ms)
+///   segurar direção    = 3-5 ticks (240-400ms)
+///   descanso neutro    = 5-10 ticks (400-800ms)
+///   spacing out        = 10-14 ticks (800ms-1.1s)
+///
+/// Padrões humanos incluídos: double-blink após stare longo,
+/// micro-glance involuntário, re-olhar para o mesmo ponto,
+/// squint de concentração, "flash" de ideia.
 pub fn make_mega_eyes_spinner() -> SpinnerState {
     use std::time::Duration;
 
-    // Each "expression group" has frames with VARIABLE timing
-    // We use Duration::custom with per-frame timing via repeated frames
-    // 
-    // Structure: blink → look around → blink → expressions → blink → repeat
-    let frames: Vec<String> = vec![
-        // ── 1. Eyes opening (slow natural wake) ────────────
-        "( · · )".into(),  // 300ms - just opened
-        "( · · )".into(),  // 300ms - settling
-        "( · · )".into(),  // 200ms - comfortable
-        // ── 2. Natural blink cycle ─────────────────────────
-        "( · · )".into(),  // 250ms
-        "( - - )".into(),  // 200ms - closing
-        "( - - )".into(),  // 150ms - closed
-        "( - - )".into(),  // 150ms - closed
-        "( · · )".into(),  // 250ms - opening
-        "( · · )".into(),  // 300ms - open again
-        "( · · )".into(),  // 200ms
-        // ── 3. Look around (natural curiosity) ─────────────
-        "( ^ ^ )".into(),  // 350ms - look up (thinking)
-        "( ^ ^ )".into(),  // 250ms
-        "( · · )".into(),  // 200ms - back to neutral
-        "( > > )".into(),  // 300ms - look right
-        "( > > )".into(),  // 250ms
-        "( · · )".into(),  // 200ms - back
-        "( v v )".into(),  // 350ms - look down (processing)
-        "( v v )".into(),  // 250ms
-        "( · · )".into(),  // 200ms - back
-        "( < < )".into(),  // 300ms - look left
-        "( < < )".into(),  // 250ms
-        "( · · )".into(),  // 200ms - back to center
-        // ── 4. Another natural blink ──────────────────────
-        "( · · )".into(),  // 300ms
-        "( - - )".into(),  // 200ms - closing
-        "( - - )".into(),  // 150ms
-        "( · · )".into(),  // 250ms - opening
-        "( · · )".into(),  // 200ms
-        // ── 5. Quick look sequence ─────────────────────────
-        "( > > )".into(),  // 250ms
-        "( · · )".into(),  // 150ms - back
-        "( < < )".into(),  // 250ms
-        "( · · )".into(),  // 150ms - back
-        "( ^ ^ )".into(),  // 300ms - look up
-        "( · · )".into(),  // 200ms - back
-        // ── 6. Different expression style (brackets) ───────
-        "[ .. ]".into(),    // 300ms - slight change
-        "[ .. ]".into(),    // 250ms
-        "[ -- ]".into(),   // 200ms - blink
-        "[ .. ]".into(),    // 250ms
-        "[ ^^ ]".into(),    // 350ms - look up
-        "[ .. ]".into(),    // 300ms
-        "[ .. ]".into(),    // 200ms
-        // ── 7. Back to parens, another blink ─────────────
-        "( · · )".into(),  // 300ms
-        "( - - )".into(),  // 200ms
-        "( · · )".into(),  // 250ms
-        // ── 8. Side glances (curious) ──────────────────────
-        "(<<)".into(),     // 300ms - look left hard
-        "( .. )".into(),   // 200ms - neutral
-        "(>>)".into(),     // 300ms - look right
-        "( .. )".into(),   // 200ms - neutral
-        "( · · )".into(),  // 250ms
-        // ── 9. Deep thinking expression ───────────────────
-        "( o.o )".into(),  // 350ms - focused
-        "( o.o )".into(),  // 300ms
-        "( -.- )".into(),  // 250ms - slight wince
-        "( o.o )".into(),  // 300ms
-        "( ^.^ )".into(),  // 350ms - happy thought
-        "( o.o )".into(),  // 300ms
-        // ── 10. Final blink and settle ────────────────────
-        "( · · )".into(),  // 300ms
-        "( - - )".into(),  // 200ms - closing
-        "( - - )".into(),  // 150ms
-        "( - - )".into(),  // 150ms - stay closed
-        "( · · )".into(),  // 300ms - open
-        "( · · )".into(),  // 300ms - settle
-        "( · · )".into(),  // 200ms
-        // Back to start - seamless loop
-        "( · · )".into(),  // 200ms
-    ];
+    // Macro para repetir um frame n vezes (simula duração = n * 80ms)
+    macro_rules! rep {
+        ($frame:expr, $n:expr) => {
+            std::iter::repeat_n($frame.to_string(), $n)
+        };
+    }
 
-    SpinnerState::custom(frames, Duration::from_millis(200))
-}
+    let frames: Vec<String> = std::iter::empty()
+        // ── Fase 1: Acomodando (2.08s) ──────────────────────────────────────
+        .chain(rep!("( · · )", 5))  // 400ms — neutro inicial
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada rápida
+        .chain(rep!("( · · )", 6))  // 480ms — voltou, acomodando
+        .chain(rep!("( - - )", 1))  // 80ms  — double-blink (natural)
+        .chain(rep!("( · · )", 4))  // 320ms — estabilizou
+        // ── Fase 2: Olha pra direita (0.8s) ─────────────────────────────────
+        .chain(rep!("( > > )", 1))  // 80ms  — saccade rápido
+        .chain(rep!("( > > )", 3))  // 240ms — segura olhando
+        .chain(rep!("( · · )", 1))  // 80ms  — volta
+        .chain(rep!("( · · )", 4))  // 320ms — descanso
+        // ── Fase 3: Spacing out (2.88s) ──────────────────────────────────────
+        .chain(rep!("( · · )", 10)) // 800ms — olhar vago
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( · · )", 8))  // 640ms — continua espacando
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( - - )", 1))  // 80ms  — double-blink (após stare longo)
+        .chain(rep!("( · · )", 4))  // 320ms — voltou
+        // ── Fase 4: Pensando pra cima (1.44s) ───────────────────────────────
+        .chain(rep!("( ^ ^ )", 1))  // 80ms  — saccade pra cima
+        .chain(rep!("( ^ ^ )", 5))  // 400ms — processando
+        .chain(rep!("( · · )", 2))  // 160ms — voltou
+        .chain(rep!("( ^ ^ )", 2))  // 160ms — re-olha (reconfirmando pensamento)
+        .chain(rep!("( · · )", 3))  // 240ms — volta final
+        // ── Fase 5: Scan rápido esquerda-direita (0.88s) ────────────────────
+        .chain(rep!("( < < )", 1))  // 80ms  — esquerda
+        .chain(rep!("( < < )", 2))  // 160ms — segura
+        .chain(rep!("( · · )", 1))  // 80ms  — centro
+        .chain(rep!("( > > )", 1))  // 80ms  — direita
+        .chain(rep!("( · · )", 3))  // 240ms — descansa
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( · · )", 2))  // 160ms
+        // ── Fase 6: Olhos arregalados — processa algo (1.6s) ────────────────
+        .chain(rep!("( o o )", 1))  // 80ms  — flash de surpresa
+        .chain(rep!("( o o )", 5))  // 400ms — processando com foco
+        .chain(rep!("( - - )", 1))  // 80ms  — pisca saindo do estado
+        .chain(rep!("( · · )", 5))  // 400ms — normalizou
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada de confirmação
+        .chain(rep!("( · · )", 3))  // 240ms
+        // ── Fase 7: Squint de concentração (1.28s) ──────────────────────────
+        .chain(rep!("( - - )", 1))  // 80ms  — fecha (concentrado, não piscada)
+        .chain(rep!("( - - )", 5))  // 400ms — squinting
+        .chain(rep!("( · · )", 1))  // 80ms  — abre
+        .chain(rep!("( - - )", 1))  // 80ms  — re-fecha (frustração leve)
+        .chain(rep!("( · · )", 4))  // 320ms — desiste do squint
+        // ── Fase 8: Descanso longo com micro-glance (2.48s) ─────────────────
+        .chain(rep!("( · · )", 9))  // 720ms — olhar vago
+        .chain(rep!("( > > )", 1))  // 80ms  — micro-glance involuntário
+        .chain(rep!("( · · )", 7))  // 560ms — voltou sem querer
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( - - )", 1))  // 80ms  — double-blink
+        .chain(rep!("( · · )", 4))  // 320ms — acomodou
+        // ── Fase 9: Olha pra baixo (0.8s) ───────────────────────────────────
+        .chain(rep!("( v v )", 1))  // 80ms  — saccade pra baixo
+        .chain(rep!("( v v )", 3))  // 240ms — olhando abaixo
+        .chain(rep!("( · · )", 2))  // 160ms — volta
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( · · )", 2))  // 160ms
+        // ── Fase 10: Flash de ideia + settling (1.68s) ──────────────────────
+        .chain(rep!("( * * )", 1))  // 80ms  — flash de ideia!
+        .chain(rep!("( * * )", 2))  // 160ms — segura a centelha
+        .chain(rep!("( o o )", 1))  // 80ms  — olhos arregalados de empolgação
+        .chain(rep!("( · · )", 4))  // 320ms — calma
+        .chain(rep!("( - - )", 1))  // 80ms  — piscada
+        .chain(rep!("( · · )", 6))  // 480ms — settle final antes de loopear
+        .collect();
 
-/// Returns a random eyes spinner for variety.
-/// 
-/// Now uses `make_mega_eyes_spinner` which includes ALL 12 variations.
-/// Total cycle: ~48 seconds before repeating.
-pub fn make_random_eyes_spinner() -> SpinnerState {
-    make_mega_eyes_spinner()
+    SpinnerState::custom(frames, Duration::from_millis(80))
 }
 
 impl UiApp {
@@ -1059,7 +783,8 @@ impl UiApp {
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
-            spinner_state: make_mega_eyes_spinner(),
+            think_eyes_spinner: make_mega_eyes_spinner(),
+            tool_spinner: SpinnerState::new(SpinnerType::Ellipsis),
             dots_spinner: SpinnerState::new(SpinnerType::Ellipsis),
             last_tick: Instant::now(),
             caption_idx: fastrand::usize(..),
@@ -1129,7 +854,7 @@ impl UiApp {
         let elapsed = now.duration_since(self.last_tick);
         self.last_tick = now;
         if self.thinking {
-            self.spinner_state.tick(elapsed);
+            self.think_eyes_spinner.tick(elapsed);
             self.dots_spinner.tick(elapsed);
             if now >= self.caption_deadline {
                 self.caption_idx = fastrand::usize(..);
@@ -5375,7 +5100,7 @@ fn thinking_footer_chat_line(app: &UiApp, wrap_width: usize) -> Option<Line<'sta
     let caption_raw =
         crate::thinking_footer::thinking_footer_caption(app.ultrathink_active, app.caption_idx);
     let caption = crate::thinking_footer::truncate_graphemes(&caption_raw, caption_budget).into_owned();
-    let frame_disp = app.spinner_state.frame_str();
+    let frame_disp = app.think_eyes_spinner.frame_str();
     let dots = app.dots_spinner.frame_str();
     let line_text = if app.ultrathink_active {
         format!("  {frame_disp} ⚡ {caption}{dots}")
@@ -5437,7 +5162,7 @@ fn lines_for_tool_batch(app: &UiApp, items: &[ToolBatchItem], closed: bool) -> V
     for item in items {
         let (icon, color) = match item.status {
             ToolItemStatus::Running => {
-                let frame = app.spinner_state.frame_str();
+                let frame = app.tool_spinner.frame_str();
                 (frame, theme().info)
             }
             ToolItemStatus::Ok => ("\u{2713}", theme().success), // ✓
@@ -5472,7 +5197,7 @@ fn lines_for_thinking_block(app: &UiApp, text: &str, finished: bool) -> Vec<Line
     let (icon, label) = if finished {
         ("\u{1f4ad}", format!("Pensamento ({} chars)", text.len()))
     } else {
-        let frame = app.spinner_state.frame_str();
+        let frame = app.tool_spinner.frame_str();
         (frame, "Pensando...".to_string())
     };
     result.push(Line::from(vec![
@@ -5646,7 +5371,7 @@ fn lines_for_task_progress(
             _ => ("\u{2713}", theme().success),
         }
     } else {
-        let frame = app.spinner_state.frame_str();
+        let frame = app.tool_spinner.frame_str();
         (frame, border_color)
     };
 
@@ -5654,7 +5379,7 @@ fn lines_for_task_progress(
         prefix.to_string()
     } else {
         let frames = spinner_for_msg(msg);
-        frames[app.spinner_state.frame() % frames.len()].to_string()
+        frames[app.tool_spinner.frame() % frames.len()].to_string()
     };
     result.push(Line::from(vec![
         Span::styled("  ╭─ ", Style::default().fg(border_color)),
