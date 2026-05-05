@@ -51,10 +51,10 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.1.3
+## What's New — v1.1.5
 
-- feat(tui): update OpenAI Codex models list with new entries
-- feat(tui): add TUI preview images and enhance Codex execution policy
+- feat(api): add OpenCode Zen provider support
+- feat(api): integrate OpenCode Go provider and enhance API functionality
 
 ---
 
