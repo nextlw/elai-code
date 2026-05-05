@@ -12,11 +12,13 @@ mod tui;
 mod tui_sink;
 mod updater;
 mod verify;
+mod compact_llm;
 
 // Reaponta o `t!()` deste crate para o mesmo catálogo usado por `commands`.
 // `rust-i18n` exige `i18n!()` em cada crate que invoca a macro `t!()`; o
-// catálogo é compartilhado (mesmo locale global).
-rust_i18n::i18n!("../../locales", fallback = "en");
+// catálogo é compartilhado (mesmo locale global). Caminho relativo a este ficheiro:
+// `src` → `elai-cli` → `crates` → `rust/locales`.
+rust_i18n::i18n!("../../../locales", fallback = "pt-BR");
 
 use std::collections::BTreeSet;
 use std::env;
@@ -55,8 +57,8 @@ use runtime::{
     BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
     MessageRole, PermissionMode, PermissionPolicy, ProjectContext, ResponseCache,
-    RuntimeError, Session, TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker,
-    TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    RuntimeError, Session, TaskStatus, TelemetryEvent, TelemetryHandle, TelemetryShutdown,
+    TelemetryWorker, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 use serde_json::json;
@@ -1664,12 +1666,14 @@ fn run_resume_command(
             message: Some(render_repl_help()),
         }),
         SlashCommand::Compact => {
-            let result = runtime::compact_session(
+            let model = std::env::var("ELAI_MODEL")
+                .ok()
+                .map(|s| resolve_model_alias(&s))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| suggested_default_model());
+            let result = compact_llm::compact_session_with_optional_openai(
                 session,
-                CompactionConfig {
-                    max_estimated_tokens: 0,
-                    ..CompactionConfig::default()
-                },
+                CompactionConfig::for_model(&model),
             );
             let removed = result.removed_message_count;
             let kept = result.compacted_session.messages.len();
@@ -2187,7 +2191,38 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::SlashCommand(cmd) => {
-                    handle_tui_slash_command(cmd, &mut app, &session, &budget_tracker, &msg_tx);
+                    let base = cmd
+                        .trim()
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
+                    if base == "compact" {
+                        const COMPACT_TASK_ID: &str = "session-compact";
+                        app.apply_tui_msg(tui::TuiMsg::TaskProgress {
+                            task_id: COMPACT_TASK_ID.to_string(),
+                            label: "Compactação".to_string(),
+                            msg: "Compactando o histórico (resumo local ou OpenAI, depois gravação)…"
+                                .to_string(),
+                        });
+                        tui::render(&mut terminal, &mut app)?;
+                        let report =
+                            run_tui_compact_session(&mut app, &session, &session_handle.path);
+                        app.apply_tui_msg(tui::TuiMsg::TaskProgressEnd {
+                            task_id: COMPACT_TASK_ID.to_string(),
+                            label: "Compactação".to_string(),
+                            status: TaskStatus::Completed,
+                            summary: Some(report),
+                        });
+                    } else {
+                        handle_tui_slash_command(
+                            cmd,
+                            &mut app,
+                            &session,
+                            &budget_tracker,
+                            &msg_tx,
+                        );
+                    }
                 }
                 tui::TuiAction::EnterReadMode => {
                     app.read_mode = true;
@@ -2313,6 +2348,34 @@ fn append_budget_summary_to_memory(
         .append(true)
         .open(&memory_path)?;
     file.write_all(summary.as_bytes())
+}
+
+/// Compactação na TUI: atualiza mutex, disco e reconstrói o chat. Retorna texto para `TaskProgressEnd`.
+fn run_tui_compact_session(
+    app: &mut tui::UiApp,
+    session: &Arc<std::sync::Mutex<Session>>,
+    session_save_path: &Path,
+) -> String {
+    // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
+    let mut guard = session.lock().expect("session mutex poisoned");
+    let result = compact_llm::compact_session_with_optional_openai(
+        &guard,
+        CompactionConfig::for_model(&app.model),
+    );
+    let removed = result.removed_message_count;
+    let kept = result.compacted_session.messages.len();
+    let skipped = removed == 0;
+    *guard = result.compacted_session;
+    let save_err = guard.save_to_path(session_save_path).err();
+    sync_session_to_app_chat(&guard, app);
+    drop(guard);
+    let mut out = format_compact_report(removed, kept, skipped);
+    if let Some(e) = save_err {
+        out.push_str(&format!(
+            "\n⚠️ Compactação aplicada em memória, mas falhou ao gravar o JSON: {e}"
+        ));
+    }
+    out
 }
 
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -2490,30 +2553,6 @@ fn handle_tui_slash_command(
                 diff
             };
             app.push_chat(tui::ChatEntry::SystemNote(out));
-        }
-        "compact" => {
-            // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
-            //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-            let mut guard = session.lock().expect("session mutex poisoned");
-            let total = guard.messages.len();
-            let keep = 20;
-            if total > keep {
-                guard.messages.drain(0..total - keep);
-                app.push_chat(tui::ChatEntry::SystemNote(
-                    rust_i18n::t!(
-                        "tui.repl.feedback.compact_done",
-                        from = total.to_string(),
-                        to = keep.to_string()
-                    ).to_string(),
-                ));
-            } else {
-                app.push_chat(tui::ChatEntry::SystemNote(
-                    rust_i18n::t!(
-                        "tui.repl.feedback.compact_already",
-                        count = total.to_string()
-                    ).to_string(),
-                ));
-            }
         }
         "export" => {
             // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
@@ -4072,7 +4111,10 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     }
 
     fn compact(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let result = self.runtime.compact(CompactionConfig::default());
+        let result = compact_llm::compact_session_with_optional_openai(
+            self.runtime.session(),
+            CompactionConfig::for_model(&self.model),
+        );
         let removed = result.removed_message_count;
         let kept = result.compacted_session.messages.len();
         let skipped = removed == 0;
@@ -7113,12 +7155,35 @@ fn print_help() {
     let _ = print_help_to(&mut io::stdout());
 }
 
+/// Limita texto enorme (ex.: saída de tools) para o chat da TUI continuar utilizável.
+fn truncate_session_chat_text(text: &str, max_chars: usize) -> String {
+    let t = text.trim_end();
+    let count = t.chars().count();
+    if count <= max_chars {
+        return t.to_string();
+    }
+    let keep = max_chars.saturating_sub(40);
+    let mut out = String::new();
+    for (i, ch) in t.chars().enumerate() {
+        if i >= keep {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push_str("\n… [truncado para exibição no chat]");
+    out
+}
+
+/// Reconstrói o histórico no painel como um fio cronológico (resume / session switch / compact).
 fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
     use std::collections::HashMap;
 
     app.chat.clear();
 
-    // Pre-build tool_use_id → is_error map from all ToolResult blocks.
+    const MAX_SYSTEM_CHAT_CHARS: usize = 24_576;
+    const MAX_TOOL_OUTPUT_CHAT_CHARS: usize = 12_288;
+
+    // tool_use_id → resultado com erro?
     let mut tool_statuses: HashMap<&str, bool> = HashMap::new();
     for msg in &session.messages {
         for block in &msg.blocks {
@@ -7130,63 +7195,116 @@ fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
 
     for msg in &session.messages {
         match msg.role {
-            runtime::MessageRole::System | runtime::MessageRole::Tool => {}
-            runtime::MessageRole::User => {
-                let text: String = msg
-                    .blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let runtime::ContentBlock::Text { text } = b {
-                            Some(text.as_str())
-                        } else {
-                            None
+            runtime::MessageRole::System => {
+                let mut parts = Vec::new();
+                for block in &msg.blocks {
+                    if let runtime::ContentBlock::Text { text } = block {
+                        if !text.trim().is_empty() {
+                            parts.push(text.as_str());
                         }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    app.push_chat(tui::ChatEntry::UserMessage(text));
+                    }
+                }
+                let joined = parts.join("\n\n");
+                if !joined.is_empty() {
+                    let body = truncate_session_chat_text(&joined, MAX_SYSTEM_CHAT_CHARS);
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "📋 System\n{body}"
+                    )));
+                }
+            }
+            runtime::MessageRole::User => {
+                for block in &msg.blocks {
+                    match block {
+                        runtime::ContentBlock::Text { text } => {
+                            if !text.trim().is_empty() {
+                                app.push_chat(tui::ChatEntry::UserMessage(text.clone()));
+                            }
+                        }
+                        runtime::ContentBlock::ToolResult {
+                            tool_name,
+                            output,
+                            is_error,
+                            ..
+                        } => {
+                            let mark = if *is_error { "❌" } else { "✓" };
+                            let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
+                            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                "{mark} `{tool_name}` · resultado\n{body}"
+                            )));
+                        }
+                        runtime::ContentBlock::ToolUse { .. } => {}
+                    }
+                }
+            }
+            runtime::MessageRole::Tool => {
+                for block in &msg.blocks {
+                    if let runtime::ContentBlock::ToolResult {
+                        tool_name,
+                        output,
+                        is_error,
+                        ..
+                    } = block
+                    {
+                        let mark = if *is_error { "❌" } else { "✓" };
+                        let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
+                        app.push_chat(tui::ChatEntry::SystemNote(format!(
+                            "{mark} `{tool_name}` · resultado\n{body}"
+                        )));
+                    }
                 }
             }
             runtime::MessageRole::Assistant => {
-                let text: String = msg
-                    .blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let runtime::ContentBlock::Text { text } = b {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    app.push_chat(tui::ChatEntry::AssistantText(text));
-                }
+                let mut pending_tools: Vec<tui::ToolBatchItem> = Vec::new();
 
-                let items: Vec<tui::ToolBatchItem> = msg
-                    .blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let runtime::ContentBlock::ToolUse { id, name, input } = b {
+                for block in &msg.blocks {
+                    match block {
+                        runtime::ContentBlock::Text { text } => {
+                            if !pending_tools.is_empty() {
+                                app.push_chat(tui::ChatEntry::ToolBatchEntry {
+                                    items: std::mem::take(&mut pending_tools),
+                                    closed: true,
+                                });
+                            }
+                            if !text.trim().is_empty() {
+                                app.push_chat(tui::ChatEntry::AssistantText(text.clone()));
+                            }
+                        }
+                        runtime::ContentBlock::ToolUse { id, name, input } => {
                             let status = match tool_statuses.get(id.as_str()) {
                                 Some(true) => tui::ToolItemStatus::Err,
                                 _ => tui::ToolItemStatus::Ok,
                             };
-                            Some(tui::ToolBatchItem {
+                            pending_tools.push(tui::ToolBatchItem {
                                 name: name.clone(),
                                 input_summary: tool_input_one_line(name, input),
                                 status,
-                            })
-                        } else {
-                            None
+                            });
                         }
-                    })
-                    .collect();
-
-                if !items.is_empty() {
-                    app.push_chat(tui::ChatEntry::ToolBatchEntry { items, closed: true });
+                        runtime::ContentBlock::ToolResult {
+                            tool_name,
+                            output,
+                            is_error,
+                            ..
+                        } => {
+                            if !pending_tools.is_empty() {
+                                app.push_chat(tui::ChatEntry::ToolBatchEntry {
+                                    items: std::mem::take(&mut pending_tools),
+                                    closed: true,
+                                });
+                            }
+                            let mark = if *is_error { "❌" } else { "✓" };
+                            let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
+                            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                                "{mark} `{tool_name}` · resultado\n{body}"
+                            )));
+                        }
+                    }
+                }
+                if !pending_tools.is_empty() {
+                    app.push_chat(tui::ChatEntry::ToolBatchEntry {
+                        items: pending_tools,
+                        closed: true,
+                    });
                 }
             }
         }

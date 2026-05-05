@@ -20,6 +20,20 @@ impl Default for CompactionConfig {
     }
 }
 
+impl CompactionConfig {
+    /// Compaction threshold derived from the active chat model's approximate context window; see
+    /// [`crate::input_context_tokens_for_model`].
+    #[must_use]
+    pub fn for_model(model: &str) -> Self {
+        Self {
+            preserve_recent_messages: 4,
+            max_estimated_tokens: crate::model_context::compaction_trigger_estimated_tokens_for_model(
+                model,
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionResult {
     pub summary: String,
@@ -37,13 +51,25 @@ pub fn estimate_session_tokens(session: &Session) -> usize {
 pub fn should_compact(session: &Session, config: CompactionConfig) -> bool {
     let start = compacted_summary_prefix_len(session);
     let compactable = &session.messages[start..];
-
-    compactable.len() > config.preserve_recent_messages
-        && compactable
-            .iter()
-            .map(estimate_message_tokens)
-            .sum::<usize>()
-            >= config.max_estimated_tokens
+    if compactable.is_empty() {
+        return false;
+    }
+    let sum: usize = compactable.iter().map(estimate_message_tokens).sum();
+    if sum < config.max_estimated_tokens {
+        return false;
+    }
+    if compactable.len() > config.preserve_recent_messages {
+        return true;
+    }
+    // Few messages but still over the estimated token budget (large tool outputs).
+    if compactable.len() <= 1 {
+        return false;
+    }
+    find_safe_cut_point(
+        compactable,
+        compactable.len().saturating_sub(1),
+    )
+    .is_some_and(|cut| cut > 0)
 }
 
 #[must_use]
@@ -143,15 +169,43 @@ fn find_safe_cut_point(messages: &[ConversationMessage], max_index: usize) -> Op
     safe_cut
 }
 
+fn preserve_attempt_sequence(primary: usize) -> Vec<usize> {
+    let mut seq = Vec::new();
+    for p in [primary, 2usize, 1, 0] {
+        if !seq.contains(&p) {
+            seq.push(p);
+        }
+    }
+    seq
+}
+
+fn empty_compact_result(session: &Session) -> CompactionResult {
+    CompactionResult {
+        summary: String::new(),
+        formatted_summary: String::new(),
+        compacted_session: session.clone(),
+        removed_message_count: 0,
+    }
+}
+
 #[must_use]
 pub fn compact_session(session: &Session, config: CompactionConfig) -> CompactionResult {
+    compact_session_with_summarizer(session, config, summarize_messages)
+}
+
+/// Same as [`compact_session`], but the summary text for removed messages is produced by `summarize_removed`
+/// (e.g. an LLM call from `elai-cli`), with fallback implementations allowed inside the closure.
+#[must_use]
+pub fn compact_session_with_summarizer<F>(
+    session: &Session,
+    config: CompactionConfig,
+    mut summarize_removed: F,
+) -> CompactionResult
+where
+    F: FnMut(&[ConversationMessage]) -> String,
+{
     if !should_compact(session, config) {
-        return CompactionResult {
-            summary: String::new(),
-            formatted_summary: String::new(),
-            compacted_session: session.clone(),
-            removed_message_count: 0,
-        };
+        return empty_compact_result(session);
     }
 
     let existing_summary = session
@@ -159,50 +213,55 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
         .first()
         .and_then(extract_existing_compacted_summary);
     let compacted_prefix_len = usize::from(existing_summary.is_some());
-    let naive_keep_from = session
-        .messages
-        .len()
-        .saturating_sub(config.preserve_recent_messages);
 
-    let compactable = &session.messages[compacted_prefix_len..];
-    let compactable_max = naive_keep_from.saturating_sub(compacted_prefix_len);
-    let safe_cut_relative = find_safe_cut_point(compactable, compactable_max);
+    for preserve in preserve_attempt_sequence(config.preserve_recent_messages) {
+        let naive_keep_from = session.messages.len().saturating_sub(preserve);
+        let compactable = &session.messages[compacted_prefix_len..];
+        let compactable_max = naive_keep_from.saturating_sub(compacted_prefix_len);
+        let safe_cut_relative = find_safe_cut_point(compactable, compactable_max);
 
-    let keep_from = match safe_cut_relative {
-        Some(rel) => compacted_prefix_len + rel,
-        None => {
-            return CompactionResult {
-                summary: String::new(),
-                formatted_summary: String::new(),
-                compacted_session: session.clone(),
-                removed_message_count: 0,
-            };
+        let keep_from = match safe_cut_relative {
+            Some(rel) => compacted_prefix_len + rel,
+            None => continue,
+        };
+
+        let removed = &session.messages[compacted_prefix_len..keep_from];
+        if removed.is_empty() {
+            continue;
         }
-    };
 
-    let removed = &session.messages[compacted_prefix_len..keep_from];
-    let preserved = session.messages[keep_from..].to_vec();
-    let summary =
-        merge_compact_summaries(existing_summary.as_deref(), &summarize_messages(removed));
-    let formatted_summary = format_compact_summary(&summary);
-    let continuation = get_compact_continuation_message(&summary, true, !preserved.is_empty());
+        let preserved = session.messages[keep_from..].to_vec();
+        let summary =
+            merge_compact_summaries(existing_summary.as_deref(), &summarize_removed(removed));
+        let formatted_summary = format_compact_summary(&summary);
+        let continuation = get_compact_continuation_message(&summary, true, !preserved.is_empty());
 
-    let mut compacted_messages = vec![ConversationMessage {
-        role: MessageRole::System,
-        blocks: vec![ContentBlock::Text { text: continuation }],
-        usage: None,
-    }];
-    compacted_messages.extend(preserved);
+        let mut compacted_messages = vec![ConversationMessage {
+            role: MessageRole::System,
+            blocks: vec![ContentBlock::Text { text: continuation }],
+            usage: None,
+        }];
+        compacted_messages.extend(preserved);
 
-    CompactionResult {
-        summary,
-        formatted_summary,
-        compacted_session: Session {
-            version: session.version,
-            messages: compacted_messages,
-        },
-        removed_message_count: removed.len(),
+        return CompactionResult {
+            summary,
+            formatted_summary,
+            compacted_session: Session {
+                version: session.version,
+                messages: compacted_messages,
+            },
+            removed_message_count: removed.len(),
+        };
     }
+
+    empty_compact_result(session)
+}
+
+/// Deterministic compact summary (same algorithm as built-in compaction). Exposed for callers
+/// that inject an optional LLM summary step.
+#[must_use]
+pub fn summarize_compact_excerpt(messages: &[ConversationMessage]) -> String {
+    summarize_messages(messages)
 }
 
 fn compacted_summary_prefix_len(session: &Session) -> usize {
@@ -829,7 +888,7 @@ mod tests {
             &session,
             CompactionConfig {
                 preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
+                max_estimated_tokens: 50_000,
             }
         ));
     }
@@ -906,11 +965,10 @@ mod tests {
     }
 
     #[test]
-    fn compact_skips_when_no_safe_cut_point_exists() {
-        // All messages are ToolUse/ToolResult pairs — no safe cut point exists.
-        // preserve_recent_messages=2, len=4, naive keep_from=2 which splits pair[1,2].
-        // pair[0,1] ends at index 2, which equals max_index=2, so safe_cut=Some(2).
-        // Actually with 2 pairs we should have a cut after pair 1. Let's make only 1 pair.
+    fn compact_retries_preserve_until_full_pair_can_be_removed() {
+        // Single assistant+tool pair; preserve=1 wants keep_from=1 which splits the pair
+        // (no safe cut with max_index=1). The preserve fallback (2, then 0) eventually uses
+        // preserve=0 → keep entire tail → safe cut removes both messages as one round.
         let session = Session {
             version: 1,
             messages: vec![
@@ -928,13 +986,11 @@ mod tests {
             max_estimated_tokens: 1,
         };
 
-        // With a single pair and preserve_recent_messages=1, naive keep_from=1 (inside pair).
-        // find_safe_cut_point on compactable=[msg0,msg1] with max_index=1:
-        //   group_into_rounds → [ApiRound{0..2}]
-        //   round.end=2 > max_index=1 → safe_cut=None → removed_message_count=0
         let result = compact_session(&session, config);
-        assert_eq!(result.removed_message_count, 0);
-        assert_eq!(result.compacted_session, session);
+        assert_eq!(result.removed_message_count, 2);
+        assert_eq!(result.compacted_session.messages.len(), 1);
+        assert_eq!(result.compacted_session.messages[0].role, MessageRole::System);
+        assert_no_orphaned_tool_pairs(&result.compacted_session.messages);
     }
 
     #[test]
@@ -1068,5 +1124,30 @@ mod tests {
         ];
         // pair [1,3) ends at 3 which equals max_index=3 → safe cut = Some(3)
         assert_eq!(find_safe_cut_point(&messages, 3), Some(3));
+    }
+
+    #[test]
+    fn should_compact_triggers_for_few_huge_messages() {
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::user_text("x".repeat(50_000)),
+                ConversationMessage::user_text("y".repeat(50_000)),
+            ],
+        };
+        assert!(should_compact(
+            &session,
+            CompactionConfig {
+                preserve_recent_messages: 4,
+                max_estimated_tokens: 10_000,
+            },
+        ));
+    }
+
+    #[test]
+    fn for_model_scales_threshold_with_context_window() {
+        let small = CompactionConfig::for_model("ollama:llama3");
+        let large = CompactionConfig::for_model("claude-sonnet-4-6");
+        assert!(small.max_estimated_tokens < large.max_estimated_tokens);
     }
 }

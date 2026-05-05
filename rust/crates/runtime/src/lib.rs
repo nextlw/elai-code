@@ -1,3 +1,18 @@
+//! ## Compaction and pre-request pipeline
+//!
+//! Each [`ConversationRuntime::run_turn`](crate::conversation::ConversationRuntime::run_turn) does:
+//! 1. Clone messages → [`validate_and_repair`](crate::message_repair::validate_and_repair)
+//!    (tool pairing / first-role fixes).
+//! 2. [`apply_tool_result_budget`](crate::tool_output_budget::apply_tool_result_budget)
+//!    — truncate huge tool outputs (`ELAI_TOOL_OUTPUT_MAX_CHARS`, default 80k chars).
+//! 3. Write the result back to the live [`Session`](crate::session::Session) so JSON matches the API.
+//! 4. Call the model; on errors matched by [`error_indicates_context_limit`](crate::conversation::error_indicates_context_limit),
+//!    [`try_compact_for_ptl_retry`](crate::conversation::ConversationRuntime) runs.
+//!
+//! Heavy compaction lives in [`compact`](crate::compact); optional OpenAI summarization is wired from `elai-cli`.
+//! Manual compaction thresholds should use [`CompactionConfig::for_model`](crate::compact::CompactionConfig::for_model)
+//! so they track the active model’s approximate context window ([`input_context_tokens_for_model`](crate::input_context_tokens_for_model)).
+
 mod bash;
 mod bootstrap;
 pub mod global_config;
@@ -9,6 +24,8 @@ pub mod tool_catalog;
 pub mod budget;
 mod compact;
 mod config;
+mod model_context;
+mod tool_output_budget;
 mod conversation;
 mod file_ops;
 mod hooks;
@@ -36,8 +53,12 @@ pub use budget::{
     BudgetTracker, BudgetUsagePct,
 };
 pub use compact::{
-    compact_session, estimate_session_tokens, format_compact_summary,
-    get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
+    compact_session, compact_session_with_summarizer, estimate_session_tokens,
+    format_compact_summary, get_compact_continuation_message, should_compact,
+    summarize_compact_excerpt, CompactionConfig, CompactionResult,
+};
+pub use model_context::{
+    compaction_trigger_estimated_tokens_for_model, input_context_tokens_for_model,
 };
 pub use config::{
     AnthropicOAuthEndpoints, ConfigEntry, ConfigError, ConfigLoader, ConfigSource,
@@ -48,8 +69,8 @@ pub use config::{
     ELAI_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
-    ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
-    ToolError, ToolExecutor, TurnSummary,
+    error_indicates_context_limit, ApiClient, ApiRequest, AssistantEvent, ConversationRuntime,
+    RuntimeError, StaticToolExecutor, ToolError, ToolExecutor, TurnSummary,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,

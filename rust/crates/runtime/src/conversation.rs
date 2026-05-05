@@ -8,6 +8,26 @@ use crate::compact::{
 const MAX_CONSECUTIVE_COMPACT_FAILURES: usize = 3;
 const MAX_PTL_RETRIES: usize = 3;
 const PROMPT_TOO_LONG_MARKER: &str = "prompt is too long:";
+
+/// Returns true when an API/runtime error string indicates the request exceeded
+/// provider context limits — including Anthropic-style wording and aggregated
+/// OpenAI-compatible 400 bodies (`maximum context`, etc.).
+#[must_use]
+pub fn error_indicates_context_limit(message: &str) -> bool {
+    if message.contains(PROMPT_TOO_LONG_MARKER) {
+        return true;
+    }
+    let lower = message.to_ascii_lowercase();
+    lower.contains("maximum context")
+        || lower.contains("context length")
+        || lower.contains("maximum prompt")
+        || lower.contains("prompt is too long")
+        || lower.contains("too many tokens")
+        || lower.contains("token limit")
+        || lower.contains("context window")
+        || (lower.contains("token") && (lower.contains("limit") || lower.contains("exceed")))
+}
+
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookRunResult, HookRunner};
 use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
@@ -198,6 +218,7 @@ where
 
             let mut api_messages = self.session.messages.clone();
             let repairs = crate::message_repair::validate_and_repair(&mut api_messages);
+            crate::tool_output_budget::apply_tool_result_budget(&mut api_messages);
             if !repairs.is_empty() {
                 eprintln!(
                     "[elai] message repair applied {} action(s) before API call: {:?}",
@@ -205,13 +226,15 @@ where
                     repairs
                 );
             }
+            // Keep persisted session aligned with what we send to the API (repair + budget).
+            self.session.messages.clone_from(&api_messages);
             let request = ApiRequest {
                 system_prompt: self.system_prompt.clone(),
                 messages: api_messages,
             };
             let events = match self.api_client.stream(request) {
                 Ok(events) => events,
-                Err(err) if err.message.contains(PROMPT_TOO_LONG_MARKER) => {
+                Err(err) if error_indicates_context_limit(&err.message) => {
                     ptl_retries += 1;
                     if ptl_retries > MAX_PTL_RETRIES {
                         return Err(RuntimeError::new(format!(
@@ -940,6 +963,63 @@ mod tests {
     }
 
     #[test]
+    fn maximum_context_error_triggers_auto_compact_retry() {
+        struct MaxCtxThenSuccess {
+            calls: usize,
+        }
+
+        impl ApiClient for MaxCtxThenSuccess {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                self.calls += 1;
+                if self.calls == 1 {
+                    Err(RuntimeError::new(
+                        "api returned 400 Bad Request: {\"error\":{\"message\":\"maximum context exceeded\"}}",
+                    ))
+                } else {
+                    Ok(vec![
+                        AssistantEvent::TextDelta("ok after compact".to_string()),
+                        AssistantEvent::MessageStop,
+                    ])
+                }
+            }
+        }
+
+        let mut session = Session::new();
+        for i in 0..8 {
+            session
+                .messages
+                .push(crate::session::ConversationMessage::user_text(
+                    "large text ".repeat(200) + &i.to_string(),
+                ));
+            session
+                .messages
+                .push(crate::session::ConversationMessage::assistant(vec![
+                    ContentBlock::Text {
+                        text: "reply ".repeat(200) + &i.to_string(),
+                    },
+                ]));
+        }
+
+        let mut runtime = ConversationRuntime::new(
+            session,
+            MaxCtxThenSuccess { calls: 0 },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let result = runtime.run_turn("continue", None);
+        assert!(
+            result.is_ok(),
+            "should succeed after auto-compact on maximum context: {result:?}"
+        );
+        assert_eq!(runtime.consecutive_compact_failures, 0);
+    }
+
+    #[test]
     fn auto_compact_retries_after_prompt_too_long() {
         let mut session = Session::new();
         for i in 0..8 {
@@ -1026,5 +1106,15 @@ mod tests {
     #[cfg(not(windows))]
     fn shell_snippet(script: &str) -> String {
         script.to_string()
+    }
+
+    #[test]
+    fn error_indicates_context_limit_heuristic() {
+        assert!(super::error_indicates_context_limit(
+            "api returned 400: Error from provider: This endpoint's maximum context"
+        ));
+        assert!(!super::error_indicates_context_limit(
+            "api returned 401 Unauthorized"
+        ));
     }
 }

@@ -20,7 +20,7 @@ use runtime::{compact_session, CompactionConfig, Session, ProgressReporter};
 // Carrega os arquivos de locale do workspace (`rust/locales/{en,pt-BR}.json`).
 // Fonte única do catálogo i18n: outros crates só fazem `rust_i18n::set_locale()`.
 // Fallback automático para `en` quando uma chave não existe no idioma ativo.
-rust_i18n::i18n!("../../locales", fallback = "en");
+rust_i18n::i18n!("../../../locales", fallback = "pt-BR");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
@@ -797,6 +797,35 @@ impl SlashCommand {
             "locale" => Self::Locale {
                 lang: parts.next().map(ToOwned::to_owned),
             },
+            "run" => {
+                let script = parts.next().map(ToOwned::to_owned).unwrap_or_default();
+                let mut update = false;
+                let mut args: Option<String> = None;
+                let remainder: String = parts.collect::<Vec<_>>().join(" ");
+                let mut iter = remainder.split_whitespace();
+                while let Some(tok) = iter.next() {
+                    match tok {
+                        "--update" | "-u" => update = true,
+                        "--" => {
+                            let rest: String = iter.collect::<Vec<_>>().join(" ");
+                            if !rest.is_empty() {
+                                args = Some(rest);
+                            }
+                            break;
+                        }
+                        other => {
+                            if args.is_none() {
+                                args = Some(other.to_string());
+                            }
+                        }
+                    }
+                }
+                Self::Run {
+                    script,
+                    args,
+                    update,
+                }
+            }
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -2232,6 +2261,28 @@ pub fn handle_slash_command(
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
         | SlashCommand::Unknown(_) => None,
+        SlashCommand::Run { script, args, update } => {
+            use script_runner::{run_script, ScriptConfig, NullReporter};
+            let result = run_script(
+                &script,
+                args.as_deref(),
+                ScriptConfig { update },
+                &NullReporter,
+            );
+            let msg = match result {
+                Ok(output) => format!(
+                    "Run\n  Script           {script}\n  Args             {}\n  Update           {}\n\n{}",
+                    args.as_deref().unwrap_or("none"),
+                    update,
+                    output
+                ),
+                Err(e) => format!("Run\n  Error            {e}"),
+            };
+            Some(SlashCommandResult {
+                message: msg,
+                session: session.clone(),
+            })
+        }
     }
 }
 
