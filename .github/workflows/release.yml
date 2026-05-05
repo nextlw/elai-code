@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]*"
-    branches-ignore:
-      - "**"
 
 permissions:
   contents: write
@@ -300,44 +298,50 @@ jobs:
           SHA_LINUX_X86=$(grep   "elai-linux-x86_64$" checksums.txt | awk '{print $1}')
 
           mkdir -p homebrew-elai/Formula
-          cat > homebrew-elai/Formula/elai.rb <<FORMULA
-class Elai < Formula
-  desc "CLI de agente de IA"
-  homepage "https://github.com/nextlw/elai-code"
-  version "${VERSION}"
-  license "MIT"
 
-  on_macos do
-    on_arm do
-      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-arm64"
-      sha256 "${SHA_MACOS_ARM64}"
-    end
-    on_intel do
-      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-x86_64"
-      sha256 "${SHA_MACOS_X86}"
-    end
-  end
+          python3 - "$VERSION" "$SHA_MACOS_ARM64" "$SHA_MACOS_X86" "$SHA_LINUX_ARM64" "$SHA_LINUX_X86" <<'PYEOF'
+          import sys
+          version, sha_mac_arm, sha_mac_x86, sha_linux_arm, sha_linux_x86 = sys.argv[1:]
+          formula = f"""class Elai < Formula
+            desc "CLI de agente de IA"
+            homepage "https://github.com/nextlw/elai-code"
+            version "{version}"
+            license "MIT"
 
-  on_linux do
-    on_arm do
-      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-arm64"
-      sha256 "${SHA_LINUX_ARM64}"
-    end
-    on_intel do
-      url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-x86_64"
-      sha256 "${SHA_LINUX_X86}"
-    end
-  end
+            on_macos do
+              on_arm do
+                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-arm64"
+                sha256 "{sha_mac_arm}"
+              end
+              on_intel do
+                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-macos-x86_64"
+                sha256 "{sha_mac_x86}"
+              end
+            end
 
-  def install
-    bin.install Dir["elai-*"].first => "elai"
-  end
+            on_linux do
+              on_arm do
+                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-arm64"
+                sha256 "{sha_linux_arm}"
+              end
+              on_intel do
+                url "https://github.com/nextlw/elai-code/releases/download/v\#{version}/elai-linux-x86_64"
+                sha256 "{sha_linux_x86}"
+              end
+            end
 
-  test do
-    assert_match version.to_s, shell_output("\#{bin}/elai --version")
-  end
-end
-FORMULA
+            def install
+              bin.install Dir["elai-*"].first => "elai"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("\#{bin}/elai --version")
+            end
+          end
+          """
+          with open("homebrew-elai/Formula/elai.rb", "w") as f:
+              f.write(formula)
+          PYEOF
 
       - name: Commit + push homebrew-elai
         env:
