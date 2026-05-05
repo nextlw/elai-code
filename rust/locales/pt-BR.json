@@ -168,6 +168,48 @@
     "nav": {
       "next_prev": "→ próxima  ·  ← anterior"
     },
+    "thinking_footer": {
+      "normal": [
+        "Pensando...",
+        "Trabalhando...",
+        "Delulitizando...",
+        "Quebrando o quengo...",
+        "Fritando um ovo...",
+        "Olhando o leite pra não queimar...",
+        "Convocando os neurônios preguiçosos...",
+        "Amarrando ponta solta no raciocínio...",
+        "Percorrendo uma ideia duvidosa (com autorização)...",
+        "Dando aquele CTRL+C CTRL+V existencial...",
+        "Colocando manteiga no JSON...",
+        "Esperando npm terminar só que na cabeça...",
+        "Percorrendo o mapa conceitual com GPS quebrado...",
+        "Contando até o infinito (quase)...",
+        "Vasculhando onde ninguém perguntou...",
+        "Enrolando bem antes de responder...",
+        "Afinando instrumento de clichê...",
+        "Perguntando aos bits com educação..."
+      ],
+      "ultra": [
+        "Ultra espremendo o quengo...",
+        "Ultra delulitizando a matrix...",
+        "Ultra quebrando o quengo em camadas...",
+        "Ultra fritando o ovo no fogão cósmico...",
+        "Ultra de olho no leite pra nada queimar no multiverso...",
+        "Ultra fervendo ideias até reduzir o molho...",
+        "Ultra overclock cerebral com estética de gamer RGB...",
+        "Ultra convocando o conselho suprema dos tokens...",
+        "Ultra turbo-deslulitização em modo lendário...",
+        "Ultra queimando incense de commit limpo...",
+        "Ultra colidindo partículas de contexto no LHC da sessão...",
+        "Ultra explodindo o quengo em resolução 8K mental...",
+        "Ultra mergulhando no vazio entre duas deadlines...",
+        "Ultra negociando paz entre stack trace e humanez...",
+        "Ultra derretendo GPUs com filosofia aplicada...",
+        "Ultra preparando ramen com caldo de logits...",
+        "Ultra invocando o patch que compila na primeira tentativa...",
+        "Ultra multiplicando o dramaticamente por dois..."
+      ]
+    },
     "tool_approval": {
       "title": "⚠  Aprovar tool?",
       "tool_label": "Tool",

@@ -1,18 +1,20 @@
 mod args;
 mod auth;
 mod cheese_theme;
+mod compact_llm;
 mod diff;
 mod dream;
 mod init;
 mod input;
 mod render;
 mod swd;
+mod thinking_footer;
 mod tips;
 mod tui;
 mod tui_sink;
+mod ultrathink;
 mod updater;
 mod verify;
-mod compact_llm;
 
 // Reaponta o `t!()` deste crate para o mesmo catálogo usado por `commands`.
 // `rust-i18n` exige `i18n!()` em cada crate que invoca a macro `t!()`; o
@@ -37,8 +39,8 @@ use api::{
     model_supports_adaptive_thinking, model_supports_thinking, resolve_model_alias,
     resolve_output_config, suggested_default_model, ContentBlockDelta, EffortLevel,
     InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ThinkingConfig,
-    ToolChoice, ToolDefinition, ToolResultContentBlock,
+    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice,
+    ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -55,13 +57,13 @@ use runtime::{
     check_rate_limit, generate_cache_key, load_budget_config, load_system_prompt, now_millis,
     save_budget_config, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
     BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
-    MessageRole, PermissionMode, PermissionPolicy, ProjectContext, ResponseCache,
-    RuntimeError, Session, TaskStatus, TelemetryEvent, TelemetryHandle, TelemetryShutdown,
-    TelemetryWorker, TokenUsage, ToolError, ToolExecutor, UsageTracker,
+    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
+    PermissionMode, PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session,
+    TaskStatus, TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage,
+    ToolError, ToolExecutor, UsageTracker,
 };
-use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 use serde_json::json;
+use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
 
 const DEFAULT_DATE: &str = "2026-03-31";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -137,16 +139,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             no_cache,
             swd_level,
             budget_config,
-        } => run_repl(model, allowed_tools, permission_mode, no_tui, no_cache, swd_level, budget_config)?,
+        } => run_repl(
+            model,
+            allowed_tools,
+            permission_mode,
+            no_tui,
+            no_cache,
+            swd_level,
+            budget_config,
+        )?,
         CliAction::Help => print_help(),
-        CliAction::Stats { days, by_model, by_project } => run_stats_command(days, by_model, by_project),
+        CliAction::Stats {
+            days,
+            by_model,
+            by_project,
+        } => run_stats_command(days, by_model, by_project),
         CliAction::Verify => run_verify_command()?,
         CliAction::Update => updater::run_update(),
         CliAction::Uninstall => {
             let report = perform_uninstall();
             println!("{report}");
         }
-        CliAction::Send { message, wait, json, thinking_budget } => run_headless_send(&message, wait, json, thinking_budget)?,
+        CliAction::Send {
+            message,
+            wait,
+            json,
+            thinking_budget,
+        } => run_headless_send(&message, wait, json, thinking_budget)?,
         CliAction::ChatShow { last, json } => run_chat_show(last, json)?,
         CliAction::ModelGet => run_model_get(),
         CliAction::ModelSet { model } => run_model_set(&model)?,
@@ -252,8 +271,8 @@ fn handle_locale_command(lang: Option<&str>) -> String {
 }
 
 fn persist_locale(lang: &str) -> Result<(), String> {
-    let mut cfg = runtime::global_config::load()
-        .map_err(|e| format!("failed to load config: {e}"))?;
+    let mut cfg =
+        runtime::global_config::load().map_err(|e| format!("failed to load config: {e}"))?;
     cfg.locale = lang.to_string();
     runtime::global_config::save(&cfg).map_err(|e| format!("failed to persist locale: {e}"))
 }
@@ -273,8 +292,7 @@ fn has_any_auth() -> bool {
     {
         return true;
     }
-    runtime::load_auth_method()
-        .is_ok_and(|opt| opt.is_some())
+    runtime::load_auth_method().is_ok_and(|opt| opt.is_some())
 }
 
 /// Sets only known API keys from `path` when they are not already in the process environment.
@@ -301,10 +319,7 @@ fn elai_env_fill_missing_from_file(path: &Path) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let line = line
-            .strip_prefix("export ")
-            .unwrap_or(line)
-            .trim();
+        let line = line.strip_prefix("export ").unwrap_or(line).trim();
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
@@ -676,12 +691,24 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                         days = s[7..].parse().ok();
                         idx += 1;
                     }
-                    "--by-model" => { by_model = true; idx += 1; }
-                    "--by-project" => { by_project = true; idx += 1; }
-                    _ => { idx += 1; }
+                    "--by-model" => {
+                        by_model = true;
+                        idx += 1;
+                    }
+                    "--by-project" => {
+                        by_project = true;
+                        idx += 1;
+                    }
+                    _ => {
+                        idx += 1;
+                    }
                 }
             }
-            Ok(CliAction::Stats { days, by_model, by_project })
+            Ok(CliAction::Stats {
+                days,
+                by_model,
+                by_project,
+            })
         }
         "prompt" => {
             let prompt = rest[1..].join(" ");
@@ -746,21 +773,65 @@ fn parse_login_args(args: &[String]) -> Result<CliAction, String> {
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
-            "--console" => { login_args.console = true; idx += 1; }
-            "--claudeai" => { login_args.claudeai = true; idx += 1; }
-            "--sso" => { login_args.sso = true; idx += 1; }
-            "--api-key" => { login_args.api_key = true; idx += 1; }
-            "--token" => { login_args.token = true; idx += 1; }
-            "--use-bedrock" => { login_args.use_bedrock = true; idx += 1; }
-            "--use-vertex" => { login_args.use_vertex = true; idx += 1; }
-            "--use-foundry" => { login_args.use_foundry = true; idx += 1; }
-            "--no-browser" => { login_args.no_browser = true; idx += 1; }
-            "--stdin" => { login_args.stdin = true; idx += 1; }
-            "--legacy-elai" => { login_args.legacy_elai = true; idx += 1; }
-            "--import-claude-code" => { login_args.import_claude_code = true; idx += 1; }
-            "--codex-oauth" => { login_args.codex_oauth = true; idx += 1; }
-            "--import-codex" => { login_args.import_codex = true; idx += 1; }
-            "--yes" | "--no" => { idx += 1; } // accepted but no-op at this layer (auth.rs uses it)
+            "--console" => {
+                login_args.console = true;
+                idx += 1;
+            }
+            "--claudeai" => {
+                login_args.claudeai = true;
+                idx += 1;
+            }
+            "--sso" => {
+                login_args.sso = true;
+                idx += 1;
+            }
+            "--api-key" => {
+                login_args.api_key = true;
+                idx += 1;
+            }
+            "--token" => {
+                login_args.token = true;
+                idx += 1;
+            }
+            "--use-bedrock" => {
+                login_args.use_bedrock = true;
+                idx += 1;
+            }
+            "--use-vertex" => {
+                login_args.use_vertex = true;
+                idx += 1;
+            }
+            "--use-foundry" => {
+                login_args.use_foundry = true;
+                idx += 1;
+            }
+            "--no-browser" => {
+                login_args.no_browser = true;
+                idx += 1;
+            }
+            "--stdin" => {
+                login_args.stdin = true;
+                idx += 1;
+            }
+            "--legacy-elai" => {
+                login_args.legacy_elai = true;
+                idx += 1;
+            }
+            "--import-claude-code" => {
+                login_args.import_claude_code = true;
+                idx += 1;
+            }
+            "--codex-oauth" => {
+                login_args.codex_oauth = true;
+                idx += 1;
+            }
+            "--import-codex" => {
+                login_args.import_codex = true;
+                idx += 1;
+            }
+            "--yes" | "--no" => {
+                idx += 1;
+            } // accepted but no-op at this layer (auth.rs uses it)
             "--email" => {
                 let value = args
                     .get(idx + 1)
@@ -806,10 +877,22 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
-            "--wait" => { wait = true; idx += 1; }
-            "--json" => { json = true; idx += 1; }
-            "--stdin" | "-" => { stdin = true; idx += 1; }
-            "--ultrathink" => { thinking_budget = Some(32_000); idx += 1; }
+            "--wait" => {
+                wait = true;
+                idx += 1;
+            }
+            "--json" => {
+                json = true;
+                idx += 1;
+            }
+            "--stdin" | "-" => {
+                stdin = true;
+                idx += 1;
+            }
+            "--ultrathink" => {
+                thinking_budget = Some(32_000);
+                idx += 1;
+            }
             "--thinking" => {
                 idx += 1;
                 if let Some(raw) = args.get(idx) {
@@ -817,21 +900,33 @@ fn parse_send_args(args: &[String]) -> Result<CliAction, String> {
                     idx += 1;
                 }
             }
-            other => { parts.push(other.to_string()); idx += 1; }
+            other => {
+                parts.push(other.to_string());
+                idx += 1;
+            }
         }
     }
     let message = if stdin {
         use std::io::Read;
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).map_err(|e| e.to_string())?;
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| e.to_string())?;
         buf.trim().to_string()
     } else {
         parts.join(" ")
     };
     if message.is_empty() {
-        return Err("send requires a message; use 'elai send \"text\"' or 'echo text | elai send -'".into());
+        return Err(
+            "send requires a message; use 'elai send \"text\"' or 'echo text | elai send -'".into(),
+        );
     }
-    Ok(CliAction::Send { message, wait, json, thinking_budget })
+    Ok(CliAction::Send {
+        message,
+        wait,
+        json,
+        thinking_budget,
+    })
 }
 
 fn parse_chat_args(args: &[String]) -> Result<CliAction, String> {
@@ -843,12 +938,25 @@ fn parse_chat_args(args: &[String]) -> Result<CliAction, String> {
             let mut idx = 1;
             while idx < args.len() {
                 match args[idx].as_str() {
-                    "--json" => { json = true; idx += 1; }
-                    s if s.starts_with("--last=") => { last = s[7..].parse().unwrap_or(last); idx += 1; }
-                    "--last" => {
-                        if let Some(v) = args.get(idx + 1) { last = v.parse().unwrap_or(last); idx += 2; } else { idx += 1; }
+                    "--json" => {
+                        json = true;
+                        idx += 1;
                     }
-                    _ => { idx += 1; }
+                    s if s.starts_with("--last=") => {
+                        last = s[7..].parse().unwrap_or(last);
+                        idx += 1;
+                    }
+                    "--last" => {
+                        if let Some(v) = args.get(idx + 1) {
+                            last = v.parse().unwrap_or(last);
+                            idx += 2;
+                        } else {
+                            idx += 1;
+                        }
+                    }
+                    _ => {
+                        idx += 1;
+                    }
                 }
             }
             Ok(CliAction::ChatShow { last, json })
@@ -867,7 +975,9 @@ fn parse_model_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::ModelSet { model })
         }
-        Some(other) => Err(format!("unknown model subcommand: {other}; expected: get, set")),
+        Some(other) => Err(format!(
+            "unknown model subcommand: {other}; expected: get, set"
+        )),
     }
 }
 
@@ -915,9 +1025,7 @@ fn schedule_windows_cleanup(
     };
     // timeout aguarda o processo pai (este elai.exe) liberar o lock antes de
     // tentar deletar. /nobreak impede interrupção por tecla.
-    let cleanup = format!(
-        r#"timeout /t 2 /nobreak > nul & del /f /q "{bin_str}"{dir_clause}"#
-    );
+    let cleanup = format!(r#"timeout /t 2 /nobreak > nul & del /f /q "{bin_str}"{dir_clause}"#);
 
     Command::new("cmd")
         .args(["/c", &cleanup])
@@ -926,79 +1034,56 @@ fn schedule_windows_cleanup(
         .map(|_| ())
 }
 
-fn perform_uninstall() -> String {
-    const MARKER: &str = "# elai-code api keys";
+#[cfg(not(windows))]
+fn remove_binary_and_dir(
+    bin: &std::path::Path,
+    elai_dir: Option<&std::path::Path>,
+) -> (Vec<String>, Vec<String>) {
     let mut log = Vec::<String>::new();
     let mut errors = Vec::<String>::new();
-
-    // 1. Binário — usa current_exe() para encontrar onde está instalado de fato
-    let bin = std::env::current_exe()
-        .unwrap_or_else(|_| {
-            let install_dir = std::env::var("ELAI_INSTALL_DIR")
-                .unwrap_or_else(|_| "/usr/local/bin".into());
-            std::path::PathBuf::from(install_dir).join("elai")
-        });
-
-    let elai_dir = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|home| std::path::PathBuf::from(home).join(".elai"));
-
-    #[cfg(windows)]
-    {
-        // Windows mantém lock exclusivo no .exe em execução: remove_file() falha
-        // com "Access is denied". Agendamos um cmd destacado que aguarda o
-        // processo morrer e então apaga binário + diretório.
-        match schedule_windows_cleanup(&bin, elai_dir.as_deref()) {
-            Ok(()) => {
-                log.push(format!("✅ Agendado para remoção: {}", bin.display()));
-                if let Some(dir) = &elai_dir {
-                    log.push(format!("✅ Agendado para remoção: {}", dir.display()));
-                }
-                log.push(
-                    "ℹ Limpeza ocorre 2s após o Elai encerrar. Reabra o terminal em seguida.".into(),
-                );
-            }
-            Err(e) => errors.push(format!("⚠ Falha ao agendar limpeza: {e}")),
+    match std::fs::remove_file(bin) {
+        Ok(()) => log.push(format!("✅ Removido: {}", bin.display())),
+        Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
+    }
+    if let Some(dir) = elai_dir {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => log.push(format!("✅ Removido: {}", dir.display())),
+            Err(e) => errors.push(format!("⚠ {}: {e}", dir.display())),
         }
     }
+    (log, errors)
+}
 
-    #[cfg(not(windows))]
-    {
-        match std::fs::remove_file(&bin) {
-            Ok(()) => log.push(format!("✅ Removido: {}", bin.display())),
-            Err(e) => errors.push(format!("⚠ {}: {e}", bin.display())),
-        }
-
-        // 2. Diretório ~/.elai/ (inclui ~/.elai/fastembed_cache, ~/.elai/tasks/, etc.)
-        if let Some(dir) = &elai_dir {
-            match std::fs::remove_dir_all(dir) {
-                Ok(()) => log.push(format!("✅ Removido: {}", dir.display())),
-                Err(e) => errors.push(format!("⚠ {}: {e}", dir.display())),
-            }
-        }
-
-        // 2b. Caches legados do fastembed (criados antes da centralização em
-        // ~/.elai/fastembed_cache). Best-effort — silencioso se ausente.
-        let mut legacy_caches: Vec<std::path::PathBuf> = Vec::new();
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            let home = std::path::PathBuf::from(home);
-            legacy_caches.push(home.join(".cache").join(".fastembed_cache"));
-            legacy_caches.push(home.join(".fastembed_cache"));
-        }
-        if let Ok(cwd) = std::env::current_dir() {
-            legacy_caches.push(cwd.join(".fastembed_cache"));
-        }
-        for path in legacy_caches {
-            if path.is_dir() {
-                match std::fs::remove_dir_all(&path) {
-                    Ok(()) => log.push(format!("✅ Cache fastembed legado removido: {}", path.display())),
-                    Err(e) => errors.push(format!("⚠ {}: {e}", path.display())),
-                }
+#[cfg(not(windows))]
+fn remove_legacy_caches() -> (Vec<String>, Vec<String>) {
+    let mut log = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
+    let mut legacy_caches: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = std::path::PathBuf::from(home);
+        legacy_caches.push(home.join(".cache").join(".fastembed_cache"));
+        legacy_caches.push(home.join(".fastembed_cache"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        legacy_caches.push(cwd.join(".fastembed_cache"));
+    }
+    for path in legacy_caches {
+        if path.is_dir() {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => log.push(format!(
+                    "✅ Cache fastembed legado removido: {}",
+                    path.display()
+                )),
+                Err(e) => errors.push(format!("⚠ {}: {e}", path.display())),
             }
         }
     }
+    (log, errors)
+}
 
-    // 3. Linhas do shell RC (bloco marcado com "# elai-code api keys")
+fn clean_shell_rc(marker: &str) -> (Vec<String>, Vec<String>) {
+    let mut log = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
     let shell = std::env::var("SHELL").unwrap_or_default();
     let home_str = std::env::var("HOME").unwrap_or_default();
     let rc_path = if shell.contains("zsh") {
@@ -1017,11 +1102,14 @@ fn perform_uninstall() -> String {
         let mut out_lines: Vec<&str> = Vec::new();
         let mut skip = false;
         for line in content.lines() {
-            if line == MARKER {
+            if line == marker {
                 skip = true;
                 continue;
             }
-            if skip && (line.starts_with("export ANTHROPIC_API_KEY") || line.starts_with("export OPENAI_API_KEY")) {
+            if skip
+                && (line.starts_with("export ANTHROPIC_API_KEY")
+                    || line.starts_with("export OPENAI_API_KEY"))
+            {
                 continue;
             }
             skip = false;
@@ -1035,6 +1123,58 @@ fn perform_uninstall() -> String {
             }
         }
     }
+    (log, errors)
+}
+
+fn perform_uninstall() -> String {
+    const MARKER: &str = "# elai-code api keys";
+    let mut log = Vec::<String>::new();
+    let mut errors = Vec::<String>::new();
+
+    // 1. Binário — usa current_exe() para encontrar onde está instalado de fato
+    let bin = std::env::current_exe().unwrap_or_else(|_| {
+        let install_dir =
+            std::env::var("ELAI_INSTALL_DIR").unwrap_or_else(|_| "/usr/local/bin".into());
+        std::path::PathBuf::from(install_dir).join("elai")
+    });
+
+    let elai_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| std::path::PathBuf::from(home).join(".elai"));
+
+    #[cfg(windows)]
+    {
+        // Windows mantém lock exclusivo no .exe em execução: remove_file() falha
+        // com "Access is denied". Agendamos um cmd destacado que aguarda o
+        // processo morrer e então apaga binário + diretório.
+        match schedule_windows_cleanup(&bin, elai_dir.as_deref()) {
+            Ok(()) => {
+                log.push(format!("✅ Agendado para remoção: {}", bin.display()));
+                if let Some(dir) = &elai_dir {
+                    log.push(format!("✅ Agendado para remoção: {}", dir.display()));
+                }
+                log.push(
+                    "ℹ Limpeza ocorre 2s após o Elai encerrar. Reabra o terminal em seguida."
+                        .into(),
+                );
+            }
+            Err(e) => errors.push(format!("⚠ Falha ao agendar limpeza: {e}")),
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let (l, e) = remove_binary_and_dir(&bin, elai_dir.as_deref());
+        log.extend(l);
+        errors.extend(e);
+        let (l, e) = remove_legacy_caches();
+        log.extend(l);
+        errors.extend(e);
+    }
+
+    let (l, e) = clean_shell_rc(MARKER);
+    log.extend(l);
+    errors.extend(e);
 
     let mut result = log.join("\n");
     if !errors.is_empty() {
@@ -1215,7 +1355,10 @@ fn run_stats_command(days: Option<u32>, by_model: bool, by_project: bool) {
             return;
         }
     };
-    print!("{}", render_stats_report(&entries, by_model, by_project, days));
+    print!(
+        "{}",
+        render_stats_report(&entries, by_model, by_project, days)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,15 +1379,23 @@ fn run_headless_send(
     thinking_budget: Option<u32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let model = suggested_default_model();
-    let output_format = if json { CliOutputFormat::Json } else { CliOutputFormat::Text };
+    let output_format = if json {
+        CliOutputFormat::Json
+    } else {
+        CliOutputFormat::Text
+    };
     let allowed_tools = None;
     let permission_mode = default_permission_mode();
 
     // Detecta ultrathink no texto OU --ultrathink/--thinking flag.
-    let ultrathink_keyword = message.to_ascii_lowercase().contains("ultrathink");
+    let ultrathink_keyword = crate::ultrathink::message_contains_ultrathink_keyword(message);
     let thinking_config: Option<ThinkingConfig> = match thinking_budget {
-        Some(budget) => Some(ThinkingConfig::Enabled { budget_tokens: budget }),
-        None if ultrathink_keyword => Some(ThinkingConfig::Enabled { budget_tokens: 32_000 }),
+        Some(budget) => Some(ThinkingConfig::Enabled {
+            budget_tokens: budget,
+        }),
+        None if ultrathink_keyword => Some(ThinkingConfig::Enabled {
+            budget_tokens: 32_000,
+        }),
         None => default_thinking_config(&model),
     };
 
@@ -1276,7 +1427,9 @@ fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Erro
         .collect();
     entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
     entries.reverse();
-    let session_path = if let Some(entry) = entries.first() { entry.path() } else {
+    let session_path = if let Some(entry) = entries.first() {
+        entry.path()
+    } else {
         println!("No sessions found.");
         return Ok(());
     };
@@ -1286,26 +1439,45 @@ fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Erro
     let start = messages.len().saturating_sub(last);
     let slice = &messages[start..];
     if json {
-        let arr: Vec<serde_json::Value> = slice.iter().map(|msg| {
-            let role = format!("{:?}", msg.role).to_lowercase();
-            let text: Vec<String> = msg.blocks.iter().filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.clone()),
-                _ => None,
-            }).collect();
-            serde_json::json!({ "role": role, "text": text.join("\n") })
-        }).collect();
+        let arr: Vec<serde_json::Value> = slice
+            .iter()
+            .map(|msg| {
+                let role = format!("{:?}", msg.role).to_lowercase();
+                let text: Vec<String> = msg
+                    .blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                serde_json::json!({ "role": role, "text": text.join("\n") })
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&arr)?);
     } else {
         println!("Session: {}", session_path.display());
-        println!("Messages: {} (showing last {})", messages.len(), slice.len());
+        println!(
+            "Messages: {} (showing last {})",
+            messages.len(),
+            slice.len()
+        );
         println!("{}", "─".repeat(60));
         for msg in slice {
             let role = format!("{:?}", msg.role);
-            let text: String = msg.blocks.iter().filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            }).collect::<Vec<_>>().join("\n");
-            println!("[{role}] {}", text.lines().take(5).collect::<Vec<_>>().join(" ↵ "));
+            let text: String = msg
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            println!(
+                "[{role}] {}",
+                text.lines().take(5).collect::<Vec<_>>().join(" ↵ ")
+            );
         }
     }
     Ok(())
@@ -1315,7 +1487,8 @@ fn run_chat_show(last: usize, json: bool) -> Result<(), Box<dyn std::error::Erro
 fn run_model_get() {
     let model = suggested_default_model();
     // Check for a persisted override
-    let override_model: Option<String> = std::env::var("ELAI_DEFAULT_OPENAI_MODEL").ok()
+    let override_model: Option<String> = std::env::var("ELAI_DEFAULT_OPENAI_MODEL")
+        .ok()
         .filter(|v| !v.trim().is_empty());
     if let Some(ref ov) = override_model {
         println!("{ov}");
@@ -1330,17 +1503,27 @@ fn run_model_set(model: &str) -> Result<(), Box<dyn std::error::Error>> {
         .map(std::path::PathBuf::from)
         .map_err(|_| "HOME is not set")?;
     let env_path = home.join(".elai").join(".env");
-    let env_parent = env_path.parent().ok_or("env path has no parent component")?;
+    let env_parent = env_path
+        .parent()
+        .ok_or("env path has no parent component")?;
     std::fs::create_dir_all(env_parent)?;
     // Read existing content, replace or append ELAI_DEFAULT_OPENAI_MODEL
     let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
     let key = "ELAI_DEFAULT_OPENAI_MODEL";
     let new_line = format!("{key}={model}");
     let updated: String = if existing.lines().any(|l| l.starts_with(&format!("{key}="))) {
-        existing.lines()
-            .map(|l| if l.starts_with(&format!("{key}=")) { new_line.as_str() } else { l })
+        existing
+            .lines()
+            .map(|l| {
+                if l.starts_with(&format!("{key}=")) {
+                    new_line.as_str()
+                } else {
+                    l
+                }
+            })
             .collect::<Vec<_>>()
-            .join("\n") + "\n"
+            .join("\n")
+            + "\n"
     } else if existing.is_empty() || existing.ends_with('\n') {
         format!("{existing}{new_line}\n")
     } else {
@@ -1363,16 +1546,20 @@ fn run_status_cmd(json: bool) {
     let version = env!("CARGO_PKG_VERSION");
     let model = suggested_default_model();
     auth::dispatch_auth_status(false);
-    let cwd = std::env::current_dir().map_or_else(|_| "unknown".into(), |p| p.display().to_string());
+    let cwd =
+        std::env::current_dir().map_or_else(|_| "unknown".into(), |p| p.display().to_string());
     if json {
         // Build JSON manually; auth info comes from collect_auth_info via dispatch
         let has_auth = has_any_auth();
-        println!("{}", serde_json::json!({
-            "version": version,
-            "model": model,
-            "has_auth": has_auth,
-            "cwd": cwd,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "version": version,
+                "model": model,
+                "has_auth": has_auth,
+                "cwd": cwd,
+            })
+        );
     } else {
         println!("elai {version}");
         println!("model  : {model}");
@@ -1418,7 +1605,6 @@ fn print_bootstrap_plan() {
         println!("- {phase:?}");
     }
 }
-
 
 fn print_system_prompt(cwd: PathBuf, date: String) {
     match load_system_prompt(cwd, date, env::consts::OS, "unknown") {
@@ -1670,7 +1856,7 @@ fn run_resume_command(
                 .ok()
                 .map(|s| resolve_model_alias(&s))
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| suggested_default_model());
+                .unwrap_or_else(suggested_default_model);
             let result = compact_llm::compact_session_with_optional_openai(
                 session,
                 CompactionConfig::for_model(&model),
@@ -1815,7 +2001,13 @@ fn run_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Use TUI mode when stdout is a real terminal and --no-tui not specified.
     if !no_tui && std::io::stdout().is_terminal() {
-        return run_tui_repl(model, allowed_tools, permission_mode, swd_level, budget_config);
+        return run_tui_repl(
+            model,
+            allowed_tools,
+            permission_mode,
+            swd_level,
+            budget_config,
+        );
     }
     let _ = budget_config;
 
@@ -1840,8 +2032,7 @@ fn run_repl(
                     if matches!(command, SlashCommand::Unknown(_)) {
                         let cwd = std::env::current_dir()
                             .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                        if let Some(expanded) =
-                            try_user_command(&trimmed, &cli.user_commands, &cwd)
+                        if let Some(expanded) = try_user_command(&trimmed, &cli.user_commands, &cwd)
                         {
                             eprintln!(
                                 "[custom] /{} expanded ({} chars)",
@@ -1928,7 +2119,10 @@ fn run_tui_repl(
     );
     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
     //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-    app.budget_enabled = budget_tracker.lock().expect("budget_tracker mutex poisoned").is_enabled();
+    app.budget_enabled = budget_tracker
+        .lock()
+        .expect("budget_tracker mutex poisoned")
+        .is_enabled();
 
     // Background update check — first run at startup, then every hour while the
     // TUI is alive. Results surface as a SystemNote; never blocks or forces a
@@ -2039,7 +2233,9 @@ fn run_tui_repl(
                     };
                     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                     //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                    let bt = budget_tracker.lock().expect("budget_tracker mutex poisoned");
+                    let bt = budget_tracker
+                        .lock()
+                        .expect("budget_tracker mutex poisoned");
                     if bt.is_enabled() {
                         let pct_data = bt.usage_pct(&usage, &app.model);
                         app.budget_pct = pct_data.highest_pct;
@@ -2047,10 +2243,7 @@ fn run_tui_repl(
                         match bt.check(&usage, &app.model) {
                             BudgetStatus::Exhausted { reason } => {
                                 let _ = append_budget_summary_to_memory(
-                                    &app.model,
-                                    &usage,
-                                    &pct_data,
-                                    &reason,
+                                    &app.model, &usage, &pct_data, &reason,
                                 );
                                 app.push_chat(tui::ChatEntry::SystemNote(format!(
                                     "🛑 Budget esgotado: {reason}\n💡 Aumente com --budget-tokens N ou /budget N"
@@ -2076,14 +2269,13 @@ fn run_tui_repl(
                     app.should_quit = true;
                 }
                 tui::TuiAction::SendMessage(text) => {
-                    let ultrathink = text.to_ascii_lowercase().contains("ultrathink");
+                    let ultrathink = crate::ultrathink::message_contains_ultrathink_keyword(&text);
                     if !app.thinking {
                         budget_warned_at = 0;
                         app.thinking = true;
                         let model_clone = app.model.clone();
-                        let perm_clone = permission_mode_from_label(
-                            &app.permission_mode
-                        ).unwrap_or(PermissionMode::DangerFullAccess);
+                        let perm_clone = permission_mode_from_label(&app.permission_mode)
+                            .unwrap_or(PermissionMode::DangerFullAccess);
                         let allowed_clone = allowed_tools.clone();
                         let mut prompt_clone = system_prompt.clone();
                         // Inject SWD full-mode system prompt if enabled at spawn time.
@@ -2111,7 +2303,9 @@ fn run_tui_repl(
                         let session_for_thread = Arc::clone(&session);
                         let swd_atomic_clone = Arc::clone(&swd_atomic);
                         let thinking_override: Option<ThinkingConfig> = if ultrathink {
-                            Some(ThinkingConfig::Enabled { budget_tokens: 32_000 })
+                            Some(ThinkingConfig::Enabled {
+                                budget_tokens: 32_000,
+                            })
                         } else {
                             None
                         };
@@ -2128,15 +2322,14 @@ fn run_tui_repl(
                                     msg_tx_clone.clone(),
                                     swd_atomic_clone,
                                     thinking_override,
-                                ).map_err(|e| {
+                                )
+                                .map_err(|e| {
                                     let msg = e.to_string();
                                     let _ = msg_tx_clone.send(tui::TuiMsg::Error(msg.clone()));
                                     msg
                                 })?;
-                                let mut prompter = CliPermissionPrompter::new_tui(
-                                    perm_clone,
-                                    perm_tx_clone,
-                                );
+                                let mut prompter =
+                                    CliPermissionPrompter::new_tui(perm_clone, perm_tx_clone);
                                 let turn_result = runtime.run_turn(&text, Some(&mut prompter));
                                 // Persist whatever the runtime produced — even on error — so the
                                 // user's input and any partial assistant work are not lost. Without
@@ -2160,8 +2353,7 @@ fn run_tui_repl(
                 tui::TuiAction::SetModel(m) => {
                     let needs_go_key = metadata_for_model(&m)
                         .is_some_and(|md| md.provider == ProviderKind::OpenCodeGo)
-                        && std::env::var_os("OPENCODE_GO_API_KEY")
-                            .is_none_or(|v| v.is_empty());
+                        && std::env::var_os("OPENCODE_GO_API_KEY").is_none_or(|v| v.is_empty());
                     if needs_go_key {
                         app.open_auth_picker();
                     } else {
@@ -2203,8 +2395,9 @@ fn run_tui_repl(
                         app.apply_tui_msg(tui::TuiMsg::TaskProgress {
                             task_id: COMPACT_TASK_ID.to_string(),
                             label: "Compactação".to_string(),
-                            msg: "Compactando o histórico (resumo local ou OpenAI, depois gravação)…"
-                                .to_string(),
+                            msg:
+                                "Compactando o histórico (resumo local ou OpenAI, depois gravação)…"
+                                    .to_string(),
                         });
                         tui::render(&mut terminal, &mut app)?;
                         let report =
@@ -2216,13 +2409,7 @@ fn run_tui_repl(
                             summary: Some(report),
                         });
                     } else {
-                        handle_tui_slash_command(
-                            cmd,
-                            &mut app,
-                            &session,
-                            &budget_tracker,
-                            &msg_tx,
-                        );
+                        handle_tui_slash_command(cmd, &mut app, &session, &budget_tracker, &msg_tx);
                     }
                 }
                 tui::TuiAction::EnterReadMode => {
@@ -2310,8 +2497,7 @@ fn preferred_model_after_auth() -> String {
 
 fn is_opencode_subscription_quota_error(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
-    lower.contains("subscriptionusagelimiterror")
-        || lower.contains("subscription quota exceeded")
+    lower.contains("subscriptionusagelimiterror") || lower.contains("subscription quota exceeded")
 }
 
 fn append_budget_summary_to_memory(
@@ -2357,6 +2543,7 @@ fn run_tui_compact_session(
     session: &Arc<std::sync::Mutex<Session>>,
     session_save_path: &Path,
 ) -> String {
+    use std::fmt::Write as _;
     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
     let mut guard = session.lock().expect("session mutex poisoned");
     let result = compact_llm::compact_session_with_optional_openai(
@@ -2372,9 +2559,10 @@ fn run_tui_compact_session(
     drop(guard);
     let mut out = format_compact_report(removed, kept, skipped);
     if let Some(e) = save_err {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n⚠️ Compactação aplicada em memória, mas falhou ao gravar o JSON: {e}"
-        ));
+        );
     }
     out
 }
@@ -2500,7 +2688,11 @@ fn handle_tui_slash_command(
             if let Some(perm) = arg {
                 app.permission_mode = perm.to_string();
                 app.push_chat(tui::ChatEntry::SystemNote(
-                    rust_i18n::t!("tui.repl.feedback.permissions_changed", mode = perm.to_string()).to_string(),
+                    rust_i18n::t!(
+                        "tui.repl.feedback.permissions_changed",
+                        mode = perm.to_string()
+                    )
+                    .to_string(),
                 ));
             } else {
                 app.open_permission_picker();
@@ -2520,7 +2712,8 @@ fn handle_tui_slash_command(
                                 "tui.repl.feedback.session_resumed",
                                 id = session_id.to_string(),
                                 count = msg_count.to_string()
-                            ).to_string(),
+                            )
+                            .to_string(),
                         ));
                     }
                 }
@@ -2536,7 +2729,8 @@ fn handle_tui_slash_command(
                     cost = format!("{cost:.4}"),
                     tokens_in = app.input_tokens.to_string(),
                     tokens_out = app.output_tokens.to_string()
-                ).to_string(),
+                )
+                .to_string(),
             ));
         }
         "version" => {
@@ -2547,7 +2741,11 @@ fn handle_tui_slash_command(
         "diff" => {
             let diff = Command::new("git")
                 .args(["diff", "--stat"])
-                .output().map_or_else(|_| "git diff failed".to_string(), |o| String::from_utf8_lossy(&o.stdout).to_string());
+                .output()
+                .map_or_else(
+                    |_| "git diff failed".to_string(),
+                    |o| String::from_utf8_lossy(&o.stdout).to_string(),
+                );
             let out = if diff.trim().is_empty() {
                 rust_i18n::t!("tui.repl.feedback.no_git_changes").to_string()
             } else {
@@ -2588,7 +2786,8 @@ fn handle_tui_slash_command(
                     rust_i18n::t!("tui.repl.feedback.export_ok", file = filename).to_string(),
                 )),
                 Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
-                    rust_i18n::t!("tui.repl.feedback.export_err", error = e.to_string()).to_string(),
+                    rust_i18n::t!("tui.repl.feedback.export_err", error = e.to_string())
+                        .to_string(),
                 )),
             }
         }
@@ -2659,7 +2858,9 @@ fn handle_tui_slash_command(
                 );
                 match outcome {
                     Ok((report, _)) => {
-                        let _ = tx.send(tui::TuiMsg::SystemNote(verify::render_verify_report_tui(&report)));
+                        let _ = tx.send(tui::TuiMsg::SystemNote(verify::render_verify_report_tui(
+                            &report,
+                        )));
                     }
                     Err(e) => {
                         let _ = tx.send(tui::TuiMsg::Error(format!("verify: {e}")));
@@ -2675,16 +2876,25 @@ fn handle_tui_slash_command(
             let raw = arg.unwrap_or("").trim().to_string();
             // JoinHandle descartado: thread daemon de gerenciamento de plugin em background; encerra quando o canal fecha (TUI encerrando).
             let _plugin_handle = std::thread::spawn(move || {
-                let send = |s: &str| { let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string())); };
+                let send = |s: &str| {
+                    let _ = tx.send(tui::TuiMsg::SystemNote(s.to_string()));
+                };
                 let mut parts = raw.splitn(2, char::is_whitespace);
                 let action = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
-                let target = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+                let target = parts
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let loader = runtime::ConfigLoader::default_for(&cwd);
                 let cfg = match loader.load() {
                     Ok(c) => c,
-                    Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); return; }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}")));
+                        return;
+                    }
                 };
                 let mut manager = build_plugin_manager(&cwd, &loader, &cfg);
 
@@ -2694,8 +2904,12 @@ fn handle_tui_slash_command(
                     &mut manager,
                     &send,
                 ) {
-                    Ok(result) => { let _ = tx.send(tui::TuiMsg::SystemNote(result.message)); }
-                    Err(e) => { let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}"))); }
+                    Ok(result) => {
+                        let _ = tx.send(tui::TuiMsg::SystemNote(result.message));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("plugin: {e}")));
+                    }
                 }
             });
             app.push_chat(tui::ChatEntry::SystemNote(
@@ -2703,16 +2917,19 @@ fn handle_tui_slash_command(
             ));
         }
         "swd" => {
-            use std::sync::atomic::Ordering;
             use crate::swd::SwdLevel;
+            use std::sync::atomic::Ordering;
             let current = SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed));
             let new_level = if let Some(level_str) = arg {
-                if let Some(l) = SwdLevel::from_str(level_str) { l } else {
+                if let Some(l) = SwdLevel::from_str(level_str) {
+                    l
+                } else {
                     app.push_chat(tui::ChatEntry::SystemNote(
                         rust_i18n::t!(
                             "tui.repl.feedback.swd_invalid",
                             level = level_str.to_string()
-                        ).to_string(),
+                        )
+                        .to_string(),
                     ));
                     return;
                 }
@@ -2725,7 +2942,8 @@ fn handle_tui_slash_command(
                     "tui.repl.feedback.swd_changed",
                     from = current.as_str().to_string(),
                     to = new_level.as_str().to_string()
-                ).to_string(),
+                )
+                .to_string(),
             ));
         }
         "auth" => {
@@ -2734,30 +2952,27 @@ fn handle_tui_slash_command(
         "uninstall" => {
             app.open_uninstall_confirm();
         }
-        "logout" => {
-            match auth::dispatch_logout() {
-                Ok(()) => {
-                    app.model.clear();
-                    app.push_chat(tui::ChatEntry::SystemNote(
-                        "✅ Credenciais removidas. Escolha o provedor para autenticar novamente.".to_string(),
-                    ));
-                    app.open_auth_picker();
-                }
-                Err(e) => app.push_chat(tui::ChatEntry::SystemNote(
-                    format!("❌ Logout error: {e}"),
-                )),
+        "logout" => match auth::dispatch_logout() {
+            Ok(()) => {
+                app.model.clear();
+                app.push_chat(tui::ChatEntry::SystemNote(
+                    "✅ Credenciais removidas. Escolha o provedor para autenticar novamente."
+                        .to_string(),
+                ));
+                app.open_auth_picker();
             }
-        }
+            Err(e) => app.push_chat(tui::ChatEntry::SystemNote(format!("❌ Logout error: {e}"))),
+        },
         "agents" => {
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let output = handle_agents_slash_command(arg, &cwd)
-                .unwrap_or_else(|e| format!("agents: {e}"));
+            let output =
+                handle_agents_slash_command(arg, &cwd).unwrap_or_else(|e| format!("agents: {e}"));
             app.push_chat(tui::ChatEntry::SystemNote(output));
         }
         "skills" => {
             let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let output = handle_skills_slash_command(arg, &cwd)
-                .unwrap_or_else(|e| format!("skills: {e}"));
+            let output =
+                handle_skills_slash_command(arg, &cwd).unwrap_or_else(|e| format!("skills: {e}"));
             app.push_chat(tui::ChatEntry::SystemNote(output));
         }
         "budget" => {
@@ -2765,7 +2980,10 @@ fn handle_tui_slash_command(
                 if a == "off" {
                     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                     //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                    budget_tracker.lock().expect("budget_tracker mutex poisoned").disable();
+                    budget_tracker
+                        .lock()
+                        .expect("budget_tracker mutex poisoned")
+                        .disable();
                     app.budget_enabled = false;
                     app.push_chat(tui::ChatEntry::SystemNote(
                         rust_i18n::t!("tui.repl.feedback.budget_off").to_string(),
@@ -2785,14 +3003,18 @@ fn handle_tui_slash_command(
                         let _ = save_budget_config(&cwd, &cfg);
                         // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                         //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                        budget_tracker.lock().expect("budget_tracker mutex poisoned").update_config(cfg.clone());
+                        budget_tracker
+                            .lock()
+                            .expect("budget_tracker mutex poisoned")
+                            .update_config(cfg.clone());
                         app.budget_enabled = true;
                         app.push_chat(tui::ChatEntry::SystemNote(
                             rust_i18n::t!(
                                 "tui.repl.feedback.budget_set",
                                 tokens = cfg.max_tokens.map_or("∞".into(), |t| t.to_string()),
                                 usd = cfg.max_cost_usd.map_or("∞".into(), |u| format!("${u:.2}"))
-                            ).to_string(),
+                            )
+                            .to_string(),
                         ));
                     } else {
                         app.push_chat(tui::ChatEntry::SystemNote(
@@ -2803,7 +3025,9 @@ fn handle_tui_slash_command(
             } else {
                 // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                 //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                let bt = budget_tracker.lock().expect("budget_tracker mutex poisoned");
+                let bt = budget_tracker
+                    .lock()
+                    .expect("budget_tracker mutex poisoned");
                 let usage = {
                     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                     //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
@@ -2825,8 +3049,7 @@ fn handle_tui_slash_command(
                     )));
                 } else {
                     app.push_chat(tui::ChatEntry::SystemNote(
-                        "ℹ️  Budget desativado. Use /budget <tokens> [usd] para ativar"
-                            .to_string(),
+                        "ℹ️  Budget desativado. Use /budget <tokens> [usd] para ativar".to_string(),
                     ));
                 }
             }
@@ -2883,7 +3106,8 @@ fn handle_tui_slash_command(
                 }
                 None
             });
-            let by_model = arg.is_none_or(|a| a.contains("--by-model") || !a.contains("--by-project"));
+            let by_model =
+                arg.is_none_or(|a| a.contains("--by-model") || !a.contains("--by-project"));
             let by_project = arg.is_some_and(|a| a.contains("--by-project"));
             let path = default_telemetry_path();
             let since_secs: Option<u64> = days.map(|d| {
@@ -3017,14 +3241,15 @@ fn handle_tui_slash_command(
             let section = arg.map(str::to_owned);
             let tx = msg_tx.clone();
             // JoinHandle descartado: thread daemon de renderização do relatório de config; encerra quando o canal fecha (TUI encerrando).
-            let _config_handle = std::thread::spawn(move || match render_config_report(section.as_deref()) {
-                Ok(out) => {
-                    let _ = tx.send(tui::TuiMsg::SystemNote(out));
-                }
-                Err(e) => {
-                    let _ = tx.send(tui::TuiMsg::Error(format!("config: {e}")));
-                }
-            });
+            let _config_handle =
+                std::thread::spawn(move || match render_config_report(section.as_deref()) {
+                    Ok(out) => {
+                        let _ = tx.send(tui::TuiMsg::SystemNote(out));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(tui::TuiMsg::Error(format!("config: {e}")));
+                    }
+                });
         }
         "tools" => {
             let out = handle_tools_slash_command(arg);
@@ -3093,14 +3318,10 @@ fn handle_tui_slash_command(
                     .current_dir(&cwd)
                     .output();
                 let note = match out {
-                    Ok(o) if o.status.success() => format!(
-                        "🌿 Branches:\n{}",
-                        String::from_utf8_lossy(&o.stdout)
-                    ),
-                    Ok(o) => format!(
-                        "git branch falhou:\n{}",
-                        String::from_utf8_lossy(&o.stderr)
-                    ),
+                    Ok(o) if o.status.success() => {
+                        format!("🌿 Branches:\n{}", String::from_utf8_lossy(&o.stdout))
+                    }
+                    Ok(o) => format!("git branch falhou:\n{}", String::from_utf8_lossy(&o.stderr)),
                     Err(e) => format!("Erro ao executar git: {e}"),
                 };
                 let _ = tx.send(tui::TuiMsg::SystemNote(note));
@@ -3116,10 +3337,9 @@ fn handle_tui_slash_command(
                     .current_dir(&cwd)
                     .output();
                 let note = match out {
-                    Ok(o) if o.status.success() => format!(
-                        "🌳 Worktrees:\n{}",
-                        String::from_utf8_lossy(&o.stdout)
-                    ),
+                    Ok(o) if o.status.success() => {
+                        format!("🌳 Worktrees:\n{}", String::from_utf8_lossy(&o.stdout))
+                    }
                     Ok(o) => format!(
                         "git worktree falhou:\n{}",
                         String::from_utf8_lossy(&o.stderr)
@@ -3131,8 +3351,7 @@ fn handle_tui_slash_command(
         }
         // Comandos AI-driven que ainda não foram migrados para o loop de turnos
         // do TUI. Disponíveis via `elai prompt /<cmd>` no shell por enquanto.
-        "bughunter" | "ultraplan" | "teleport" | "commit" | "commit-push-pr"
-        | "pr" | "issue" => {
+        "bughunter" | "ultraplan" | "teleport" | "commit" | "commit-push-pr" | "pr" | "issue" => {
             app.push_chat(tui::ChatEntry::SystemNote(format!(
                 "🚧 /{base} em breve no modo TUI — por enquanto execute `elai prompt /{base}` no shell."
             )));
@@ -3142,8 +3361,10 @@ fn handle_tui_slash_command(
                 let message = handle_locale_command(Some(lang));
                 app.push_chat(tui::ChatEntry::SystemNote(message));
             } else {
-                let locales: Vec<String> =
-                    SUPPORTED_LOCALES.iter().map(std::string::ToString::to_string).collect();
+                let locales: Vec<String> = SUPPORTED_LOCALES
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
                 let current = rust_i18n::locale().to_string();
                 app.open_locale_picker(locales, &current);
             }
@@ -3153,10 +3374,8 @@ fn handle_tui_slash_command(
         }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(
-                rust_i18n::t!(
-                    "tui.repl.feedback.unknown_command",
-                    cmd = other.to_string()
-                ).to_string(),
+                rust_i18n::t!("tui.repl.feedback.unknown_command", cmd = other.to_string())
+                    .to_string(),
             ));
         }
     }
@@ -3228,8 +3447,7 @@ impl LiveCli {
         };
 
         let user_commands = {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             UserCommandRegistry::discover(&cwd).unwrap_or_default()
         };
 
@@ -3296,8 +3514,7 @@ impl LiveCli {
         };
 
         let user_commands = {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             UserCommandRegistry::discover(&cwd).unwrap_or_default()
         };
 
@@ -3398,14 +3615,17 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                         })
                         .collect::<String>();
                     if !response_text.is_empty() {
-                        self.cache.put(key, CachedResponse {
-                            response_json: response_text,
-                            model: self.model.clone(),
-                            created_at_ms: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map_or(0, |d| d.as_millis() as u64),
-                            hit_count: 0,
-                        });
+                        self.cache.put(
+                            key,
+                            CachedResponse {
+                                response_json: response_text,
+                                model: self.model.clone(),
+                                created_at_ms: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0, |d| d.as_millis() as u64),
+                                hit_count: 0,
+                            },
+                        );
                     }
                 }
                 // Spinner finish clears the *current* terminal line. Streamed assistant text often
@@ -3423,8 +3643,7 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
                 // Auto-dream evaluation (post-turn). Avalia gates e, se Fire, libera lock
                 // imediatamente (execução completa do agent forked é deferida para versão futura).
-                let cwd = std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let cfg = runtime::AutoDreamConfig::from_env();
                 match runtime::evaluate_auto_dream(&cwd, &cfg) {
                     runtime::AutoDreamDecision::Fire {
@@ -3463,19 +3682,18 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
 
     #[allow(clippy::cast_possible_truncation)]
     fn emit_turn_telemetry(&self, summary: &runtime::TurnSummary, error_type: Option<&str>) {
-        use runtime::{default_telemetry_path, now_iso8601, pricing_for_model, TelemetryEntry, TelemetryWriter};
+        use runtime::{
+            default_telemetry_path, now_iso8601, pricing_for_model, TelemetryEntry, TelemetryWriter,
+        };
         let usage = &summary.usage;
-        let cost_usd = pricing_for_model(&self.model)
-            .map_or(0.0, |p| {
-                f64::from(usage.input_tokens) * p.input_cost_per_million / 1_000_000.0
-                    + f64::from(usage.output_tokens) * p.output_cost_per_million / 1_000_000.0
-                    + f64::from(usage.cache_creation_input_tokens)
-                        * p.cache_creation_cost_per_million
-                        / 1_000_000.0
-                    + f64::from(usage.cache_read_input_tokens)
-                        * p.cache_read_cost_per_million
-                        / 1_000_000.0
-            });
+        let cost_usd = pricing_for_model(&self.model).map_or(0.0, |p| {
+            f64::from(usage.input_tokens) * p.input_cost_per_million / 1_000_000.0
+                + f64::from(usage.output_tokens) * p.output_cost_per_million / 1_000_000.0
+                + f64::from(usage.cache_creation_input_tokens) * p.cache_creation_cost_per_million
+                    / 1_000_000.0
+                + f64::from(usage.cache_read_input_tokens) * p.cache_read_cost_per_million
+                    / 1_000_000.0
+        });
         let project = std::env::current_dir()
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -3657,12 +3875,12 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 Self::print_skills(args.as_deref())?;
                 false
             }
-            SlashCommand::Branch { .. } => Self::repl_feature_not_wired(
-                "git branch commands not yet wired to REPL",
-            ),
-            SlashCommand::Worktree { .. } => Self::repl_feature_not_wired(
-                "git worktree commands not yet wired to REPL",
-            ),
+            SlashCommand::Branch { .. } => {
+                Self::repl_feature_not_wired("git branch commands not yet wired to REPL")
+            }
+            SlashCommand::Worktree { .. } => {
+                Self::repl_feature_not_wired("git worktree commands not yet wired to REPL")
+            }
             SlashCommand::CommitPushPr { context } => {
                 let cwd = std::env::current_dir()?;
 
@@ -3688,13 +3906,19 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                      Respond as JSON: {{\"commit_message\": \"...\", \"pr_title\": \"...\", \"pr_body\": \"...\"}}"
                 );
 
-                let response = self.run_internal_prompt_text(&prompt, false)
+                let response = self
+                    .run_internal_prompt_text(&prompt, false)
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
-                let parsed: serde_json::Value = serde_json::from_str(&response)
-                    .map_err(|e| std::io::Error::other(format!("AI returned invalid JSON: {e}\n--- response ---\n{response}")))?;
+                let parsed: serde_json::Value = serde_json::from_str(&response).map_err(|e| {
+                    std::io::Error::other(format!(
+                        "AI returned invalid JSON: {e}\n--- response ---\n{response}"
+                    ))
+                })?;
 
                 let request = CommitPushPrRequest {
-                    commit_message: parsed["commit_message"].as_str().map(std::string::ToString::to_string),
+                    commit_message: parsed["commit_message"]
+                        .as_str()
+                        .map(std::string::ToString::to_string),
                     pr_title: parsed["pr_title"].as_str().unwrap_or("Update").to_string(),
                     pr_body: parsed["pr_body"].as_str().unwrap_or("").to_string(),
                     branch_name_hint: String::new(),
@@ -3758,7 +3982,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             }
             SlashCommand::Verify => {
                 match verify::run_verify(&std::env::current_dir().unwrap_or_default()) {
-                    Ok(output) => { println!("{output}"); }
+                    Ok(output) => {
+                        println!("{output}");
+                    }
                     Err(e) => eprintln!("error running verify: {e}"),
                 }
                 false
@@ -3799,24 +4025,24 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             let _ = self.cache.flush();
             println!("Cache cleared.");
         } else {
-                      let s = self.cache.stats();
-                      let oldest_age = s.oldest_entry_ms.map(|ms| {
-                          let now = std::time::SystemTime::now()
-                              .duration_since(std::time::UNIX_EPOCH)
-                              .map_or(0, |d| d.as_millis() as u64);
-                          let age_secs = now.saturating_sub(ms) / 1000;
-                          format!("{age_secs}s ago")
-                      });
-                      println!(
-                          "Cache
+            let s = self.cache.stats();
+            let oldest_age = s.oldest_entry_ms.map(|ms| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+                let age_secs = now.saturating_sub(ms) / 1000;
+                format!("{age_secs}s ago")
+            });
+            println!(
+                "Cache
         Entries          {}
         Total hits       {}
         Oldest entry     {}",
-                          s.total_entries,
-                          s.total_hits,
-                          oldest_age.as_deref().unwrap_or("—"),
-                      );
-                  }
+                s.total_entries,
+                s.total_hits,
+                oldest_age.as_deref().unwrap_or("—"),
+            );
+        }
     }
 
     fn print_status(&self) {
@@ -4102,7 +4328,12 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
         let loader = ConfigLoader::default_for(&cwd);
         let runtime_config = loader.load()?;
         let mut manager = build_plugin_manager(&cwd, &loader, &runtime_config);
-        let result = handle_plugins_slash_command(action, target, &mut manager, &runtime::EprintlnReporter::new())?;
+        let result = handle_plugins_slash_command(
+            action,
+            target,
+            &mut manager,
+            &runtime::EprintlnReporter::new(),
+        )?;
         println!("{}", result.message);
         if result.reload_runtime {
             self.reload_runtime_features()?;
@@ -4682,10 +4913,22 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
     let mut idx = 0;
     while idx < rest.len() {
         match rest[idx].as_str() {
-            "--no-index" => { args.no_index = true; idx += 1; }
-            "--no-watcher" => { args.no_watcher = true; idx += 1; }
-            "--reindex" => { args.reindex = true; idx += 1; }
-            "--start-qdrant" => { args.start_qdrant = true; idx += 1; }
+            "--no-index" => {
+                args.no_index = true;
+                idx += 1;
+            }
+            "--no-watcher" => {
+                args.no_watcher = true;
+                idx += 1;
+            }
+            "--reindex" => {
+                args.reindex = true;
+                idx += 1;
+            }
+            "--start-qdrant" => {
+                args.start_qdrant = true;
+                idx += 1;
+            }
             "--backend" => {
                 if let Some(v) = rest.get(idx + 1) {
                     args.backend = match v.as_str() {
@@ -4693,7 +4936,9 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
                         _ => IndexBackend::Sqlite,
                     };
                     idx += 2;
-                } else { idx += 1; }
+                } else {
+                    idx += 1;
+                }
             }
             "--embed-provider" => {
                 if let Some(v) = rest.get(idx + 1) {
@@ -4705,16 +4950,33 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
                         _ => EmbedProviderArg::Local,
                     };
                     idx += 2;
-                } else { idx += 1; }
+                } else {
+                    idx += 1;
+                }
             }
             "--embed-model" => {
-                if let Some(v) = rest.get(idx + 1) { args.embed_model = Some(v.clone()); idx += 2; } else { idx += 1; }
+                if let Some(v) = rest.get(idx + 1) {
+                    args.embed_model = Some(v.clone());
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
             }
             "--ollama-url" => {
-                if let Some(v) = rest.get(idx + 1) { args.ollama_url = Some(v.clone()); idx += 2; } else { idx += 1; }
+                if let Some(v) = rest.get(idx + 1) {
+                    args.ollama_url = Some(v.clone());
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
             }
             "--qdrant-url" => {
-                if let Some(v) = rest.get(idx + 1) { args.qdrant_url = Some(v.clone()); idx += 2; } else { idx += 1; }
+                if let Some(v) = rest.get(idx + 1) {
+                    args.qdrant_url = Some(v.clone());
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
             }
             "--qdrant-port" => {
                 if let Some(v) = rest.get(idx + 1) {
@@ -4722,12 +4984,21 @@ fn parse_init_args(rest: &[String]) -> crate::args::InitArgs {
                         args.qdrant_port = port;
                     }
                     idx += 2;
-                } else { idx += 1; }
+                } else {
+                    idx += 1;
+                }
             }
             "--qdrant-container" => {
-                if let Some(v) = rest.get(idx + 1) { args.qdrant_container.clone_from(v); idx += 2; } else { idx += 1; }
+                if let Some(v) = rest.get(idx + 1) {
+                    args.qdrant_container.clone_from(v);
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
             }
-            _ => { idx += 1; }
+            _ => {
+                idx += 1;
+            }
         }
     }
     args
@@ -5710,10 +5981,7 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
                         runtime::PermissionPromptDecision::Allow
                     }
                     _ => runtime::PermissionPromptDecision::Deny {
-                        reason: format!(
-                            "tool '{}' denied by user via TUI",
-                            request.tool_name
-                        ),
+                        reason: format!("tool '{}' denied by user via TUI", request.tool_name),
                     },
                 };
             }
@@ -5833,9 +6101,14 @@ impl ApiClient for DefaultRuntimeClient {
             max_tokens: max_tokens_for_model(&self.model),
             messages: convert_messages(&request.messages),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
-            tools: self
-                .enable_tools
-                .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref(), &runtime::ToolCatalog::default(), None)),
+            tools: self.enable_tools.then(|| {
+                filter_tool_specs(
+                    &self.tool_registry,
+                    self.allowed_tools.as_ref(),
+                    &runtime::ToolCatalog::default(),
+                    None,
+                )
+            }),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
             thinking: if model_supports_thinking(&self.model) {
@@ -5931,7 +6204,9 @@ impl ApiClient for DefaultRuntimeClient {
                                 }
                                 if let Some(ref tx) = tui_sender {
                                     let _ = tx.send(tui::TuiMsg::TextChunk(text.clone()));
-                                } else if let Some(rendered) = markdown_stream.push(&renderer, &text) {
+                                } else if let Some(rendered) =
+                                    markdown_stream.push(&renderer, &text)
+                                {
                                     write!(out, "{rendered}")
                                         .and_then(|()| out.flush())
                                         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -5964,7 +6239,10 @@ impl ApiClient for DefaultRuntimeClient {
                                 progress_reporter.mark_tool_phase(&name, &input);
                             }
                             if let Some(ref tx) = tui_sender {
-                                let _ = tx.send(tui::TuiMsg::ToolCall { name: name.clone(), input: input.clone() });
+                                let _ = tx.send(tui::TuiMsg::ToolCall {
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                });
                             } else {
                                 // Display tool call now that input is fully accumulated.
                                 // Modo compacto por padrão (uma linha por call); modo verboso
@@ -6007,27 +6285,32 @@ impl ApiClient for DefaultRuntimeClient {
                         }
                         {
                             use std::sync::atomic::Ordering;
-                            if crate::swd::SwdLevel::from_u8(
-                                swd_level_arc.load(Ordering::Relaxed),
-                            ) == crate::swd::SwdLevel::Full
+                            if crate::swd::SwdLevel::from_u8(swd_level_arc.load(Ordering::Relaxed))
+                                == crate::swd::SwdLevel::Full
                             {
                                 let actions = crate::swd::parse_file_actions(&full_text_buf);
                                 if !actions.is_empty() {
                                     if let Some(ref sender) = tui_sender {
                                         // Compute diffs for preview before executing.
                                         let previews: Vec<(String, Vec<crate::diff::DiffHunk>)> =
-                                            actions.iter().map(|action| {
-                                                let old = std::fs::read_to_string(&action.path)
-                                                    .unwrap_or_default();
-                                                let new = match action.operation {
-                                                    crate::swd::FileOp::Write => {
-                                                        action.content.as_deref().unwrap_or("").to_string()
-                                                    }
-                                                    crate::swd::FileOp::Delete => String::new(),
-                                                };
-                                                let hunks = crate::diff::compute_diff(&old, &new, 3);
-                                                (action.path.clone(), hunks)
-                                            }).collect();
+                                            actions
+                                                .iter()
+                                                .map(|action| {
+                                                    let old = std::fs::read_to_string(&action.path)
+                                                        .unwrap_or_default();
+                                                    let new = match action.operation {
+                                                        crate::swd::FileOp::Write => action
+                                                            .content
+                                                            .as_deref()
+                                                            .unwrap_or("")
+                                                            .to_string(),
+                                                        crate::swd::FileOp::Delete => String::new(),
+                                                    };
+                                                    let hunks =
+                                                        crate::diff::compute_diff(&old, &new, 3);
+                                                    (action.path.clone(), hunks)
+                                                })
+                                                .collect();
 
                                         let (reply_tx, reply_rx) =
                                             std::sync::mpsc::sync_channel::<bool>(1);
@@ -6048,7 +6331,8 @@ impl ApiClient for DefaultRuntimeClient {
                                                         | crate::swd::SwdOutcome::RolledBack
                                                 )
                                             });
-                                            let _ = sender.send(tui::TuiMsg::SwdBatchResult(txs.clone()));
+                                            let _ = sender
+                                                .send(tui::TuiMsg::SwdBatchResult(txs.clone()));
                                             if has_failures {
                                                 correction_for_async
                                                     .lock()
@@ -6123,17 +6407,26 @@ impl ApiClient for DefaultRuntimeClient {
             {
                 // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                 //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                let ctx = correction_shared.lock().expect("correction_ctx mutex poisoned").clone();
+                let ctx = correction_shared
+                    .lock()
+                    .expect("correction_ctx mutex poisoned")
+                    .clone();
                 if ctx.has_failures() && ctx.can_retry() {
                     let attempt = ctx.attempts;
                     let max_attempts = ctx.max_attempts;
                     if let Some(ref sender) = self.tui_sender {
-                        let _ = sender.send(tui::TuiMsg::CorrectionRetry { attempt, max_attempts });
+                        let _ = sender.send(tui::TuiMsg::CorrectionRetry {
+                            attempt,
+                            max_attempts,
+                        });
                     }
                 }
                 // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                 //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                self.correction_ctx = correction_shared.lock().expect("correction_ctx mutex poisoned").clone();
+                self.correction_ctx = correction_shared
+                    .lock()
+                    .expect("correction_ctx mutex poisoned")
+                    .clone();
             }
         }
 
@@ -6294,10 +6587,7 @@ pub(crate) fn tool_input_one_line(name: &str, input: &str) -> String {
         _ => summarize_tool_payload(input),
     };
     // Achata quebras de linha e colapsa whitespace para uma única linha visual.
-    let flat = raw
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     flat.chars().take(60).collect::<String>()
 }
 
@@ -6325,8 +6615,7 @@ fn format_tool_result_compact(ok: bool) -> &'static str {
 
 /// Detecta se o usuário pediu output verboso de tools no modo CLI não-TUI.
 fn cli_tools_verbose() -> bool {
-    std::env::var_os("ELAI_VERBOSE_TOOLS")
-        .is_some_and(|v| !v.is_empty() && v != "0")
+    std::env::var_os("ELAI_VERBOSE_TOOLS").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
@@ -6804,9 +7093,9 @@ impl CliToolExecutor {
 
     #[allow(clippy::too_many_lines)]
     fn execute_with_swd(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+        use crate::swd::{self, SwdOutcome, SwdTransaction};
         use std::sync::atomic::Ordering;
         use std::time::{SystemTime, UNIX_EPOCH};
-        use crate::swd::{self, SwdOutcome, SwdTransaction};
 
         let _ = self.swd_level.load(Ordering::Relaxed);
 
@@ -6835,12 +7124,20 @@ impl CliToolExecutor {
         let outcome = swd::verify_outcome(before_hash.as_ref(), after_hash.as_ref(), tool_ok);
 
         // Rollback if failed.
-        if matches!(outcome, SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }) && !path.is_empty() {
+        if matches!(
+            outcome,
+            SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }
+        ) && !path.is_empty()
+        {
             let _ = swd::rollback(&path, before_bytes.as_deref());
         }
 
         // Rich error with retry hint for partial mode correction.
-        if matches!(outcome, SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }) && !path.is_empty() {
+        if matches!(
+            outcome,
+            SwdOutcome::Failed { .. } | SwdOutcome::Drift { .. }
+        ) && !path.is_empty()
+        {
             let retry_count = self.swd_retry_counts.entry(path.clone()).or_insert(0);
             let detail = match &outcome {
                 SwdOutcome::Failed { reason } => reason.clone(),
@@ -6954,9 +7251,7 @@ impl ToolExecutor for CliToolExecutor {
         {
             use std::sync::atomic::Ordering;
             let swd_lv = crate::swd::SwdLevel::from_u8(self.swd_level.load(Ordering::Relaxed));
-            if swd_lv == crate::swd::SwdLevel::Full
-                && SWD_WRITE_TOOLS.contains(&tool_name)
-            {
+            if swd_lv == crate::swd::SwdLevel::Full && SWD_WRITE_TOOLS.contains(&tool_name) {
                 let msg = format!(
                     "SWD full mode: '{tool_name}' está bloqueada. Use [FILE_ACTION] blocks no texto."
                 );
@@ -6965,9 +7260,7 @@ impl ToolExecutor for CliToolExecutor {
                 }
                 return Err(ToolError::new(msg));
             }
-            if swd_lv == crate::swd::SwdLevel::Partial
-                && SWD_WRITE_TOOLS.contains(&tool_name)
-            {
+            if swd_lv == crate::swd::SwdLevel::Partial && SWD_WRITE_TOOLS.contains(&tool_name) {
                 return self.execute_with_swd(tool_name, input);
             }
         }
@@ -7194,19 +7487,142 @@ fn truncate_session_chat_text(text: &str, max_chars: usize) -> String {
 }
 
 /// Reconstrói o histórico no painel como um fio cronológico (resume / session switch / compact).
+fn push_system_blocks(app: &mut tui::UiApp, blocks: &[runtime::ContentBlock], max: usize) {
+    let mut parts = Vec::new();
+    for block in blocks {
+        if let runtime::ContentBlock::Text { text } = block {
+            if !text.trim().is_empty() {
+                parts.push(text.as_str());
+            }
+        }
+    }
+    let joined = parts.join("\n\n");
+    if !joined.is_empty() {
+        let body = truncate_session_chat_text(&joined, max);
+        app.push_chat(tui::ChatEntry::SystemNote(format!("📋 System\n{body}")));
+    }
+}
+
+fn push_user_blocks(app: &mut tui::UiApp, blocks: &[runtime::ContentBlock], max: usize) {
+    for block in blocks {
+        match block {
+            runtime::ContentBlock::Text { text } => {
+                if !text.trim().is_empty() {
+                    app.push_chat(tui::ChatEntry::UserMessage(text.clone()));
+                }
+            }
+            runtime::ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } => {
+                let mark = if *is_error { "❌" } else { "✓" };
+                let body = truncate_session_chat_text(output, max);
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "{mark} `{tool_name}` · resultado\n{body}"
+                )));
+            }
+            runtime::ContentBlock::ToolUse { .. } => {}
+        }
+    }
+}
+
+fn push_tool_blocks(app: &mut tui::UiApp, blocks: &[runtime::ContentBlock], max: usize) {
+    for block in blocks {
+        if let runtime::ContentBlock::ToolResult {
+            tool_name,
+            output,
+            is_error,
+            ..
+        } = block
+        {
+            let mark = if *is_error { "❌" } else { "✓" };
+            let body = truncate_session_chat_text(output, max);
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "{mark} `{tool_name}` · resultado\n{body}"
+            )));
+        }
+    }
+}
+
+fn push_assistant_blocks(
+    app: &mut tui::UiApp,
+    blocks: &[runtime::ContentBlock],
+    tool_statuses: &std::collections::HashMap<&str, bool>,
+    max: usize,
+) {
+    let mut pending_tools: Vec<tui::ToolBatchItem> = Vec::new();
+
+    for block in blocks {
+        match block {
+            runtime::ContentBlock::Text { text } => {
+                if !pending_tools.is_empty() {
+                    app.push_chat(tui::ChatEntry::ToolBatchEntry {
+                        items: std::mem::take(&mut pending_tools),
+                        closed: true,
+                    });
+                }
+                if !text.trim().is_empty() {
+                    app.push_chat(tui::ChatEntry::AssistantText(text.clone()));
+                }
+            }
+            runtime::ContentBlock::ToolUse { id, name, input } => {
+                let status = match tool_statuses.get(id.as_str()) {
+                    Some(true) => tui::ToolItemStatus::Err,
+                    _ => tui::ToolItemStatus::Ok,
+                };
+                pending_tools.push(tui::ToolBatchItem {
+                    name: name.clone(),
+                    input_summary: tool_input_one_line(name, input),
+                    status,
+                });
+            }
+            runtime::ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } => {
+                if !pending_tools.is_empty() {
+                    app.push_chat(tui::ChatEntry::ToolBatchEntry {
+                        items: std::mem::take(&mut pending_tools),
+                        closed: true,
+                    });
+                }
+                let mark = if *is_error { "❌" } else { "✓" };
+                let body = truncate_session_chat_text(output, max);
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "{mark} `{tool_name}` · resultado\n{body}"
+                )));
+            }
+        }
+    }
+    if !pending_tools.is_empty() {
+        app.push_chat(tui::ChatEntry::ToolBatchEntry {
+            items: pending_tools,
+            closed: true,
+        });
+    }
+}
+
 fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
+    const MAX_SYSTEM_CHAT_CHARS: usize = 24_576;
+    const MAX_TOOL_OUTPUT_CHAT_CHARS: usize = 12_288;
     use std::collections::HashMap;
 
     app.chat.clear();
-
-    const MAX_SYSTEM_CHAT_CHARS: usize = 24_576;
-    const MAX_TOOL_OUTPUT_CHAT_CHARS: usize = 12_288;
 
     // tool_use_id → resultado com erro?
     let mut tool_statuses: HashMap<&str, bool> = HashMap::new();
     for msg in &session.messages {
         for block in &msg.blocks {
-            if let runtime::ContentBlock::ToolResult { tool_use_id, is_error, .. } = block {
+            if let runtime::ContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } = block
+            {
                 tool_statuses.insert(tool_use_id.as_str(), *is_error);
             }
         }
@@ -7215,116 +7631,21 @@ fn sync_session_to_app_chat(session: &Session, app: &mut tui::UiApp) {
     for msg in &session.messages {
         match msg.role {
             runtime::MessageRole::System => {
-                let mut parts = Vec::new();
-                for block in &msg.blocks {
-                    if let runtime::ContentBlock::Text { text } = block {
-                        if !text.trim().is_empty() {
-                            parts.push(text.as_str());
-                        }
-                    }
-                }
-                let joined = parts.join("\n\n");
-                if !joined.is_empty() {
-                    let body = truncate_session_chat_text(&joined, MAX_SYSTEM_CHAT_CHARS);
-                    app.push_chat(tui::ChatEntry::SystemNote(format!(
-                        "📋 System\n{body}"
-                    )));
-                }
+                push_system_blocks(app, &msg.blocks, MAX_SYSTEM_CHAT_CHARS);
             }
             runtime::MessageRole::User => {
-                for block in &msg.blocks {
-                    match block {
-                        runtime::ContentBlock::Text { text } => {
-                            if !text.trim().is_empty() {
-                                app.push_chat(tui::ChatEntry::UserMessage(text.clone()));
-                            }
-                        }
-                        runtime::ContentBlock::ToolResult {
-                            tool_name,
-                            output,
-                            is_error,
-                            ..
-                        } => {
-                            let mark = if *is_error { "❌" } else { "✓" };
-                            let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
-                            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                                "{mark} `{tool_name}` · resultado\n{body}"
-                            )));
-                        }
-                        runtime::ContentBlock::ToolUse { .. } => {}
-                    }
-                }
+                push_user_blocks(app, &msg.blocks, MAX_TOOL_OUTPUT_CHAT_CHARS);
             }
             runtime::MessageRole::Tool => {
-                for block in &msg.blocks {
-                    if let runtime::ContentBlock::ToolResult {
-                        tool_name,
-                        output,
-                        is_error,
-                        ..
-                    } = block
-                    {
-                        let mark = if *is_error { "❌" } else { "✓" };
-                        let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
-                        app.push_chat(tui::ChatEntry::SystemNote(format!(
-                            "{mark} `{tool_name}` · resultado\n{body}"
-                        )));
-                    }
-                }
+                push_tool_blocks(app, &msg.blocks, MAX_TOOL_OUTPUT_CHAT_CHARS);
             }
             runtime::MessageRole::Assistant => {
-                let mut pending_tools: Vec<tui::ToolBatchItem> = Vec::new();
-
-                for block in &msg.blocks {
-                    match block {
-                        runtime::ContentBlock::Text { text } => {
-                            if !pending_tools.is_empty() {
-                                app.push_chat(tui::ChatEntry::ToolBatchEntry {
-                                    items: std::mem::take(&mut pending_tools),
-                                    closed: true,
-                                });
-                            }
-                            if !text.trim().is_empty() {
-                                app.push_chat(tui::ChatEntry::AssistantText(text.clone()));
-                            }
-                        }
-                        runtime::ContentBlock::ToolUse { id, name, input } => {
-                            let status = match tool_statuses.get(id.as_str()) {
-                                Some(true) => tui::ToolItemStatus::Err,
-                                _ => tui::ToolItemStatus::Ok,
-                            };
-                            pending_tools.push(tui::ToolBatchItem {
-                                name: name.clone(),
-                                input_summary: tool_input_one_line(name, input),
-                                status,
-                            });
-                        }
-                        runtime::ContentBlock::ToolResult {
-                            tool_name,
-                            output,
-                            is_error,
-                            ..
-                        } => {
-                            if !pending_tools.is_empty() {
-                                app.push_chat(tui::ChatEntry::ToolBatchEntry {
-                                    items: std::mem::take(&mut pending_tools),
-                                    closed: true,
-                                });
-                            }
-                            let mark = if *is_error { "❌" } else { "✓" };
-                            let body = truncate_session_chat_text(output, MAX_TOOL_OUTPUT_CHAT_CHARS);
-                            app.push_chat(tui::ChatEntry::SystemNote(format!(
-                                "{mark} `{tool_name}` · resultado\n{body}"
-                            )));
-                        }
-                    }
-                }
-                if !pending_tools.is_empty() {
-                    app.push_chat(tui::ChatEntry::ToolBatchEntry {
-                        items: pending_tools,
-                        closed: true,
-                    });
-                }
+                push_assistant_blocks(
+                    app,
+                    &msg.blocks,
+                    &tool_statuses,
+                    MAX_TOOL_OUTPUT_CHAT_CHARS,
+                );
             }
         }
     }
@@ -7639,7 +7960,12 @@ mod tests {
             MatcherPattern::Exact("read_file".to_string()),
             MatcherPattern::Exact("grep_search".to_string()),
         ];
-        let filtered = filter_tool_specs(&GlobalToolRegistry::builtin(), Some(&allowed), &runtime::ToolCatalog::default(), None);
+        let filtered = filter_tool_specs(
+            &GlobalToolRegistry::builtin(),
+            Some(&allowed),
+            &runtime::ToolCatalog::default(),
+            None,
+        );
         let names = filtered
             .into_iter()
             .map(|spec| spec.name)
@@ -7649,7 +7975,12 @@ mod tests {
 
     #[test]
     fn filtered_tool_specs_include_plugin_tools() {
-        let filtered = filter_tool_specs(&registry_with_plugin_tool(), None, &runtime::ToolCatalog::default(), None);
+        let filtered = filter_tool_specs(
+            &registry_with_plugin_tool(),
+            None,
+            &runtime::ToolCatalog::default(),
+            None,
+        );
         let names = filtered
             .into_iter()
             .map(|definition| definition.name)
@@ -7724,9 +8055,26 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-                "version", "export", "agents", "skills", "budget", "tools", "stats", "providers",
-                "verify", "locale", "deepresearch",
+                "help",
+                "status",
+                "compact",
+                "clear",
+                "cost",
+                "config",
+                "memory",
+                "init",
+                "diff",
+                "version",
+                "export",
+                "agents",
+                "skills",
+                "budget",
+                "tools",
+                "stats",
+                "providers",
+                "verify",
+                "locale",
+                "deepresearch",
             ]
         );
     }

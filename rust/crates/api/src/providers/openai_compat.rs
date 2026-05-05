@@ -129,7 +129,7 @@ impl OpenAiCompatConfig {
         matches!(self.provider_name, "Ollama" | "LM Studio")
     }
 
-    /// OpenCode Zen exposes free models through the same OpenAI-compatible API
+    /// `OpenCode` Zen exposes free models through the same OpenAI-compatible API
     /// using Bearer `public` when no paid `OPENCODE_API_KEY` is configured.
     #[must_use]
     pub fn allows_public_access(self) -> bool {
@@ -644,8 +644,7 @@ impl ToolCallState {
 fn synthetic_chat_completion_id() -> String {
     let ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     format!("chatcmpl_{ns}")
 }
 

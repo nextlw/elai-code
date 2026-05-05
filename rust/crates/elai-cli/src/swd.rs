@@ -287,7 +287,9 @@ pub fn parse_file_actions(text: &str) -> Vec<FileAction> {
         };
         let block_start = start_idx + tag_len;
 
-        let end_idx = if let Some(i) = text[block_start..].find(end_tag) { block_start + i } else {
+        let end_idx = if let Some(i) = text[block_start..].find(end_tag) {
+            block_start + i
+        } else {
             cursor = start_idx + 1;
             continue;
         };

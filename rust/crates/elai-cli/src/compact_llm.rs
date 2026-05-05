@@ -1,4 +1,4 @@
-//! OpenAI-only optional summarization for session compaction (`ELAI_COMPACT_MODEL`, default `gpt-4o-mini`).
+//! `OpenAI`-only optional summarization for session compaction (`ELAI_COMPACT_MODEL`, default `gpt-4o-mini`).
 
 use api::{
     InputMessage, MessageRequest, MessageResponse, OpenAiCompatClient, OpenAiCompatConfig,
@@ -12,7 +12,7 @@ use runtime::{
 const DEFAULT_COMPACT_MODEL: &str = "gpt-4o-mini";
 const MAX_EXCERPT_CHARS: usize = 120_000;
 
-/// Env `ELAI_COMPACT_MODEL` overrides the OpenAI model used only for compaction summaries.
+/// Env `ELAI_COMPACT_MODEL` overrides the `OpenAI` model used only for compaction summaries.
 fn compact_model() -> String {
     std::env::var("ELAI_COMPACT_MODEL").unwrap_or_else(|_| DEFAULT_COMPACT_MODEL.to_string())
 }
@@ -46,7 +46,11 @@ fn format_messages_for_summary(messages: &[ConversationMessage]) -> String {
                     output,
                     is_error,
                 } => {
-                    let prefix = if *is_error { "tool_result error " } else { "tool_result " };
+                    let prefix = if *is_error {
+                        "tool_result error "
+                    } else {
+                        "tool_result "
+                    };
                     parts.push(format!("{prefix}{tool_name}: {output}"));
                 }
             }
@@ -75,7 +79,7 @@ fn extract_summary_text(response: &MessageResponse) -> Option<String> {
     }
 }
 
-/// Calls OpenAI Chat Completions (official endpoint via [`OpenAiCompatConfig::openai`]) to summarize
+/// Calls `OpenAI` Chat Completions (official endpoint via [`OpenAiCompatConfig::openai`]) to summarize
 /// removed messages. Returns `None` if credentials are missing or the request fails.
 pub fn try_openai_compact_summary(removed: &[ConversationMessage]) -> Option<String> {
     let client = OpenAiCompatClient::from_env(OpenAiCompatConfig::openai()).ok()?;
@@ -104,7 +108,7 @@ Preserve file paths, decisions, pending tasks, and tool names. Use concise struc
     extract_summary_text(&response)
 }
 
-/// Runs compaction using an OpenAI summary when credentials exist; otherwise deterministic [`summarize_compact_excerpt`].
+/// Runs compaction using an `OpenAI` summary when credentials exist; otherwise deterministic [`summarize_compact_excerpt`].
 pub fn compact_session_with_optional_openai(
     session: &Session,
     config: CompactionConfig,

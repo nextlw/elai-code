@@ -57,14 +57,18 @@ pub fn shuffle_indices(n: usize) -> Vec<usize> {
 fn seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0xDEAD_BEEF_CAFE_BABE, |d| (d.as_nanos() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .map_or(0xDEAD_BEEF_CAFE_BABE, |d| {
+            (d.as_nanos() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        })
         | 1
 }
 
 /// LCG simples (Numerical Recipes). Suficiente para escolher a ordem das
 /// dicas — não é cripto.
 fn lcg_next(state: u64) -> u64 {
-    state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407)
+    state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407)
 }
 
 #[cfg(test)]

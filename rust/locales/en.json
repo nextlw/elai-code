@@ -160,6 +160,48 @@
     "nav": {
       "next_prev": "→ next  ·  ← previous"
     },
+    "thinking_footer": {
+      "normal": [
+        "Thinking...",
+        "Working...",
+        "De-delulu-ing gently...",
+        "Snapping the noodle (the quengo)...",
+        "Frying one egg...",
+        "Watching the milk so it doesn’t burn...",
+        "Waking sleepy neurons...",
+        "Tying loose thoughts...",
+        "Existential Ctrl+C Ctrl+V vibes...",
+        "Greasing up the JSON...",
+        "Waiting for an imaginary npm install...",
+        "Wandering context with broken GPS...",
+        "Counting toward infinity-ish...",
+        "Poking tabs nobody opened...",
+        "Stretching clichés before the answer...",
+        "Tuning the tiny violin of logic...",
+        "Asking the bits very politely...",
+        "Rounding up bits that tried to slack off..."
+      ],
+      "ultra": [
+        "Ultra squeezing the quengo until it confesses...",
+        "Ultra de-matrixing reality with glitter...",
+        "Ultra breaking the noodle in Dolby layers...",
+        "Ultra cosmic egg scramble... overclocked...",
+        "Ultra guarding multidimensional oat milk...",
+        "Ultra reducing ideas to demi-glace...",
+        "Ultra cerebral overclock — RGB gamer aesthetic...",
+        "Ultra summoning the supreme council of tokens...",
+        "Ultra turbo de-delulu in legendary mode...",
+        "Ultra burning clean-commit incense clouds...",
+        "Ultra colliding context particles at the session LHC...",
+        "Ultra exploding the quengo in 8K mental resolution...",
+        "Ultra drifting in void between twin deadlines...",
+        "Ultra brokering peace between stack traces and softness...",
+        "Ultra melting GPUs with applied philosophy...",
+        "Ultra simmering ramen broth made of logits...",
+        "Ultra invoking the mythical first-compile patch...",
+        "Ultra doubling the dramatic flair — twice..."
+      ]
+    },
     "tool_approval": {
       "title": "⚠  Approve tool?",
       "tool_label": "Tool",

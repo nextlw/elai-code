@@ -29,7 +29,6 @@ pub struct VerifyReport {
     pub memory_entries: usize,
 }
 
-
 // ─── walk_project ─────────────────────────────────────────────────────────────
 
 /// Recursively walk the project tree, returning relative paths for all files.
@@ -38,11 +37,7 @@ pub fn walk_project(root: &Path) -> Vec<PathBuf> {
     let abs_paths = code_index::walker::walk_project(root);
     let rel_paths = abs_paths
         .into_iter()
-        .map(|p| {
-            p.strip_prefix(root)
-                .map(PathBuf::from)
-                .unwrap_or(p)
-        })
+        .map(|p| p.strip_prefix(root).map(PathBuf::from).unwrap_or(p))
         .collect();
     rel_paths
 }
@@ -129,8 +124,9 @@ fn extract_path_candidates(line: &str) -> Vec<String> {
 
     // Extract bare paths: tokens with recognized extension (may or may not contain '/')
     for token in line.split_whitespace() {
-        let token = token
-            .trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == ',' || c == ')' || c == '(');
+        let token = token.trim_matches(|c: char| {
+            c == '`' || c == '\'' || c == '"' || c == ',' || c == ')' || c == '('
+        });
         if looks_like_path(token) {
             candidates.push(token.to_string());
         }
@@ -219,9 +215,8 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
     );
 
     // File references section
-    let has_refs = !report.verified.is_empty()
-        || !report.missing.is_empty()
-        || !report.drift.is_empty();
+    let has_refs =
+        !report.verified.is_empty() || !report.missing.is_empty() || !report.drift.is_empty();
 
     if has_refs {
         out.push('\n');
@@ -266,11 +261,7 @@ pub fn render_verify_report(report: &VerifyReport, _root: &Path) -> String {
             report.untracked.len()
         );
         for path in report.untracked.iter().take(MAX_SHOW) {
-            let _ = writeln!(
-                out,
-                "  {ANSI_DIM}{}{ANSI_RESET}",
-                path.display()
-            );
+            let _ = writeln!(out, "  {ANSI_DIM}{}{ANSI_RESET}", path.display());
         }
         if report.untracked.len() > MAX_SHOW {
             let _ = writeln!(
@@ -311,9 +302,8 @@ pub fn render_verify_report_tui(report: &VerifyReport) -> String {
         report.files_scanned, report.memory_entries
     );
 
-    let has_refs = !report.verified.is_empty()
-        || !report.missing.is_empty()
-        || !report.drift.is_empty();
+    let has_refs =
+        !report.verified.is_empty() || !report.missing.is_empty() || !report.drift.is_empty();
 
     if has_refs || report.memory_entries > 0 {
         out.push_str("\nReferências de Arquivo:\n");
@@ -478,11 +468,15 @@ mod tests {
         fs::write(root.join("target/debug/binary"), "bin").unwrap();
 
         let files = walk_project(root);
-        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
 
         assert!(
             names.iter().any(|n| n.contains("main.rs")),
-            "main.rs should be present, got: {:?}", names
+            "main.rs should be present, got: {:?}",
+            names
         );
         assert!(
             !names.iter().any(|n| n.contains("debug.log")),
@@ -507,19 +501,25 @@ MODIFY: src/lib.rs — add new function
         let files = vec![(source.clone(), content.to_string())];
         let entries = parse_memory_entries(&files);
 
-        let paths: Vec<String> = entries.iter().map(|e| e.path.to_string_lossy().to_string()).collect();
+        let paths: Vec<String> = entries
+            .iter()
+            .map(|e| e.path.to_string_lossy().to_string())
+            .collect();
 
         assert!(
             paths.iter().any(|p| p == "src/main.rs"),
-            "should extract src/main.rs from backticks, got: {:?}", paths
+            "should extract src/main.rs from backticks, got: {:?}",
+            paths
         );
         assert!(
             paths.iter().any(|p| p == "Cargo.toml"),
-            "should extract Cargo.toml, got: {:?}", paths
+            "should extract Cargo.toml, got: {:?}",
+            paths
         );
         assert!(
             paths.iter().any(|p| p == "src/lib.rs"),
-            "should extract src/lib.rs from MODIFY: prefix, got: {:?}", paths
+            "should extract src/lib.rs from MODIFY: prefix, got: {:?}",
+            paths
         );
 
         // Deduplication: src/main.rs should appear only once
@@ -537,19 +537,42 @@ MODIFY: src/lib.rs — add new function
         ];
         let source = PathBuf::from("ELAI.md");
         let memory = vec![
-            MemoryEntry { path: PathBuf::from("a.rs"), source_file: source.clone(), line_number: 1 },
-            MemoryEntry { path: PathBuf::from("b.rs"), source_file: source.clone(), line_number: 2 },
-            MemoryEntry { path: PathBuf::from("d.rs"), source_file: source.clone(), line_number: 3 },
+            MemoryEntry {
+                path: PathBuf::from("a.rs"),
+                source_file: source.clone(),
+                line_number: 1,
+            },
+            MemoryEntry {
+                path: PathBuf::from("b.rs"),
+                source_file: source.clone(),
+                line_number: 2,
+            },
+            MemoryEntry {
+                path: PathBuf::from("d.rs"),
+                source_file: source.clone(),
+                line_number: 3,
+            },
         ];
 
         let report = diff_entries(&root, &files, &memory);
 
-        let verified_paths: Vec<&str> = report.verified.iter().map(|p| p.to_str().unwrap()).collect();
+        let verified_paths: Vec<&str> = report
+            .verified
+            .iter()
+            .map(|p| p.to_str().unwrap())
+            .collect();
         assert!(verified_paths.contains(&"a.rs"), "a.rs should be verified");
         assert!(verified_paths.contains(&"b.rs"), "b.rs should be verified");
 
-        let untracked_paths: Vec<&str> = report.untracked.iter().map(|p| p.to_str().unwrap()).collect();
-        assert!(untracked_paths.contains(&"c.rs"), "c.rs should be untracked");
+        let untracked_paths: Vec<&str> = report
+            .untracked
+            .iter()
+            .map(|p| p.to_str().unwrap())
+            .collect();
+        assert!(
+            untracked_paths.contains(&"c.rs"),
+            "c.rs should be untracked"
+        );
 
         let missing_paths: Vec<&str> = report.missing.iter().map(|p| p.to_str().unwrap()).collect();
         assert!(missing_paths.contains(&"d.rs"), "d.rs should be missing");
@@ -565,7 +588,8 @@ MODIFY: src/lib.rs — add new function
         fs::write(
             root.join(".gitignore"),
             "*.log\nbuild/\n!important.log\ntarget\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let rules = IgnoreRules::load(root);
 
@@ -605,14 +629,32 @@ MODIFY: src/lib.rs — add new function
         let root = PathBuf::from("/tmp");
         let output = render_verify_report(&report, &root);
 
-        assert!(output.contains("verified"), "output should mention 'verified'");
-        assert!(output.contains("missing"), "output should mention 'missing'");
-        assert!(output.contains("2 verified"), "should show count 2 verified");
+        assert!(
+            output.contains("verified"),
+            "output should mention 'verified'"
+        );
+        assert!(
+            output.contains("missing"),
+            "output should mention 'missing'"
+        );
+        assert!(
+            output.contains("2 verified"),
+            "should show count 2 verified"
+        );
         assert!(output.contains("1 missing"), "should show count 1 missing");
         assert!(output.contains("src/main.rs"), "should list src/main.rs");
-        assert!(output.contains("src/deleted.rs"), "should list deleted file");
-        assert!(output.contains("Scanned 10 files"), "should show scanned count");
-        assert!(output.contains("Memory has 3 entries"), "should show memory count");
+        assert!(
+            output.contains("src/deleted.rs"),
+            "should list deleted file"
+        );
+        assert!(
+            output.contains("Scanned 10 files"),
+            "should show scanned count"
+        );
+        assert!(
+            output.contains("Memory has 3 entries"),
+            "should show memory count"
+        );
     }
 
     #[test]
@@ -636,7 +678,10 @@ MODIFY: src/lib.rs — add new function
         fs::write(shallow.join("shallow_file.rs"), "shallow").unwrap();
 
         let files = walk_project(root);
-        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
 
         // deep_file.rs is at depth 21 (20 dirs + file), beyond MAX_DEPTH=15
         assert!(
@@ -646,7 +691,8 @@ MODIFY: src/lib.rs — add new function
         // shallow_file.rs at depth 14 should be present
         assert!(
             names.iter().any(|n| n.contains("shallow_file.rs")),
-            "file at depth 14 should be included, got: {:?}", names
+            "file at depth 14 should be included, got: {:?}",
+            names
         );
     }
 }

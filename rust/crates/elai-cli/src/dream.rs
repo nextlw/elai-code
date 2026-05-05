@@ -139,9 +139,7 @@ pub fn build_compression_prompt(entries: &[String], existing_summary: Option<&st
     let entries_text = entries.join("\n\n---\n\n");
 
     let existing_ctx = existing_summary.map_or_else(String::new, |s| {
-        format!(
-            "\n\nPreviously compressed summary (merge and update as needed):\n{s}\n"
-        )
+        format!("\n\nPreviously compressed summary (merge and update as needed):\n{s}\n")
     });
 
     format!(
@@ -172,13 +170,9 @@ pub fn rewrite_memory(path: &Path, summary: &str, recent: &[String]) -> io::Resu
     // Build new content.
     let recent_text = recent.join("\n\n---\n\n");
     let new_content = if recent_text.is_empty() {
-        format!(
-            "{SUMMARY_OPEN}\n{summary}\n{SUMMARY_CLOSE}\n"
-        )
+        format!("{SUMMARY_OPEN}\n{summary}\n{SUMMARY_CLOSE}\n")
     } else {
-        format!(
-            "{SUMMARY_OPEN}\n{summary}\n{SUMMARY_CLOSE}\n\n{recent_text}\n"
-        )
+        format!("{SUMMARY_OPEN}\n{summary}\n{SUMMARY_CLOSE}\n\n{recent_text}\n")
     };
 
     fs::write(path, new_content)
@@ -296,7 +290,11 @@ mod tests {
         let content = make_heading_content(25);
         let result = parse_memory_sections(&content);
         assert_eq!(result.old_entries.len(), 5, "should have 5 old entries");
-        assert_eq!(result.recent_entries.len(), 20, "should have 20 recent entries");
+        assert_eq!(
+            result.recent_entries.len(),
+            20,
+            "should have 20 recent entries"
+        );
         assert!(result.existing_summary.is_none());
     }
 
@@ -305,7 +303,11 @@ mod tests {
         let content = make_hr_content(25);
         let result = parse_memory_sections(&content);
         assert_eq!(result.old_entries.len(), 5, "should have 5 old entries");
-        assert_eq!(result.recent_entries.len(), 20, "should have 20 recent entries");
+        assert_eq!(
+            result.recent_entries.len(),
+            20,
+            "should have 20 recent entries"
+        );
         assert!(result.existing_summary.is_none());
     }
 
@@ -314,7 +316,11 @@ mod tests {
         let content = make_heading_content(10);
         let result = parse_memory_sections(&content);
         assert_eq!(result.old_entries.len(), 0, "should have 0 old entries");
-        assert_eq!(result.recent_entries.len(), 10, "should have 10 recent entries");
+        assert_eq!(
+            result.recent_entries.len(),
+            10,
+            "should have 10 recent entries"
+        );
     }
 
     #[test]
@@ -347,7 +353,10 @@ mod tests {
         let backup_path = path.with_extension("md.bak");
         assert!(backup_path.exists(), "backup file should exist");
         let backup_content = fs::read_to_string(&backup_path).unwrap();
-        assert_eq!(backup_content, original, "backup should be identical to original");
+        assert_eq!(
+            backup_content, original,
+            "backup should be identical to original"
+        );
     }
 
     #[test]
@@ -365,11 +374,23 @@ mod tests {
         rewrite_memory(&path, summary, &recent).unwrap();
 
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains(SUMMARY_OPEN), "should contain opening marker");
-        assert!(written.contains(SUMMARY_CLOSE), "should contain closing marker");
+        assert!(
+            written.contains(SUMMARY_OPEN),
+            "should contain opening marker"
+        );
+        assert!(
+            written.contains(SUMMARY_CLOSE),
+            "should contain closing marker"
+        );
         assert!(written.contains(summary), "should contain summary text");
-        assert!(written.contains("## Recent 1"), "should contain recent entries");
-        assert!(written.contains("## Recent 2"), "should contain recent entries");
+        assert!(
+            written.contains("## Recent 1"),
+            "should contain recent entries"
+        );
+        assert!(
+            written.contains("## Recent 2"),
+            "should contain recent entries"
+        );
     }
 
     #[test]

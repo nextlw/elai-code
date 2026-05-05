@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
+fastrand = "2"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 lsp-types = "0.97"

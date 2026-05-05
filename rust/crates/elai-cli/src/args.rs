@@ -235,7 +235,6 @@ pub struct LoginArgs {
     pub import_codex: bool,
 }
 
-
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub enum AuthCmd {
     /// Show the active authentication method, expiry, and scopes
@@ -265,7 +264,10 @@ pub enum OutputFormat {
 mod tests {
     use clap::Parser;
 
-    use super::{AuthCmd, ChatCmd, Cli, Command, EmbedProviderArg, IndexBackend, InitArgs, LoginArgs, ModelCmd, OutputFormat, PermissionMode};
+    use super::{
+        AuthCmd, ChatCmd, Cli, Command, EmbedProviderArg, IndexBackend, InitArgs, LoginArgs,
+        ModelCmd, OutputFormat, PermissionMode,
+    };
 
     #[test]
     fn parses_requested_flags() {
@@ -301,10 +303,7 @@ mod tests {
     #[test]
     fn parses_login_and_logout_commands() {
         let login = Cli::parse_from(["elai-cli", "login"]);
-        assert_eq!(
-            login.command,
-            Some(Command::Login(LoginArgs::default()))
-        );
+        assert_eq!(login.command, Some(Command::Login(LoginArgs::default())));
 
         let logout = Cli::parse_from(["elai-cli", "logout"]);
         assert_eq!(logout.command, Some(Command::Logout));
@@ -437,10 +436,7 @@ mod tests {
     #[test]
     fn parses_model_get() {
         let cli = Cli::parse_from(["elai-cli", "model", "get"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Model { cmd: ModelCmd::Get })
-        );
+        assert_eq!(cli.command, Some(Command::Model { cmd: ModelCmd::Get }));
     }
 
     #[test]
@@ -461,7 +457,10 @@ mod tests {
         assert_eq!(
             cli.command,
             Some(Command::Chat {
-                cmd: ChatCmd::Show { last: 5, json: false }
+                cmd: ChatCmd::Show {
+                    last: 5,
+                    json: false
+                }
             })
         );
     }

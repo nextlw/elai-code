@@ -1146,6 +1146,7 @@ dependencies = [
  "compat-harness",
  "crossterm",
  "dotenvy",
+ "fastrand",
  "hex",
  "plugins",
  "pulldown-cmark",

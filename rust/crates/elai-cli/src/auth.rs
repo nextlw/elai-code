@@ -7,10 +7,10 @@ use std::process::Output as ProcessOutput;
 
 use api::{base_url_is_anthropic_official, read_base_url, AuthSource, ElaiApiClient};
 use runtime::{
-    generate_pkce_pair, generate_state, load_auth_method, loopback_redirect_uri,
-    parse_oauth_callback_request_target, save_auth_method, clear_auth_method,
-    AnthropicOAuthEndpoints, ApiKeyOrigin, AuthMethod, OAuthAuthorizationRequest,
-    OAuthCallbackParams, OAuthMode, OAuthTokenExchangeRequest, OAuthTokenSet,
+    clear_auth_method, generate_pkce_pair, generate_state, load_auth_method, loopback_redirect_uri,
+    parse_oauth_callback_request_target, save_auth_method, AnthropicOAuthEndpoints, ApiKeyOrigin,
+    AuthMethod, OAuthAuthorizationRequest, OAuthCallbackParams, OAuthMode,
+    OAuthTokenExchangeRequest, OAuthTokenSet,
 };
 
 use crate::args::LoginArgs;
@@ -184,18 +184,31 @@ fn clear_elai_dotenv() -> io::Result<()> {
         return Ok(());
     };
     let known_keys: &[&str] = &[
-        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-        "OPENAI_API_KEY", "OPENAI_BASE_URL",
-        "XAI_API_KEY", "XAI_BASE_URL",
-        "OPENCODE_GO_API_KEY", "OPENCODE_GO_BASE_URL",
-        "OPENCODE_API_KEY", "OPENCODE_BASE_URL",
-        "ELAI_DEFAULT_OPENAI_MODEL", "ELAI_DEFAULT_ANTHROPIC_MODEL",
-        "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "XAI_API_KEY",
+        "XAI_BASE_URL",
+        "OPENCODE_GO_API_KEY",
+        "OPENCODE_GO_BASE_URL",
+        "OPENCODE_API_KEY",
+        "OPENCODE_BASE_URL",
+        "ELAI_DEFAULT_OPENAI_MODEL",
+        "ELAI_DEFAULT_ANTHROPIC_MODEL",
+        "OLLAMA_BASE_URL",
+        "LMSTUDIO_BASE_URL",
     ];
     let kept: Vec<&str> = existing
         .lines()
         .filter(|l| {
-            let k = l.trim_start_matches("export ").split('=').next().unwrap_or("").trim();
+            let k = l
+                .trim_start_matches("export ")
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim();
             !known_keys.contains(&k)
         })
         .collect();
@@ -236,17 +249,11 @@ pub fn dispatch_auth_list() {
     println!("Available login methods:");
     println!();
     println!("  console     OAuth via Anthropic Console — creates an API key");
-    println!(
-        "  claudeai    OAuth via claude.ai — Pro/Max/Team subscriber bearer"
-    );
-    println!(
-        "  sso         claude.ai with login_method=sso (use --email to pre-fill)"
-    );
+    println!("  claudeai    OAuth via claude.ai — Pro/Max/Team subscriber bearer");
+    println!("  sso         claude.ai with login_method=sso (use --email to pre-fill)");
     println!("  api-key     Paste an sk-ant-... key (use --stdin in CI)");
     println!("  token       Paste an ANTHROPIC_AUTH_TOKEN bearer");
-    println!(
-        "  use-bedrock Switch to AWS Bedrock (uses AWS credential chain)"
-    );
+    println!("  use-bedrock Switch to AWS Bedrock (uses AWS credential chain)");
     println!("  use-vertex  Switch to Google Vertex AI");
     println!("  use-foundry Switch to Azure Foundry");
     println!("  codex-oauth Open browser login via `codex login` and import");
@@ -266,12 +273,8 @@ fn login_claude_ai(args: &LoginArgs, sso: bool) -> Result<(), AuthError> {
     let pkce = generate_pkce_pair().map_err(AuthError::Io)?;
     let state = generate_state().map_err(AuthError::Io)?;
     let redirect_uri = loopback_redirect_uri(port);
-    let mut req = OAuthAuthorizationRequest::from_config(
-        &cfg,
-        redirect_uri.clone(),
-        state.clone(),
-        &pkce,
-    );
+    let mut req =
+        OAuthAuthorizationRequest::from_config(&cfg, redirect_uri.clone(), state.clone(), &pkce);
     if let Some(email) = &args.email {
         req = req.with_extra_param("login_hint", email.as_str());
     }
@@ -305,15 +308,9 @@ fn login_claude_ai(args: &LoginArgs, sso: bool) -> Result<(), AuthError> {
         return Err(AuthError::StateMismatch);
     }
 
-    let client =
-        ElaiApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
-    let exchange_req = OAuthTokenExchangeRequest::from_config(
-        &cfg,
-        code,
-        state,
-        pkce.verifier,
-        redirect_uri,
-    );
+    let client = ElaiApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
+    let exchange_req =
+        OAuthTokenExchangeRequest::from_config(&cfg, code, state, pkce.verifier, redirect_uri);
     let beta = endpoints.beta_header.clone();
     let tokens = tokio_block_on(async {
         client
@@ -323,15 +320,14 @@ fn login_claude_ai(args: &LoginArgs, sso: bool) -> Result<(), AuthError> {
 
     // Probe roles for subscription label (best-effort).
     let access_token = tokens.access_token.clone();
-    let subscription = tokio_block_on(async {
-        client.fetch_roles(&endpoints, &access_token).await
-    })
-    .ok()
-    .and_then(|json| {
-        json.get("subscription_type")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-    });
+    let subscription =
+        tokio_block_on(async { client.fetch_roles(&endpoints, &access_token).await })
+            .ok()
+            .and_then(|json| {
+                json.get("subscription_type")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            });
 
     save_auth_method(&AuthMethod::ClaudeAiOAuth {
         token_set: OAuthTokenSet {
@@ -355,12 +351,8 @@ fn login_console(args: &LoginArgs) -> Result<(), AuthError> {
     let pkce = generate_pkce_pair().map_err(AuthError::Io)?;
     let state = generate_state().map_err(AuthError::Io)?;
     let redirect_uri = loopback_redirect_uri(port);
-    let mut req = OAuthAuthorizationRequest::from_config(
-        &cfg,
-        redirect_uri.clone(),
-        state.clone(),
-        &pkce,
-    );
+    let mut req =
+        OAuthAuthorizationRequest::from_config(&cfg, redirect_uri.clone(), state.clone(), &pkce);
     if let Some(email) = &args.email {
         req = req.with_extra_param("login_hint", email.as_str());
     }
@@ -388,15 +380,9 @@ fn login_console(args: &LoginArgs) -> Result<(), AuthError> {
         return Err(AuthError::StateMismatch);
     }
 
-    let client =
-        ElaiApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
-    let exchange_req = OAuthTokenExchangeRequest::from_config(
-        &cfg,
-        code,
-        state,
-        pkce.verifier,
-        redirect_uri,
-    );
+    let client = ElaiApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
+    let exchange_req =
+        OAuthTokenExchangeRequest::from_config(&cfg, code, state, pkce.verifier, redirect_uri);
     let beta = endpoints.beta_header.clone();
     let tokens = tokio_block_on(async {
         client
@@ -407,7 +393,9 @@ fn login_console(args: &LoginArgs) -> Result<(), AuthError> {
     // Create console API key from the OAuth access token
     let access_token = tokens.access_token.clone();
     let raw_key = tokio_block_on(async {
-        client.create_console_api_key(&endpoints, &access_token).await
+        client
+            .create_console_api_key(&endpoints, &access_token)
+            .await
     })?;
 
     save_auth_method(&AuthMethod::ConsoleApiKey {
@@ -474,108 +462,149 @@ fn toggle_3p(method: &AuthMethod, env_var: &str) -> Result<(), AuthError> {
 ///   1. `~/.claude/.credentials.json`  — Claude Code stores OAuth & API keys here
 ///   2. macOS Keychain entry "Claude Code-credentials" (best-effort, macOS only)
 ///   3. `ANTHROPIC_API_KEY` environment variable
-fn import_claude_code_login() -> Result<(), AuthError> {
-    // 1. Try ~/.claude/.credentials.json
-    if let Some(home) = std::env::var_os("HOME") {
-        let creds_path = std::path::PathBuf::from(home).join(".claude").join(".credentials.json");
-        if let Ok(data) = std::fs::read_to_string(&creds_path) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                // OAuth token object (claudeAiOAuthToken key)
-                if let Some(oauth) = json.get("claudeAiOAuthToken") {
-                    let access = oauth.get("accessToken")
-                        .or_else(|| oauth.get("access_token"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    if !access.is_empty() {
-                        let refresh = oauth.get("refreshToken")
-                            .or_else(|| oauth.get("refresh_token"))
-                            .and_then(|v| v.as_str())
-                            .map(ToOwned::to_owned);
-                        let expires_at = oauth.get("expiresAt")
-                            .or_else(|| oauth.get("expires_at"))
-                            .and_then(serde_json::Value::as_u64);
-                        let scopes: Vec<String> = oauth.get("scopes")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|s| s.as_str().map(ToOwned::to_owned)).collect())
-                            .unwrap_or_default();
-                        save_auth_method(&AuthMethod::ClaudeAiOAuth {
-                            token_set: OAuthTokenSet {
-                                access_token: access,
-                                refresh_token: refresh,
-                                expires_at,
-                                scopes,
-                            },
-                            subscription: None,
-                        })
-                        .map_err(AuthError::Io)?;
-                        println!("Imported Claude Code OAuth credentials from {}.", creds_path.display());
-                        return Ok(());
-                    }
-                }
-                // API key (apiKey key)
-                if let Some(key) = json.get("apiKey").and_then(|v| v.as_str()) {
-                    if !key.is_empty() {
-                        save_auth_method(&AuthMethod::ConsoleApiKey {
-                            api_key: key.to_string(),
-                            origin: ApiKeyOrigin::Pasted,
-                        })
-                        .map_err(AuthError::Io)?;
-                        println!("Imported Claude Code API key from {}.", creds_path.display());
-                        return Ok(());
-                    }
-                }
-            }
+fn try_import_from_credentials_file() -> Result<bool, AuthError> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(false);
+    };
+    let creds_path = std::path::PathBuf::from(home)
+        .join(".claude")
+        .join(".credentials.json");
+    let Ok(data) = std::fs::read_to_string(&creds_path) else {
+        return Ok(false);
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return Ok(false);
+    };
+    // OAuth token object (claudeAiOAuthToken key)
+    if let Some(oauth) = json.get("claudeAiOAuthToken") {
+        let access = oauth
+            .get("accessToken")
+            .or_else(|| oauth.get("access_token"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !access.is_empty() {
+            let refresh = oauth
+                .get("refreshToken")
+                .or_else(|| oauth.get("refresh_token"))
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned);
+            let expires_at = oauth
+                .get("expiresAt")
+                .or_else(|| oauth.get("expires_at"))
+                .and_then(serde_json::Value::as_u64);
+            let scopes: Vec<String> = oauth
+                .get("scopes")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            save_auth_method(&AuthMethod::ClaudeAiOAuth {
+                token_set: OAuthTokenSet {
+                    access_token: access,
+                    refresh_token: refresh,
+                    expires_at,
+                    scopes,
+                },
+                subscription: None,
+            })
+            .map_err(AuthError::Io)?;
+            println!(
+                "Imported Claude Code OAuth credentials from {}.",
+                creds_path.display()
+            );
+            return Ok(true);
         }
     }
-
-    // 2. macOS Keychain (best-effort, silent on non-macOS)
-    #[cfg(target_os = "macos")]
-    {
-        let output = std::process::Command::new("security")
-            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !raw.is_empty() {
-                    // The keychain may store the full JSON or just a token string
-                    let token = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
-                        json.get("accessToken")
-                            .or_else(|| json.get("access_token"))
-                            .and_then(|v| v.as_str())
-                            .map(ToOwned::to_owned)
-                            .unwrap_or(raw.clone())
-                    } else {
-                        raw.clone()
-                    };
-                    if !token.is_empty() {
-                        save_auth_method(&AuthMethod::AnthropicAuthToken { token })
-                            .map_err(AuthError::Io)?;
-                        println!("Imported Claude Code credentials from macOS Keychain.");
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. ANTHROPIC_API_KEY env var
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+    // API key (apiKey key)
+    if let Some(key) = json.get("apiKey").and_then(|v| v.as_str()) {
         if !key.is_empty() {
             save_auth_method(&AuthMethod::ConsoleApiKey {
-                api_key: key,
+                api_key: key.to_string(),
                 origin: ApiKeyOrigin::Pasted,
             })
             .map_err(AuthError::Io)?;
-            println!("Imported credentials from ANTHROPIC_API_KEY environment variable.");
-            return Ok(());
+            println!(
+                "Imported Claude Code API key from {}.",
+                creds_path.display()
+            );
+            return Ok(true);
         }
     }
+    Ok(false)
+}
 
+#[cfg(target_os = "macos")]
+fn try_import_from_keychain() -> Result<bool, AuthError> {
+    let output = std::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output();
+    let Ok(out) = output else {
+        return Ok(false);
+    };
+    if !out.status.success() {
+        return Ok(false);
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if raw.is_empty() {
+        return Ok(false);
+    }
+    // The keychain may store the full JSON or just a token string
+    let token = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+        json.get("accessToken")
+            .or_else(|| json.get("access_token"))
+            .and_then(|v| v.as_str())
+            .map_or_else(|| raw.clone(), ToOwned::to_owned)
+    } else {
+        raw.clone()
+    };
+    if token.is_empty() {
+        return Ok(false);
+    }
+    save_auth_method(&AuthMethod::AnthropicAuthToken { token }).map_err(AuthError::Io)?;
+    println!("Imported Claude Code credentials from macOS Keychain.");
+    Ok(true)
+}
+
+fn try_import_from_env_api_key() -> Result<bool, AuthError> {
+    let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
+        return Ok(false);
+    };
+    if key.is_empty() {
+        return Ok(false);
+    }
+    save_auth_method(&AuthMethod::ConsoleApiKey {
+        api_key: key,
+        origin: ApiKeyOrigin::Pasted,
+    })
+    .map_err(AuthError::Io)?;
+    println!("Imported credentials from ANTHROPIC_API_KEY environment variable.");
+    Ok(true)
+}
+
+fn import_claude_code_login() -> Result<(), AuthError> {
+    if try_import_from_credentials_file()? {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if try_import_from_keychain()? {
+        return Ok(());
+    }
+    if try_import_from_env_api_key()? {
+        return Ok(());
+    }
     Err(AuthError::InvalidInput(
         "Could not find Claude Code credentials. \
-         Ensure Claude Code is installed and logged in, or set ANTHROPIC_API_KEY.".into(),
+         Ensure Claude Code is installed and logged in, or set ANTHROPIC_API_KEY."
+            .into(),
     ))
 }
 
@@ -611,8 +640,8 @@ pub fn login_codex_oauth(no_browser: bool) -> Result<(), AuthError> {
         return import_codex_login();
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let should_retry_isolated = stderr.contains("model_reasoning_effort")
-        && stderr.contains("unknown variant `xhigh`");
+    let should_retry_isolated =
+        stderr.contains("model_reasoning_effort") && stderr.contains("unknown variant `xhigh`");
     if should_retry_isolated {
         return login_codex_oauth_isolated(no_browser);
     }
@@ -702,7 +731,12 @@ fn merge_elai_dotenv_key(key: &str, value: &str) -> io::Result<()> {
     let mut lines: Vec<String> = existing
         .lines()
         .filter(|l| {
-            let k = l.trim_start_matches("export ").split('=').next().unwrap_or("").trim();
+            let k = l
+                .trim_start_matches("export ")
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim();
             k != key
         })
         .map(String::from)
@@ -746,8 +780,10 @@ pub fn save_pasted_auth_token(value: &str) -> Result<(), AuthError> {
     if v.is_empty() {
         return Err(AuthError::InvalidInput("auth token is empty".into()));
     }
-    save_auth_method(&AuthMethod::AnthropicAuthToken { token: v.to_string() })
-        .map_err(AuthError::Io)
+    save_auth_method(&AuthMethod::AnthropicAuthToken {
+        token: v.to_string(),
+    })
+    .map_err(AuthError::Io)
 }
 
 /// Save an `OpenAI` API key (sk-... ou sk-proj-...) pasted directly by the user
@@ -759,8 +795,10 @@ pub fn save_pasted_openai_key(value: &str) -> Result<(), AuthError> {
     if v.is_empty() {
         return Err(AuthError::InvalidInput("openai api key is empty".into()));
     }
-    save_auth_method(&AuthMethod::OpenAiApiKey { api_key: v.to_string() })
-        .map_err(AuthError::Io)
+    save_auth_method(&AuthMethod::OpenAiApiKey {
+        api_key: v.to_string(),
+    })
+    .map_err(AuthError::Io)
 }
 
 /// Save an `OpenCode` Go API key pasted by the user in the TUI. Persists to
@@ -768,7 +806,9 @@ pub fn save_pasted_openai_key(value: &str) -> Result<(), AuthError> {
 pub fn save_pasted_opencode_go_key(value: &str) -> Result<(), AuthError> {
     let v = value.trim();
     if v.is_empty() {
-        return Err(AuthError::InvalidInput("OpenCode Go API key is empty".into()));
+        return Err(AuthError::InvalidInput(
+            "OpenCode Go API key is empty".into(),
+        ));
     }
     std::env::set_var("OPENCODE_GO_API_KEY", v);
     merge_elai_dotenv_key("OPENCODE_GO_API_KEY", v).map_err(AuthError::Io)?;
@@ -798,7 +838,11 @@ pub fn save_3p_named(env_var: &str) -> Result<(), AuthError> {
         "CLAUDE_CODE_USE_BEDROCK" => AuthMethod::Bedrock,
         "CLAUDE_CODE_USE_VERTEX" => AuthMethod::Vertex,
         "CLAUDE_CODE_USE_FOUNDRY" => AuthMethod::Foundry,
-        _ => return Err(AuthError::InvalidInput(format!("unknown env var: {env_var}"))),
+        _ => {
+            return Err(AuthError::InvalidInput(format!(
+                "unknown env var: {env_var}"
+            )))
+        }
     };
     save_3p(&method)
 }
@@ -845,18 +889,11 @@ fn legacy_elai_login(args: &LoginArgs) -> Result<(), AuthError> {
         return Err(AuthError::StateMismatch);
     }
 
-    let client =
-        ElaiApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
-    let exchange_request = OAuthTokenExchangeRequest::from_config(
-        oauth,
-        code,
-        state,
-        pkce.verifier,
-        redirect_uri,
-    );
-    let token_set = tokio_block_on(async {
-        client.exchange_oauth_code(oauth, &exchange_request).await
-    })?;
+    let client = ElaiApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
+    let exchange_request =
+        OAuthTokenExchangeRequest::from_config(oauth, code, state, pkce.verifier, redirect_uri);
+    let token_set =
+        tokio_block_on(async { client.exchange_oauth_code(oauth, &exchange_request).await })?;
     runtime::save_oauth_credentials(&OAuthTokenSet {
         access_token: token_set.access_token,
         refresh_token: token_set.refresh_token,
@@ -920,18 +957,14 @@ pub fn wait_for_oauth_callback(port: u16) -> Result<OAuthCallbackParams, AuthErr
             "missing callback request line",
         ))
     })?;
-    let target = request_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| {
-            AuthError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "missing callback request target",
-            ))
-        })?;
-    let callback = parse_oauth_callback_request_target(target).map_err(|error| {
-        AuthError::Io(io::Error::new(io::ErrorKind::InvalidData, error))
+    let target = request_line.split_whitespace().nth(1).ok_or_else(|| {
+        AuthError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing callback request target",
+        ))
     })?;
+    let callback = parse_oauth_callback_request_target(target)
+        .map_err(|error| AuthError::Io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
     let body = if callback.error.is_some() {
         "Anthropic OAuth login failed. You can close this window."
     } else {
@@ -942,7 +975,9 @@ pub fn wait_for_oauth_callback(port: u16) -> Result<OAuthCallbackParams, AuthErr
         body.len(),
         body
     );
-    stream.write_all(response.as_bytes()).map_err(AuthError::Io)?;
+    stream
+        .write_all(response.as_bytes())
+        .map_err(AuthError::Io)?;
     Ok(callback)
 }
 
@@ -1165,10 +1200,19 @@ fn auth_info_from_method(method: &AuthMethod) -> AuthInfo {
 
 fn auth_info_to_json(info: &AuthInfo) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("method".into(), serde_json::Value::String(info.method.clone()));
-    map.insert("source".into(), serde_json::Value::String(info.source.clone()));
+    map.insert(
+        "method".into(),
+        serde_json::Value::String(info.method.clone()),
+    );
+    map.insert(
+        "source".into(),
+        serde_json::Value::String(info.source.clone()),
+    );
     if let Some(sub) = &info.subscription {
-        map.insert("subscription".into(), serde_json::Value::String(sub.clone()));
+        map.insert(
+            "subscription".into(),
+            serde_json::Value::String(sub.clone()),
+        );
     }
     if let Some(exp) = info.expires_at {
         map.insert("expires_at".into(), serde_json::Value::Number(exp.into()));

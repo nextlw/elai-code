@@ -124,9 +124,21 @@ pub struct EasterEggTheme {
 impl Default for EasterEggTheme {
     fn default() -> Self {
         Self {
-            body: Color::Rgb { r: 242, g: 222, b: 206 },
-            warm: Color::Rgb { r: 201, g: 123, b: 74 },
-            dark: Color::Rgb { r: 110, g: 65, b: 28 },
+            body: Color::Rgb {
+                r: 242,
+                g: 222,
+                b: 206,
+            },
+            warm: Color::Rgb {
+                r: 201,
+                g: 123,
+                b: 74,
+            },
+            dark: Color::Rgb {
+                r: 110,
+                g: 65,
+                b: 28,
+            },
         }
     }
 }
@@ -1127,7 +1139,9 @@ fn strip_ansi(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_color, strip_ansi, ColorTheme, MarkdownStreamState, Spinner, TerminalRenderer};
+    use super::{
+        parse_color, strip_ansi, ColorTheme, MarkdownStreamState, Spinner, TerminalRenderer,
+    };
     use crossterm::style::Color;
     use std::sync::Mutex;
     use tempfile::TempDir;

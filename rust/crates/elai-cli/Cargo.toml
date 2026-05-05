@@ -28,6 +28,7 @@ code_index = { path = "../code_index", default-features = false, features = [
 clap = { version = "4", features = ["derive"] }
 commands = { path = "../commands" }
 script-runner = { path = "../script-runner" }
+fastrand.workspace = true
 dotenvy = "0.15"
 compat-harness = { path = "../compat-harness" }
 crossterm = "0.29"

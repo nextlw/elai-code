@@ -297,10 +297,10 @@ fn ensure_qdrant_running(
         thread::sleep(Duration::from_millis(300));
     }
 
-    Err(format!(
-        "Qdrant não respondeu na porta {port} após iniciar o container '{container_name}'"
+    Err(
+        format!("Qdrant não respondeu na porta {port} após iniciar o container '{container_name}'")
+            .into(),
     )
-    .into())
 }
 
 fn run_indexing_with_progress(
@@ -338,15 +338,17 @@ fn run_indexing_with_progress(
 }
 
 #[cfg(feature = "embed-fastembed")]
-fn build_local_embedder(
-    parent_id: &str,
-) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+fn build_local_embedder(parent_id: &str) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
     // Cache do fastembed em ~/.elai/fastembed_cache (centralizado, removido
     // pelo `elai uninstall`). Se vazio, primeira run baixa ~125 MB — vira
     // sub-task irmã da Init pra aparecer com sua própria linha viva.
     let cache_dir = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|h| std::path::PathBuf::from(h).join(".elai").join("fastembed_cache"));
+        .map(|h| {
+            std::path::PathBuf::from(h)
+                .join(".elai")
+                .join("fastembed_cache")
+        });
     let cache_populated = cache_dir
         .as_ref()
         .is_some_and(|p| p.is_dir() && p.read_dir().is_ok_and(|mut d| d.next().is_some()));
@@ -374,12 +376,12 @@ fn build_local_embedder(
 }
 
 #[cfg(not(feature = "embed-fastembed"))]
-fn build_local_embedder(
-    _parent_id: &str,
-) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
-    Err("embed-provider 'local' não está disponível neste binário (compilado sem \
+fn build_local_embedder(_parent_id: &str) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    Err(
+        "embed-provider 'local' não está disponível neste binário (compilado sem \
          embed-fastembed). Use --embed-provider ollama ou um endpoint HTTP."
-        .into())
+            .into(),
+    )
 }
 
 fn build_embedder_with_progress(
@@ -562,12 +564,20 @@ mod tests {
         let report = initialize_repo(&root, &args).expect("init should succeed");
         let rendered = report.render();
         assert!(
-            rendered.lines().any(|line| line.contains(".elai/") && line.contains("created")),
+            rendered
+                .lines()
+                .any(|line| line.contains(".elai/") && line.contains("created")),
             "{rendered}"
         );
-        assert!(rendered.lines().any(|line| line.contains(".elai.json") && line.contains("created")));
-        assert!(rendered.lines().any(|line| line.contains(".gitignore") && line.contains("created")));
-        assert!(rendered.lines().any(|line| line.contains("ELAI.md") && line.contains("created")));
+        assert!(rendered
+            .lines()
+            .any(|line| line.contains(".elai.json") && line.contains("created")));
+        assert!(rendered
+            .lines()
+            .any(|line| line.contains(".gitignore") && line.contains("created")));
+        assert!(rendered
+            .lines()
+            .any(|line| line.contains("ELAI.md") && line.contains("created")));
         assert!(root.join(".elai").is_dir());
         assert!(root.join(".elai.json").is_file());
         assert!(root.join("ELAI.md").is_file());
@@ -644,8 +654,14 @@ mod tests {
         // render_init_elai_md now uses collect_facts → render_static_elai_md
         // It will detect files and produce a valid ELAI.md
         let rendered = render_init_elai_md(Path::new(&root));
-        assert!(rendered.contains("# ELAI.md"), "should contain heading: {rendered}");
-        assert!(rendered.contains("## Estrutura"), "should contain Estrutura section: {rendered}");
+        assert!(
+            rendered.contains("# ELAI.md"),
+            "should contain heading: {rendered}"
+        );
+        assert!(
+            rendered.contains("## Estrutura"),
+            "should contain Estrutura section: {rendered}"
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -662,11 +678,17 @@ mod tests {
         let report = initialize_repo(&root, &args).expect("init should succeed");
 
         // .elai/index/ should NOT be created
-        assert!(!root.join(".elai").join("index").exists(), ".elai/index/ should not be created with --no-index");
+        assert!(
+            !root.join(".elai").join("index").exists(),
+            ".elai/index/ should not be created with --no-index"
+        );
         // ELAI.md should be present
         assert!(root.join("ELAI.md").is_file(), "ELAI.md should exist");
         // index_stats should be None
-        assert!(report.index_stats.is_none(), "index_stats should be None when --no-index");
+        assert!(
+            report.index_stats.is_none(),
+            "index_stats should be None when --no-index"
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -684,8 +706,14 @@ mod tests {
         .to_string();
 
         let content = runtime::render_static_elai_md(&facts_json);
-        assert!(content.contains("## Estrutura"), "static render must include Estrutura section");
-        assert!(content.contains("rust"), "static render must include rust lang");
+        assert!(
+            content.contains("## Estrutura"),
+            "static render must include Estrutura section"
+        );
+        assert!(
+            content.contains("rust"),
+            "static render must include rust lang"
+        );
     }
 
     #[test]

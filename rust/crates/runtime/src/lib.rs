@@ -9,7 +9,7 @@
 //! 4. Call the model; on errors matched by [`error_indicates_context_limit`](crate::conversation::error_indicates_context_limit),
 //!    [`try_compact_for_ptl_retry`](crate::conversation::ConversationRuntime) runs.
 //!
-//! Heavy compaction lives in [`compact`](crate::compact); optional OpenAI summarization is wired from `elai-cli`.
+//! Heavy compaction lives in [`compact`](crate::compact); optional `OpenAI` summarization is wired from `elai-cli`.
 //! Manual compaction thresholds should use [`CompactionConfig::for_model`](crate::compact::CompactionConfig::for_model)
 //! so they track the active model’s approximate context window ([`input_context_tokens_for_model`](crate::input_context_tokens_for_model)).
 

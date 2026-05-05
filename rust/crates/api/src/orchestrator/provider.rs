@@ -160,7 +160,7 @@ impl UnifiedProvider for CodexBridgeUnifiedAdapter {
     }
 }
 
-/// Adapter wrapping `GoClient` so orchestrator can use OpenCode Go models.
+/// Adapter wrapping `GoClient` so orchestrator can use `OpenCode` Go models.
 pub struct GoUnifiedAdapter {
     client: go_client::GoClient,
     provider_id: String,

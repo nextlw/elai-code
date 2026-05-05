@@ -40,12 +40,8 @@ pub fn compute_diff(old: &str, new: &str, context: usize) -> Vec<DiffHunk> {
     let mut hunks = Vec::new();
 
     for group in diff.grouped_ops(context) {
-        let old_start = group
-            .first()
-            .map_or(1, |op| op.old_range().start + 1);
-        let new_start = group
-            .first()
-            .map_or(1, |op| op.new_range().start + 1);
+        let old_start = group.first().map_or(1, |op| op.old_range().start + 1);
+        let new_start = group.first().map_or(1, |op| op.new_range().start + 1);
 
         let mut lines = Vec::new();
         for op in &group {
@@ -58,12 +54,21 @@ pub fn compute_diff(old: &str, new: &str, context: usize) -> Vec<DiffHunk> {
                 let old_lineno = change.old_index().map(|i| i + 1);
                 let new_lineno = change.new_index().map(|i| i + 1);
                 let value = change.value().trim_end_matches('\n').to_string();
-                lines.push(DiffLine { tag, old_lineno, new_lineno, value });
+                lines.push(DiffLine {
+                    tag,
+                    old_lineno,
+                    new_lineno,
+                    value,
+                });
             }
         }
 
         if !lines.is_empty() {
-            hunks.push(DiffHunk { old_start, new_start, lines });
+            hunks.push(DiffHunk {
+                old_start,
+                new_start,
+                lines,
+            });
         }
     }
 
@@ -113,7 +118,11 @@ mod tests {
     fn test_line_numbers() {
         let hunks = compute_diff("a\nb\nc\n", "a\nX\nc\n", 3);
         let hunk = &hunks[0];
-        let remove = hunk.lines.iter().find(|l| l.tag == DiffTag::Remove).unwrap();
+        let remove = hunk
+            .lines
+            .iter()
+            .find(|l| l.tag == DiffTag::Remove)
+            .unwrap();
         let add = hunk.lines.iter().find(|l| l.tag == DiffTag::Add).unwrap();
         assert_eq!(remove.old_lineno, Some(2));
         assert_eq!(add.new_lineno, Some(2));

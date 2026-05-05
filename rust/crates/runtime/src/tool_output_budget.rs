@@ -1,6 +1,6 @@
 //! Truncates large tool result strings before they are sent to the model
 //! (equivalent to a light `applyToolResultBudget` in the reference pipeline).
-//! Config: `ELAI_TOOL_OUTPUT_MAX_CHARS` (default 80_000 characters per tool result block).
+//! Config: `ELAI_TOOL_OUTPUT_MAX_CHARS` (default `80_000` characters per tool result block).
 
 use crate::session::{ContentBlock, ConversationMessage};
 
@@ -17,8 +17,8 @@ fn max_chars() -> usize {
 /// Truncates each `ToolResult` block output that exceeds the configured cap.
 pub fn apply_tool_result_budget(messages: &mut [ConversationMessage]) {
     let max = max_chars();
-    for msg in messages.iter_mut() {
-        for block in msg.blocks.iter_mut() {
+    for msg in &mut *messages {
+        for block in &mut msg.blocks {
             if let ContentBlock::ToolResult { output, .. } = block {
                 let n = output.chars().count();
                 if n > max {

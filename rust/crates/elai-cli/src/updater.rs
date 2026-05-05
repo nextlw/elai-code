@@ -2,8 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 
-const LATEST_API: &str =
-    "https://api.github.com/repos/nextlw/elai-code/releases/latest";
+const LATEST_API: &str = "https://api.github.com/repos/nextlw/elai-code/releases/latest";
 const INSTALL_URL: &str =
     "https://raw.githubusercontent.com/nextlw/elai-code/main/scripts/install.sh";
 
@@ -38,7 +37,6 @@ pub struct UpdateAvailable {
     pub current: &'static str,
     pub latest: String,
 }
-
 
 fn asset_name() -> Option<&'static str> {
     match (env::consts::OS, env::consts::ARCH) {
@@ -75,13 +73,15 @@ fn fetch_latest() -> Option<Release> {
         .as_str()?
         .to_string();
 
-    Some(Release { version, notes, download_url })
+    Some(Release {
+        version,
+        notes,
+        download_url,
+    })
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.split('.').filter_map(|s| s.parse().ok()).collect()
-    };
+    let parse = |v: &str| -> Vec<u64> { v.split('.').filter_map(|s| s.parse().ok()).collect() };
     parse(latest) > parse(current)
 }
 
@@ -161,7 +161,10 @@ pub fn check_available() -> Option<UpdateAvailable> {
     if !is_newer(&release.version, current) {
         return None;
     }
-    Some(UpdateAvailable { current, latest: release.version })
+    Some(UpdateAvailable {
+        current,
+        latest: release.version,
+    })
 }
 
 /// Chamado no boot. Bloqueia e força update quando há versão mais nova.
@@ -190,7 +193,10 @@ pub fn check_and_enforce() {
 
     // Há versão nova — bloqueia
     println!("\r");
-    let title = format!("  Atualização obrigatória: v{current} → v{}", release.version);
+    let title = format!(
+        "  Atualização obrigatória: v{current} → v{}",
+        release.version
+    );
     let bar = "─".repeat(title.chars().count() - 2);
     println!("  ┌{bar}┐");
     println!("{title}");
