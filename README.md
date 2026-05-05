@@ -51,10 +51,13 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.1.8
+## What's New — v1.1.9
 
-- refactor(tui): enhance system note line wrapping for improved readability
-- refactor(tui): update spinner states and remove unused spinner functions
+- fix(api): use non-empty placeholder for fallback reasoning_content
+- fix(api): detect kimi/deepseek models by name for reasoning_content requirement
+- fix(api): always include reasoning_content for models with reasoning_effort
+- feat(api): implement full reasoning_content pipeline for Kimi/DeepSeek models
+- feat(api): add new free models to OPENCODE_ZEN_METADATA
 
 ---
 
