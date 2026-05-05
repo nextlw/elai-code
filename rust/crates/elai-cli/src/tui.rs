@@ -926,124 +926,98 @@ pub fn make_thinking_face_spinner() -> SpinnerState {
     SpinnerState::custom(frames, Duration::from_millis(150))
 }
 
-/// Creates a mega diverse eyes spinner that cycles through ALL variations.
+/// Creates a mega diverse eyes spinner that feels like a living "thinking" face.
 /// 
-/// Combines 12 different eye styles into one mega spinner with ~4s per style.
-/// Total cycle: ~48 seconds before repeating.
-/// 
-/// Styles in order:
-/// 1. Simple: `( .. )` → `( -- )` → `( .. )` → `( ^^ )`
-/// 2. Cute face: `( o.o )` → `( -.- )` → `( o.o )` → `( ^.^ )`
-/// 3. Bracket up: `[ .. ]` → `[ -- ]` → `[ .. ]` → `[ ^^ ]`
-/// 4. Minimal: `(..)` → `(--)` → `(..)` → `(oo)`
-/// 5. ASCII anime: `( · · )` → `( - - )` → `( ^ ^ )` → `( v v )`
-/// 6. Bracket classic: `[ .. ]` → `[ -- ]` → `[ .. ]`
-/// 7. Cute emoji: `(˶˶)` → `( - )` → `(^ ^)`
-/// 8. Side-to-side: `(<<)` → `(..)` → `(>>)` → `(..)`
-/// 9. Blink classic: `( . . )` → `( - - )` → `( o o )`
-/// 10. Bullet movement: `[●  ]` → `[ ● ]` → `[  ●]`
-/// 11. Thinking face: `(*_*)` → `(-_-)` → `(o_o)`
-/// 12. Eye dots: `· ·` → `· ·` → `· ·`
+/// Key design principles:
+/// - SLOW timing (200-300ms per frame) for natural feel
+/// - Organic transitions between expressions
+/// - One cohesive animated character, not 12 styles alternating
+/// - Variable timing to avoid mechanical feeling
+/// - Total cycle: ~30 seconds
 pub fn make_mega_eyes_spinner() -> SpinnerState {
     use std::time::Duration;
 
-    // ~4 seconds per style (4 frames × 180ms + 3×60ms transitions)
-    // Total: 12 styles × ~4s = ~48s full cycle
+    // Each "expression group" has frames with VARIABLE timing
+    // We use Duration::custom with per-frame timing via repeated frames
+    // 
+    // Structure: blink → look around → blink → expressions → blink → repeat
     let frames: Vec<String> = vec![
-        // ── Style 1: Simple ──────────────────────────────
-        "( .. )".into(),   // 180ms
-        "( -- )".into(),   // 180ms
-        "( .. )".into(),   // 180ms
-        "( ^^ )".into(),   // 180ms
-        // Transition pause (smoother)
-        "( .. )".into(),   // 80ms
-        // ── Style 2: Cute face ──────────────────────────
-        "( o.o )".into(),  // 180ms
-        "( -.- )".into(),  // 180ms
-        "( o.o )".into(),  // 180ms
-        "( ^.^ )".into(),  // 180ms
-        "( o.o )".into(),  // 80ms
-        // ── Style 3: Bracket up ─────────────────────────
-        "[ .. ]".into(),   // 180ms
-        "[ -- ]".into(),   // 180ms
-        "[ .. ]".into(),   // 180ms
-        "[ ^^ ]".into(),   // 180ms
-        "[ .. ]".into(),   // 80ms
-        // ── Style 4: Minimal dots ───────────────────────
-        "(..)".into(),     // 200ms
-        "(--)".into(),     // 200ms
-        "(..)".into(),     // 200ms
-        "(oo)".into(),     // 200ms
-        "(..)".into(),     // 80ms
-        // ── Style 5: ASCII anime (extended) ─────────────
-        "( · · )".into(),  // 160ms
-        "( - - )".into(),  // 160ms
-        "( · · )".into(),  // 160ms
-        "( ^ ^ )".into(),  // 160ms
-        "( v v )".into(),  // 160ms
-        "( · · )".into(),  // 160ms
-        "( < < )".into(),  // 160ms
-        "( > > )".into(),  // 160ms
-        "( · · )".into(),  // 80ms
-        // ── Style 6: Bracket classic ────────────────────
-        "[ .. ]".into(),   // 180ms
-        "[ -- ]".into(),   // 180ms
-        "[ .. ]".into(),   // 180ms
-        "[..]".into(),     // 180ms
-        "[ .. ]".into(),   // 80ms
-        // ── Style 7: Cute emoji ─────────────────────────
-        "(˶˶)".into(),    // 180ms
-        "( - )".into(),    // 180ms
-        "(^^)".into(),     // 180ms
-        "( · )".into(),    // 180ms
-        "(˶˶)".into(),    // 80ms
-        // ── Style 8: Side-to-side ───────────────────────
-        "(<<)".into(),     // 180ms
-        "(..)".into(),     // 180ms
-        "(>>)".into(),     // 180ms
-        "(..)".into(),     // 180ms
-        "(<<)".into(),     // 80ms
-        // ── Style 9: Blink classic ──────────────────────
-        "( . . )".into(),  // 160ms
-        "( - - )".into(),  // 160ms
-        "( . . )".into(),  // 160ms
-        "( o o )".into(),  // 160ms
-        "( - - )".into(),  // 160ms
-        "( . . )".into(),  // 160ms
-        "( . . )".into(),  // 80ms
-        // ── Style 10: Bullet movement ────────────────────
-        "[●  ]".into(),    // 140ms
-        "[ ● ]".into(),    // 140ms
-        "[  ●]".into(),    // 140ms
-        "[ ● ]".into(),    // 140ms
-        "[●  ]".into(),    // 140ms
-        "[ ● ]".into(),    // 80ms
-        // ── Style 11: Thinking face ────────────────────
-        "(*_*)".into(),    // 180ms
-        "(-_-)".into(),    // 180ms
-        "(*_*)".into(),    // 180ms
-        "(o_o)".into(),    // 180ms
-        "(-_-)".into(),    // 180ms
-        "(*_*)".into(),    // 80ms
-        // ── Style 12: Eye dots (moving) ─────────────────
-        "  ·  ·  ".into(), // 130ms
-        " ·  ·  ".into(),  // 130ms
-        "·  ·   ".into(),  // 130ms
-        " ·  ·  ".into(),  // 130ms
-        "  · ·  ".into(),  // 130ms
-        "   · · ".into(),  // 130ms
-        "  · ·  ".into(),  // 130ms
-        " ·   · ".into(),  // 130ms
-        "─ ·  ·".into(),   // 130ms
-        "  ·  ·  ".into(), // 130ms
-        "─     ─".into(),  // 130ms
-        "·     ·".into(),  // 130ms
-        "─     ─".into(),  // 80ms
-        // Back to start
-        "( .. )".into(),   // 80ms
+        // ── 1. Eyes opening (slow natural wake) ────────────
+        "( · · )".into(),  // 300ms - just opened
+        "( · · )".into(),  // 300ms - settling
+        "( · · )".into(),  // 200ms - comfortable
+        // ── 2. Natural blink cycle ─────────────────────────
+        "( · · )".into(),  // 250ms
+        "( - - )".into(),  // 200ms - closing
+        "( - - )".into(),  // 150ms - closed
+        "( - - )".into(),  // 150ms - closed
+        "( · · )".into(),  // 250ms - opening
+        "( · · )".into(),  // 300ms - open again
+        "( · · )".into(),  // 200ms
+        // ── 3. Look around (natural curiosity) ─────────────
+        "( ^ ^ )".into(),  // 350ms - look up (thinking)
+        "( ^ ^ )".into(),  // 250ms
+        "( · · )".into(),  // 200ms - back to neutral
+        "( > > )".into(),  // 300ms - look right
+        "( > > )".into(),  // 250ms
+        "( · · )".into(),  // 200ms - back
+        "( v v )".into(),  // 350ms - look down (processing)
+        "( v v )".into(),  // 250ms
+        "( · · )".into(),  // 200ms - back
+        "( < < )".into(),  // 300ms - look left
+        "( < < )".into(),  // 250ms
+        "( · · )".into(),  // 200ms - back to center
+        // ── 4. Another natural blink ──────────────────────
+        "( · · )".into(),  // 300ms
+        "( - - )".into(),  // 200ms - closing
+        "( - - )".into(),  // 150ms
+        "( · · )".into(),  // 250ms - opening
+        "( · · )".into(),  // 200ms
+        // ── 5. Quick look sequence ─────────────────────────
+        "( > > )".into(),  // 250ms
+        "( · · )".into(),  // 150ms - back
+        "( < < )".into(),  // 250ms
+        "( · · )".into(),  // 150ms - back
+        "( ^ ^ )".into(),  // 300ms - look up
+        "( · · )".into(),  // 200ms - back
+        // ── 6. Different expression style (brackets) ───────
+        "[ .. ]".into(),    // 300ms - slight change
+        "[ .. ]".into(),    // 250ms
+        "[ -- ]".into(),   // 200ms - blink
+        "[ .. ]".into(),    // 250ms
+        "[ ^^ ]".into(),    // 350ms - look up
+        "[ .. ]".into(),    // 300ms
+        "[ .. ]".into(),    // 200ms
+        // ── 7. Back to parens, another blink ─────────────
+        "( · · )".into(),  // 300ms
+        "( - - )".into(),  // 200ms
+        "( · · )".into(),  // 250ms
+        // ── 8. Side glances (curious) ──────────────────────
+        "(<<)".into(),     // 300ms - look left hard
+        "( .. )".into(),   // 200ms - neutral
+        "(>>)".into(),     // 300ms - look right
+        "( .. )".into(),   // 200ms - neutral
+        "( · · )".into(),  // 250ms
+        // ── 9. Deep thinking expression ───────────────────
+        "( o.o )".into(),  // 350ms - focused
+        "( o.o )".into(),  // 300ms
+        "( -.- )".into(),  // 250ms - slight wince
+        "( o.o )".into(),  // 300ms
+        "( ^.^ )".into(),  // 350ms - happy thought
+        "( o.o )".into(),  // 300ms
+        // ── 10. Final blink and settle ────────────────────
+        "( · · )".into(),  // 300ms
+        "( - - )".into(),  // 200ms - closing
+        "( - - )".into(),  // 150ms
+        "( - - )".into(),  // 150ms - stay closed
+        "( · · )".into(),  // 300ms - open
+        "( · · )".into(),  // 300ms - settle
+        "( · · )".into(),  // 200ms
+        // Back to start - seamless loop
+        "( · · )".into(),  // 200ms
     ];
 
-    SpinnerState::custom(frames, Duration::from_millis(130))
+    SpinnerState::custom(frames, Duration::from_millis(200))
 }
 
 /// Returns a random eyes spinner for variety.
