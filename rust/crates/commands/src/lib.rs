@@ -20,7 +20,8 @@ use runtime::{compact_session, CompactionConfig, Session, ProgressReporter};
 // Carrega os arquivos de locale do workspace (`rust/locales/{en,pt-BR}.json`).
 // Fonte única do catálogo i18n: outros crates só fazem `rust_i18n::set_locale()`.
 // Fallback automático para `en` quando uma chave não existe no idioma ativo.
-rust_i18n::i18n!("../../../locales", fallback = "pt-BR");
+// Path relativo ao Cargo.toml: commands → crates → rust/locales.
+rust_i18n::i18n!("../../locales", fallback = "pt-BR");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {

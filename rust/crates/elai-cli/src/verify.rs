@@ -434,8 +434,7 @@ mod tests {
         fn new(suffix: &str) -> Self {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_nanos());
             let path = std::env::temp_dir().join(format!("elai_verify_test_{suffix}_{ts}"));
             fs::create_dir_all(&path).expect("create temp dir");
             Self { path }
@@ -475,8 +474,7 @@ mod tests {
 
         assert!(
             names.iter().any(|n| n.contains("main.rs")),
-            "main.rs should be present, got: {:?}",
-            names
+            "main.rs should be present, got: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("debug.log")),
@@ -508,18 +506,15 @@ MODIFY: src/lib.rs — add new function
 
         assert!(
             paths.iter().any(|p| p == "src/main.rs"),
-            "should extract src/main.rs from backticks, got: {:?}",
-            paths
+            "should extract src/main.rs from backticks, got: {paths:?}"
         );
         assert!(
             paths.iter().any(|p| p == "Cargo.toml"),
-            "should extract Cargo.toml, got: {:?}",
-            paths
+            "should extract Cargo.toml, got: {paths:?}"
         );
         assert!(
             paths.iter().any(|p| p == "src/lib.rs"),
-            "should extract src/lib.rs from MODIFY: prefix, got: {:?}",
-            paths
+            "should extract src/lib.rs from MODIFY: prefix, got: {paths:?}"
         );
 
         // Deduplication: src/main.rs should appear only once
@@ -691,8 +686,7 @@ MODIFY: src/lib.rs — add new function
         // shallow_file.rs at depth 14 should be present
         assert!(
             names.iter().any(|n| n.contains("shallow_file.rs")),
-            "file at depth 14 should be included, got: {:?}",
-            names
+            "file at depth 14 should be included, got: {names:?}"
         );
     }
 }

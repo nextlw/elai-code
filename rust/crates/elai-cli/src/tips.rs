@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn load_tips_returns_non_empty_entries() {
         let tips = load_tips();
-        assert!(tips.len() >= 1, "esperado pelo menos uma dica");
+        assert!(!tips.is_empty(), "esperado pelo menos uma dica");
         for t in &tips {
             assert!(!t.title.is_empty(), "title vazio em alguma dica");
             assert!(!t.body.is_empty(), "body vazio em alguma dica");
@@ -91,7 +91,7 @@ mod tests {
             let order = shuffle_indices(n);
             assert_eq!(order.len(), n);
             let mut sorted = order.clone();
-            sorted.sort();
+            sorted.sort_unstable();
             let expected: Vec<usize> = (0..n).collect();
             assert_eq!(sorted, expected, "shuffle não é permutação para n={n}");
         }

@@ -277,8 +277,7 @@ mod tests {
     fn unique_test_dir() -> PathBuf {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         // Use the thread id for additional uniqueness in parallel tests.
         let dir = std::env::temp_dir().join(format!("elai-dream-test-{ts}"));
         fs::create_dir_all(&dir).expect("create test dir");

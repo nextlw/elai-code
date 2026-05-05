@@ -18,9 +18,9 @@ mod verify;
 
 // Reaponta o `t!()` deste crate para o mesmo catálogo usado por `commands`.
 // `rust-i18n` exige `i18n!()` em cada crate que invoca a macro `t!()`; o
-// catálogo é compartilhado (mesmo locale global). Caminho relativo a este ficheiro:
-// `src` → `elai-cli` → `crates` → `rust/locales`.
-rust_i18n::i18n!("../../../locales", fallback = "pt-BR");
+// catálogo é compartilhado (mesmo locale global). Caminho relativo ao Cargo.toml:
+// `elai-cli` → `crates` → `rust/locales`.
+rust_i18n::i18n!("../../locales", fallback = "pt-BR");
 
 use std::collections::BTreeSet;
 use std::env;

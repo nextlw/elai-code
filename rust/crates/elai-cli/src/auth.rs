@@ -1279,11 +1279,11 @@ mod tests {
 
     #[test]
     fn read_secret_from_stdin_trims_trailing_newline() {
+        use std::io::BufRead;
         // We can test the logic directly by feeding a string
         let input = "sk-ant-test123\n";
         let mut cursor = std::io::Cursor::new(input.as_bytes());
         let mut line = String::new();
-        use std::io::BufRead;
         cursor.read_line(&mut line).unwrap();
         if line.ends_with('\n') {
             line.pop();
@@ -1303,12 +1303,12 @@ mod tests {
 
     #[test]
     fn auth_status_returns_none_when_no_creds() {
+        // We need the env lock from runtime — replicate the pattern
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
         // Use a fresh temp dir with no credentials
         let config_home = temp_config_home();
         std::fs::create_dir_all(&config_home).expect("create temp dir");
-
-        // We need the env lock from runtime — replicate the pattern
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         let _guard = LOCK
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
@@ -1317,8 +1317,8 @@ mod tests {
         let prev = std::env::var_os("ELAI_CONFIG_HOME");
         std::env::set_var("ELAI_CONFIG_HOME", &config_home);
         let prev_api_key = std::env::var_os("ANTHROPIC_API_KEY");
-        let prev_auth_token = std::env::var_os("ANTHROPIC_AUTH_TOKEN");
-        let prev_oauth_token = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN");
+        let prev_anthropic_token = std::env::var_os("ANTHROPIC_AUTH_TOKEN");
+        let prev_claude_oauth_token = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN");
         let prev_fd = std::env::var_os("CLAUDE_CODE_API_KEY_FD");
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
@@ -1343,11 +1343,11 @@ mod tests {
             Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
             None => std::env::remove_var("ANTHROPIC_API_KEY"),
         }
-        match prev_auth_token {
+        match prev_anthropic_token {
             Some(v) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", v),
             None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
         }
-        match prev_oauth_token {
+        match prev_claude_oauth_token {
             Some(v) => std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", v),
             None => std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN"),
         }

@@ -657,6 +657,298 @@ pub struct UiApp {
     pub ultrathink_active: bool,
 }
 
+/// Creates an animated eyes spinner with 2 dots (◉) that move together.
+/// Sequence: neutral → left → right → up → down → blink → repeat.
+/// 
+/// The dots move in sync to avoid "strabismus" effect.
+/// Blinking reduces dot height (─ ·) for a natural blink effect.
+pub fn make_eye_dots_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    // 20 frames: neutral (2) + left (3) + right (3) + up (3) + down (3) + blink (3) + pause (3)
+    let frames: Vec<String> = vec![
+        // Neutral - dots together, eyes open
+        "  ·  ·  ".into(),
+        "  ·  ·  ".into(),
+        // Look left - both dots shift left together
+        " ·  ·  ".into(),
+        "·  ·   ".into(),
+        " ·  ·  ".into(),
+        // Look right - both dots shift right together
+        "  · ·  ".into(),
+        "   · · ".into(),
+        "  · ·  ".into(),
+        // Look up - both dots shift up together
+        " ·   · ".into(),
+        "─ ·  ·".into(),
+        " ·   · ".into(),
+        // Look down - both dots shift down together
+        "  · ·  ".into(),
+        " ·   · ".into(),
+        "─ ·  ·".into(),
+        // Blink - height reduces
+        "─     ─".into(),
+        "·     ·".into(),
+        "─     ─".into(),
+        // Pause before cycle
+        "  ·  ·  ".into(),
+        "  ·  ·  ".into(),
+        "  ·  ·  ".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(90))
+}
+
+/// Creates a cute ASCII eyes spinner for the thinking indicator.
+/// 
+/// Uses fixed-width ASCII art for maximum terminal compatibility.
+/// Inspired by anime-style "thinking" faces.
+/// 
+/// Animation: blinks and looks around in a cute way.
+/// 
+/// Frames:
+/// ```txt
+/// ( · · ) - normal eyes
+/// ( - - ) - closing
+/// ( ^ ^ ) - looking up
+/// ( v v ) - looking down
+/// ( < < ) - looking left
+/// ( > > ) - looking right
+/// ```
+pub fn make_ascii_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    // 16 frames - cute anime-style eyes that blink and look around
+    let frames: Vec<String> = vec![
+        // Normal (2 frames)
+        "( · · )".into(),
+        "( · · )".into(),
+        // Blink animation (4 frames: open -> closed -> closed -> open)
+        "( · · )".into(),
+        "( - - )".into(),
+        "( - - )".into(),
+        "( · · )".into(),
+        // Look up (2 frames)
+        "( ^ ^ )".into(),
+        "( ^ ^ )".into(),
+        // Look right (2 frames)
+        "( > > )".into(),
+        "( > > )".into(),
+        // Look down (2 frames)
+        "( v v )".into(),
+        "( v v )".into(),
+        // Look left (2 frames)
+        "( < < )".into(),
+        "( < < )".into(),
+        // Normal (2 frames) - back to center
+        "( · · )".into(),
+        "( · · )".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(120))
+}
+
+/// Creates a minimalist dots spinner - simple and clean.
+/// 
+/// Frames: `(..)` → `(--)` → `(..)` → `(oo)`
+/// 
+/// Best for: terminals with limited Unicode support.
+pub fn make_minimal_dots_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "(..)".into(),
+        "(--)".into(),
+        "(..)".into(),
+        "(oo)".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(200))
+}
+
+/// Creates a bracket-style spinner - very terminal-native.
+/// 
+/// Frames: `[ .. ]` → `[ -- ]` → `[ .. ]`
+/// 
+/// Best for: pure ASCII environments, maximum compatibility.
+pub fn make_bracket_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "[ .. ]".into(),
+        "[ -- ]".into(),
+        "[ .. ]".into(),
+        "[..]".into(),
+        "[..]".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(180))
+}
+
+/// Creates a cute emoji-style eyes spinner.
+/// 
+/// Uses combining characters for anime aesthetic.
+/// Frames: `(˶˶)` → `(- -)` → `(^^)`
+/// 
+/// Best for: modern terminals with emoji support.
+pub fn make_cute_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "(˶˶)".into(),
+        "( - )".into(),
+        "(^^)".into(),
+        "( · )".into(),
+        "(˶˶)".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(150))
+}
+
+/// Creates an eyes looking side-to-side spinner.
+/// 
+/// Frames: `(<<)` → `(..)` → `(>>)` → `(..)`
+/// 
+/// Best for: when you want more movement feel.
+pub fn make_side_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "(<<)".into(),
+        "(..)".into(),
+        "(>>)".into(),
+        "(..)".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(160))
+}
+
+/// Creates an eyes spinner with simple blink and up-look.
+/// Frames: `( .. )` → `( -- )` → `( .. )` → `( ^^ )`
+pub fn make_simple_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "( .. )".into(),
+        "( -- )".into(),
+        "( .. )".into(),
+        "( ^^ )".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(180))
+}
+
+/// Creates a cute face eyes spinner with expressions.
+/// Frames: `( o.o )` → `( -.- )` → `( o.o )` → `( ^.^ )`
+pub fn make_cute_face_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "( o.o )".into(),
+        "( -.- )".into(),
+        "( o.o )".into(),
+        "( ^.^ )".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(180))
+}
+
+/// Creates a bracket-style eyes spinner with up-look.
+/// Frames: `[ .. ]` → `[ -- ]` → `[ .. ]` → `[ ^^ ]`
+pub fn make_bracket_up_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "[ .. ]".into(),
+        "[ -- ]".into(),
+        "[ .. ]".into(),
+        "[ ^^ ]".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(180))
+}
+
+/// Creates an open/close blink eyes spinner.
+/// 
+/// Frames: `( . . )` → `( - - )` → `( o o )` → `( - - )`
+/// 
+/// Best for: classic "thinking" animation feel.
+pub fn make_blink_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "( . . )".into(),
+        "( - - )".into(),
+        "( . . )".into(),
+        "( o o )".into(),
+        "( - - )".into(),
+        "( . . )".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(140))
+}
+
+/// Creates a simple bullet eyes spinner.
+/// 
+/// Frames: `[●  ]` → `[ ● ]` → `[  ●]` → `[ ● ]`
+/// 
+/// Best for: movement-focused, smaller footprint.
+pub fn make_bullet_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "[●  ]".into(),
+        "[ ● ]".into(),
+        "[  ●]".into(),
+        "[ ● ]".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(100))
+}
+
+/// Creates a thinking face spinner.
+/// 
+/// Frames: `(*_*)` → `(-_-)` → `(*_*)` → `(o_o)`
+/// 
+/// Best for: playful, expressive thinking.
+pub fn make_thinking_face_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    let frames: Vec<String> = vec![
+        "(*_*)".into(),
+        "(-_-)".into(),
+        "(*_*)".into(),
+        "(o_o)".into(),
+        "(-_-)".into(),
+        "(*_*)".into(),
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(150))
+}
+
+/// Returns a random eyes spinner for variety.
+/// 
+/// Cycles through different eye spinner styles.
+/// Call this function to get variety across sessions.
+pub fn make_random_eyes_spinner() -> SpinnerState {
+    // Pick a random spinner based on current time
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    
+    match seconds % 8 {
+        0 => make_ascii_eyes_spinner(),
+        1 => make_minimal_dots_spinner(),
+        2 => make_bracket_eyes_spinner(),
+        3 => make_cute_eyes_spinner(),
+        4 => make_side_eyes_spinner(),
+        5 => make_blink_eyes_spinner(),
+        6 => make_bullet_eyes_spinner(),
+        _ => make_thinking_face_spinner(),
+    }
+}
+
 impl UiApp {
     pub fn new(
         model: String,
@@ -688,7 +980,7 @@ impl UiApp {
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
-            spinner_state: SpinnerState::new(SpinnerType::MiniDot),
+            spinner_state: make_ascii_eyes_spinner(),
             dots_spinner: SpinnerState::new(SpinnerType::Ellipsis),
             last_tick: Instant::now(),
             caption_idx: fastrand::usize(..),
@@ -4893,10 +5185,18 @@ fn markdown_to_tui_lines(text: &str, wrap_width: usize) -> Vec<Line<'static>> {
                 }
             }
             MdEvent::Code(t) => {
-                spans.push(Span::styled(
-                    t.into_string(),
-                    Style::default().fg(theme().success),
-                ));
+                let code = t.into_string();
+                let clen = code.chars().count();
+                let need = if current_line_width > 0 { 1 + clen } else { clen };
+                if current_line_width > 0 && current_line_width + need > wrap_width {
+                    flush(&mut lines, &mut spans, &mut current_line_width);
+                }
+                if current_line_width > 0 {
+                    spans.push(Span::raw(" "));
+                    current_line_width += 1;
+                }
+                spans.push(Span::styled(code, Style::default().fg(theme().inline_code)));
+                current_line_width += clen;
             }
             MdEvent::SoftBreak => {
                 // A SoftBreak within a paragraph is a word separator.
@@ -4988,11 +5288,14 @@ fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn thinking_footer_chat_line(app: &UiApp) -> Option<Line<'static>> {
+fn thinking_footer_chat_line(app: &UiApp, wrap_width: usize) -> Option<Line<'static>> {
     if !app.thinking {
         return None;
     }
-    let caption = crate::thinking_footer::thinking_footer_caption(app.ultrathink_active, app.caption_idx);
+    let caption_budget = wrap_width.saturating_sub(20).clamp(8, 512);
+    let caption_raw =
+        crate::thinking_footer::thinking_footer_caption(app.ultrathink_active, app.caption_idx);
+    let caption = crate::thinking_footer::truncate_graphemes(&caption_raw, caption_budget).into_owned();
     let frame_disp = app.spinner_state.frame_str();
     let dots = app.dots_spinner.frame_str();
     let line_text = if app.ultrathink_active {
@@ -5383,7 +5686,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
     for entry in &app.chat {
         result.extend(lines_for_chat_entry(app, entry, wrap_width));
     }
-    if let Some(line) = thinking_footer_chat_line(app) {
+    if let Some(line) = thinking_footer_chat_line(app, wrap_width) {
         result.push(line);
     }
     result
@@ -5457,23 +5760,7 @@ fn budget_bar(pct: f32) -> (String, ratatui::style::Color) {
 }
 
 fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
-    let spinner = if app.thinking {
-        app.spinner_state.frame_str()
-    } else {
-        "·"
-    };
-    let thinking_caption = if app.thinking {
-        let raw = crate::thinking_footer::thinking_footer_caption(app.ultrathink_active, app.caption_idx);
-        let decorated = if app.ultrathink_active {
-            format!("⚡ {raw}")
-        } else {
-            raw
-        };
-        let budget = usize::from(area.width).saturating_sub(56).clamp(10, 52);
-        crate::thinking_footer::truncate_graphemes(&decorated, budget).into_owned()
-    } else {
-        String::new()
-    };
+    let spinner = "·";
     let cost = estimate_cost(&app.model, app.input_tokens, app.output_tokens);
     let swd_str = crate::swd::SwdLevel::from_u8(app.swd_level.load(Ordering::Relaxed)).as_str();
     let budget_segment = if app.budget_enabled {
@@ -5485,39 +5772,21 @@ fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     } else {
         String::new()
     };
-    let text = if app.thinking {
-        format!(
-            " {spinner} {thinking_caption} · Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{}{} · {}",
-            app.model,
-            app.permission_mode,
-            app.input_tokens,
-            app.output_tokens,
-            cost,
-            swd_str,
-            budget_segment,
-            short_session_id(&app.session_id),
-        )
-    } else {
-        format!(
-            " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{}{} · {}",
-            app.model,
-            app.permission_mode,
-            app.input_tokens,
-            app.output_tokens,
-            cost,
-            swd_str,
-            budget_segment,
-            short_session_id(&app.session_id),
-        )
-    };
+    let text = format!(
+        " {spinner} Model {} · Perm {} · Tokens {}in / {}out · ${:.4} · SWD:{}{} · {}",
+        app.model,
+        app.permission_mode,
+        app.input_tokens,
+        app.output_tokens,
+        cost,
+        swd_str,
+        budget_segment,
+        short_session_id(&app.session_id),
+    );
     let style = if app.read_mode {
         Style::default().fg(theme().warn)
-    } else if app.ultrathink_active && app.thinking {
-        Style::default().fg(ratatui::style::Color::Rgb(255, 200, 50))
-    } else if app.thinking {
-        Style::default().fg(theme().thinking)
     } else {
-        Style::default().fg(theme().text_secondary)
+        Style::default().fg(ratatui::style::Color::Rgb(255, 191, 0))
     };
     let paragraph = Paragraph::new(text).style(style);
     frame.render_widget(paragraph, area);
@@ -7960,8 +8229,7 @@ mod tests {
         let paths = load_indexed_paths(&dir);
         assert!(
             paths.contains(&"foo.rs".to_string()),
-            "should find foo.rs via walk; got: {:?}",
-            paths
+            "should find foo.rs via walk; got: {paths:?}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -8130,10 +8398,6 @@ mod tests {
     fn setup_wizard_done_persists_global_config() {
         use std::sync::Mutex;
         static HOME_LOCK: Mutex<()> = Mutex::new(());
-
-        let td = tempfile::TempDir::new().unwrap();
-        let _lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
         struct HomeRestore(Option<std::ffi::OsString>);
         impl Drop for HomeRestore {
             fn drop(&mut self) {
@@ -8143,6 +8407,9 @@ mod tests {
                 }
             }
         }
+
+        let td = tempfile::TempDir::new().unwrap();
+        let _lock = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _restore = HomeRestore(std::env::var_os("HOME"));
         std::env::set_var("HOME", td.path());
 

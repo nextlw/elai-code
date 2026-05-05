@@ -1,4 +1,4 @@
-//! Frases rotativas do rodapé “thinking” da TUI (carregamento a partir dos JSON em `rust/locales`).
+//! Frases rotativas da linha “thinking” no painel de chat da TUI (JSON em `rust/locales`).
 
 use std::borrow::Cow;
 use std::sync::Mutex;

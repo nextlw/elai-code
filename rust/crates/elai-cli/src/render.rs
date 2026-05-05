@@ -158,7 +158,7 @@ impl Default for ColorTheme {
             success: Color::DarkGreen,
             warn: Color::DarkYellow,
             error: Color::DarkRed,
-            thinking: Color::DarkBlue,
+            thinking: Color::AnsiValue(202),
             link: Color::DarkBlue,
             inline_code: Color::AnsiValue(156),
             diff_context: Color::DarkMagenta,
