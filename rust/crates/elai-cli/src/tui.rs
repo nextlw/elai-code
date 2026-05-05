@@ -56,6 +56,7 @@ use ratatui_cheese::list::{
     List as CheeseList, ListItem as CheeseListItem, ListItemContext as CheeseListItemContext,
     ListState as CheeseListState,
 };
+use ratatui_cheese::spinner::{SpinnerState, SpinnerType};
 
 use commands::SlashCategory;
 
@@ -600,7 +601,8 @@ pub struct UiApp {
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub history_backup: String,
-    pub spinner_frame: usize,
+    pub spinner_state: SpinnerState,
+    pub last_tick: Instant,
     pub read_mode: bool,
     /// Captura de mouse no terminal: `true` = roda rola o chat; `false` = seleção/cópia mais livre.
     /// Padrão: `false`; ligue com `ELAI_TUI_MOUSE_CAPTURE=1` ou **F9** durante a sessão.
@@ -654,7 +656,8 @@ impl UiApp {
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
-            spinner_frame: 0,
+            spinner_state: SpinnerState::new(SpinnerType::MiniDot),
+            last_tick: Instant::now(),
             read_mode: false,
             mouse_capture_enabled,
             swd_level,
@@ -717,8 +720,11 @@ impl UiApp {
     }
 
     pub fn tick(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_tick);
+        self.last_tick = now;
         if self.thinking {
-            self.spinner_frame = self.spinner_frame.wrapping_add(1);
+            self.spinner_state.tick(elapsed);
         }
     }
 
@@ -4752,7 +4758,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 for item in items {
                     let (icon, color) = match item.status {
                         ToolItemStatus::Running => {
-                            let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                            let frame = app.spinner_state.frame_str();
                             (frame, theme().info)
                         }
                         ToolItemStatus::Ok => ("\u{2713}", theme().success), // ✓
@@ -4784,7 +4790,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                 let (icon, label) = if *finished {
                     ("\u{1f4ad}", format!("Pensamento ({} chars)", text.len()))
                 } else {
-                    let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                    let frame = app.spinner_state.frame_str();
                     (frame, "Pensando...".to_string())
                 };
                 result.push(Line::from(vec![
@@ -4931,7 +4937,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                         _ => ("\u{2713}", theme().success),
                     }
                 } else {
-                    let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+                    let frame = app.spinner_state.frame_str();
                     (frame, border_color)
                 };
 
@@ -4942,7 +4948,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
                     prefix.to_string()
                 } else {
                     let frames = spinner_for_msg(msg);
-                    frames[app.spinner_frame % frames.len()].to_string()
+                    frames[app.spinner_state.frame() % frames.len()].to_string()
                 };
                 result.push(Line::from(vec![
                     Span::styled("  ╭─ ", Style::default().fg(border_color)),
@@ -5012,7 +5018,7 @@ fn chat_to_lines(app: &UiApp, width: usize) -> Vec<Line<'static>> {
     }
 
     if app.thinking {
-        let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+        let frame = app.spinner_state.frame_str();
         let (label, color) = if app.ultrathink_active {
             ("⚡ Ultrathink…", ratatui::style::Color::Rgb(255, 200, 50))
         } else {
@@ -5093,7 +5099,7 @@ fn budget_bar(pct: f32) -> (String, ratatui::style::Color) {
 
 fn draw_status(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
     let spinner = if app.thinking {
-        SPINNER[app.spinner_frame % SPINNER.len()]
+        app.spinner_state.frame_str()
     } else {
         "·"
     };
@@ -6730,7 +6736,6 @@ pub fn save_setup_keys(provider_sel: usize, key1: &str, key2: &str) -> std::io::
     Ok(())
 }
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 

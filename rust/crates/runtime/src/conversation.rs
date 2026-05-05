@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
@@ -125,6 +126,7 @@ pub struct ConversationRuntime<C, T> {
     telemetry: TelemetryHandle,
     model_name: Option<String>,
     consecutive_compact_failures: usize,
+    notify_fn: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -172,6 +174,7 @@ where
             telemetry: TelemetryHandle::noop(),
             model_name: None,
             consecutive_compact_failures: 0,
+            notify_fn: None,
         }
     }
 
@@ -191,6 +194,20 @@ where
     pub fn with_model_name(mut self, name: impl Into<String>) -> Self {
         self.model_name = Some(name.into());
         self
+    }
+
+    #[must_use]
+    pub fn with_notify(mut self, f: impl Fn(String) + Send + Sync + 'static) -> Self {
+        self.notify_fn = Some(Arc::new(f));
+        self
+    }
+
+    fn notify(&self, msg: String) {
+        if let Some(f) = &self.notify_fn {
+            f(msg);
+        } else {
+            eprintln!("{msg}");
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -220,11 +237,11 @@ where
             let repairs = crate::message_repair::validate_and_repair(&mut api_messages);
             crate::tool_output_budget::apply_tool_result_budget(&mut api_messages);
             if !repairs.is_empty() {
-                eprintln!(
+                self.notify(format!(
                     "[elai] message repair applied {} action(s) before API call: {:?}",
                     repairs.len(),
                     repairs
-                );
+                ));
             }
             // Keep persisted session aligned with what we send to the API (repair + budget).
             self.session.messages.clone_from(&api_messages);
@@ -366,17 +383,17 @@ where
 
     fn try_compact_for_ptl_retry(&mut self, ptl_err: &RuntimeError) -> bool {
         if self.consecutive_compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES {
-            eprintln!(
+            self.notify(format!(
                 "[elai] auto-compact circuit breaker open after {} consecutive failures; not retrying",
                 self.consecutive_compact_failures
-            );
+            ));
             return false;
         }
 
-        eprintln!(
+        self.notify(format!(
             "[elai] prompt-too-long detected ({}); attempting auto-compact",
             ptl_err.message,
-        );
+        ));
 
         // Try progressively more aggressive compaction before giving up.
         // When the session is already small (e.g. 5 messages with preserve=4),
@@ -397,10 +414,10 @@ where
             );
 
             if result.removed_message_count > 0 {
-                eprintln!(
+                self.notify(format!(
                     "[elai] auto-compact removed {} message(s) (preserve_recent={}); retrying request",
                     result.removed_message_count, preserve_recent,
-                );
+                ));
                 self.session = result.compacted_session;
                 self.consecutive_compact_failures = 0;
                 return true;
@@ -408,10 +425,10 @@ where
         }
 
         self.consecutive_compact_failures += 1;
-        eprintln!(
+        self.notify(format!(
             "[elai] auto-compact removed 0 messages even with aggressive settings; circuit breaker count now {}",
             self.consecutive_compact_failures
-        );
+        ));
         false
     }
 

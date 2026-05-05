@@ -581,6 +581,17 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         hidden: false,
         user_facing_name: None,
     },
+    SlashCommandSpec {
+        name: "run",
+        aliases: &[],
+        summary_key: "commands.run.summary",
+        argument_hint_key: Some("commands.run.argument_hint"),
+        resume_supported: false,
+        category: SlashCategory::System,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -676,6 +687,11 @@ pub enum SlashCommand {
     Verify,
     Locale {
         lang: Option<String>,
+    },
+    Run {
+        script: String,
+        args: Option<String>,
+        update: bool,
     },
     Unknown(String),
 }
@@ -2262,13 +2278,10 @@ pub fn handle_slash_command(
         | SlashCommand::Locale { .. }
         | SlashCommand::Unknown(_) => None,
         SlashCommand::Run { script, args, update } => {
-            use script_runner::{run_script, ScriptConfig, NullReporter};
-            let result = run_script(
-                &script,
-                args.as_deref(),
-                ScriptConfig { update },
-                &NullReporter,
-            );
+            use script_runner::{run_script, ScriptConfig};
+            let mut cfg = ScriptConfig::new(&script);
+            cfg.update = update;
+            let result = run_script(&script, args.as_deref(), cfg, |_| {});
             let msg = match result {
                 Ok(output) => format!(
                     "Run\n  Script           {script}\n  Args             {}\n  Update           {}\n\n{}",

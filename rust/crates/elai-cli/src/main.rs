@@ -1798,6 +1798,7 @@ fn run_resume_command(
         | SlashCommand::Cache { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
+        | SlashCommand::Run { .. }
         | SlashCommand::Update
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
@@ -3766,6 +3767,20 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 println!("{}", handle_locale_command(lang.as_deref()));
                 false
             }
+            SlashCommand::Run {
+                script,
+                args,
+                update,
+            } => {
+                use script_runner::{run_script, ScriptConfig};
+                let mut cfg = ScriptConfig::new(&script);
+                cfg.update = update;
+                match run_script(&script, args.as_deref(), cfg, |_| {}) {
+                    Ok(output) => println!("{output}"),
+                    Err(e) => eprintln!("run: {e}"),
+                }
+                false
+            }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))
             }
@@ -5577,6 +5592,7 @@ fn build_runtime_for_tui(
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
+    let notify_tx = tui_msg_tx.clone();
     Ok(ConversationRuntime::new_with_features(
         session,
         DefaultRuntimeClient::new(
@@ -5601,7 +5617,10 @@ fn build_runtime_for_tui(
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
         &feature_config,
-    ))
+    )
+    .with_notify(move |msg| {
+        let _ = notify_tx.send(tui::TuiMsg::SystemNote(msg));
+    }))
 }
 
 fn tool_whitelist_path() -> Option<std::path::PathBuf> {

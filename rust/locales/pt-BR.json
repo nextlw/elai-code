@@ -133,6 +133,14 @@
     "locale": {
       "summary": "Mostra ou troca o idioma da interface",
       "argument_hint": "[pt-BR|en]"
+    },
+    "deepresearch": {
+      "summary": "Pesquisa profunda com agente de IA",
+      "argument_hint": "<query>"
+    },
+    "run": {
+      "summary": "Executa um script com suporte a atualização via LLM",
+      "argument_hint": "<script> [--update] [args...]"
     }
   },
   "locale": {
@@ -321,6 +329,14 @@
         "title": "Erro na autenticação",
         "back_hint": "Esc/Enter para voltar"
       }
+    },
+    "deepresearch": {
+      "summary": "Pesquisa profunda com agente de IA",
+      "argument_hint": "<query>"
+    },
+    "run": {
+      "summary": "Executa um script com suporte a atualização via LLM",
+      "argument_hint": "<script> [--update] [args...]"
     },
     "setup": {
       "title": "Configurar API Key",

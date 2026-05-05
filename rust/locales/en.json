@@ -322,6 +322,10 @@
         "back_hint": "Esc/Enter to go back"
       }
     },
+    "run": {
+      "summary": "Execute a script with optional LLM-driven update",
+      "argument_hint": "<script> [--update] [args...]"
+    },
     "setup": {
       "title": "Configure API Key",
       "provider_question": "Choose your AI provider:",
