@@ -275,6 +275,10 @@ pub enum OverlayKind {
         items: Vec<(String, usize)>,
         selected: usize,
     },
+    ScriptPicker {
+        items: Vec<(String, String)>, // (nome display, path absoluto)
+        selected: usize,
+    },
     ToolApproval {
         tool_name: String,
         input_preview: String,
@@ -1269,11 +1273,11 @@ impl UiApp {
                     }
                     return models_for_provider(WizardProvider::OpenAi(OpenAiChannel::ApiKey));
                 }
-                // Anthropic, Ollama, LmStudio — mostra Anthropic
-                _ => return models_for_provider(WizardProvider::Anthropic),
+                // Anthropic, Ollama, LmStudio — mostra Anthropic + ant overrides no topo
+                _ => return anthropic_model_items(),
             }
         }
-        models_for_provider(WizardProvider::Anthropic)
+        anthropic_model_items()
     }
 
     fn filter_model_items(items: &[String], filter: &str) -> Vec<String> {
@@ -1331,6 +1335,10 @@ impl UiApp {
             items: self.recent_sessions.clone(),
             selected: 0,
         });
+    }
+
+    pub fn open_script_picker(&mut self, items: Vec<(String, String)>) {
+        self.overlay = Some(OverlayKind::ScriptPicker { items, selected: 0 });
     }
 
     pub fn open_file_mention_picker(&mut self, cwd: &std::path::Path, anchor_pos: usize) {
@@ -1646,6 +1654,7 @@ pub enum TuiAction {
     SetModel(String),
     SetPermissions(String),
     ResumeSession(String),
+    RunScript(String), // path absoluto do script
     SlashCommand(String),
     CopyToClipboard(String),
     EnterReadMode,
@@ -2489,6 +2498,37 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 }
                 _ => {
                     app.overlay = Some(OverlayKind::SessionPicker { items, selected });
+                }
+            }
+            TuiAction::None
+        }
+
+        Some(OverlayKind::ScriptPicker {
+            items,
+            mut selected,
+        }) => {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    app.overlay = None;
+                }
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    selected = selected.saturating_sub(1);
+                    app.overlay = Some(OverlayKind::ScriptPicker { items, selected });
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    selected = (selected + 1).min(items.len().saturating_sub(1));
+                    app.overlay = Some(OverlayKind::ScriptPicker { items, selected });
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    if let Some((_name, path)) = items.get(selected) {
+                        let p = path.clone();
+                        app.overlay = None;
+                        return TuiAction::RunScript(p);
+                    }
+                    app.overlay = None;
+                }
+                _ => {
+                    app.overlay = Some(OverlayKind::ScriptPicker { items, selected });
                 }
             }
             TuiAction::None
@@ -3490,7 +3530,7 @@ fn handle_connected_models_key(
                 app.overlay = None;
                 return TuiAction::AuthComplete {
                     label,
-                    model: Some((*model).to_string()),
+                    model: Some(model.clone()),
                 };
             }
         }
@@ -3642,18 +3682,28 @@ const OPENCODE_ZEN_FREE_MODELS: &[&str] = &[
 
 const XAI_MODELS: &[&str] = &["grok-4.1.1", "grok-4.1", "grok-4"];
 
-fn provider_models(group: &ProviderAuthGroup) -> Vec<&'static str> {
+fn provider_models(group: &ProviderAuthGroup) -> Vec<String> {
     match group.id {
-        "openai" => OPENAI_CODEX_MODELS.to_vec(),
-        "opencode-go" => OPENCODE_GO_MODELS.to_vec(),
-        "opencode-zen" => OPENCODE_ZEN_FREE_MODELS.to_vec(),
-        "xai" => XAI_MODELS.to_vec(),
-        "anthropic" | "bedrock" | "vertex" | "foundry" => ANTHROPIC_MODELS.to_vec(),
+        "openai" => OPENAI_CODEX_MODELS.iter().map(|s| (*s).to_string()).collect(),
+        "opencode-go" => OPENCODE_GO_MODELS.iter().map(|s| (*s).to_string()).collect(),
+        "opencode-zen" => OPENCODE_ZEN_FREE_MODELS.iter().map(|s| (*s).to_string()).collect(),
+        "xai" => XAI_MODELS.iter().map(|s| (*s).to_string()).collect(),
+        "anthropic" | "bedrock" | "vertex" | "foundry" => anthropic_model_items(),
         _ => vec![],
     }
 }
 
 const OPENAI_API_MODELS: &[&str] = &["gpt-4o", "gpt-4o-mini", "gpt-4.5", "o1", "o3", "o4-mini"];
+
+/// Anthropic model list with dynamic ant overrides prepended (alias — label format).
+fn anthropic_model_items() -> Vec<String> {
+    let mut items: Vec<String> = api::get_ant_models()
+        .into_iter()
+        .map(|m| format!("{} — {}", m.alias, m.label))
+        .collect();
+    items.extend(models_for_provider(WizardProvider::Anthropic));
+    items
+}
 
 fn models_for_provider(provider: WizardProvider) -> Vec<String> {
     let ids: &[&str] = match provider {
@@ -5941,6 +5991,21 @@ fn draw_overlay(frame: &mut ratatui::Frame, area: Rect, overlay: &OverlayKind, a
                     .iter()
                     .map(std::string::String::as_str)
                     .collect::<Vec<_>>(),
+                *selected,
+                None,
+                "",
+            );
+        }
+        OverlayKind::ScriptPicker { items, selected } => {
+            let labels: Vec<String> = items
+                .iter()
+                .map(|(name, _)| format!("  {name}"))
+                .collect();
+            draw_picker(
+                frame,
+                area,
+                "Scripts disponíveis",
+                &labels.iter().map(String::as_str).collect::<Vec<_>>(),
                 *selected,
                 None,
                 "",

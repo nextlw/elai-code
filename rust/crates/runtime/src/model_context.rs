@@ -7,6 +7,11 @@ pub fn input_context_tokens_for_model(model: &str) -> u32 {
         return v;
     }
 
+    // Ant model override: respects explicit `context_window` from config.
+    if let Some(window) = ant_context_window(model) {
+        return window;
+    }
+
     let trimmed = model.trim();
     let lower = trimmed.to_ascii_lowercase();
 
@@ -102,6 +107,49 @@ fn is_local_provider_prefix(prefix: &str) -> bool {
         "ollama" | "lmstudio" | "lm-studio" | "lm_studio" | "go" | "opencode-go"
             | "opencode_go" | "zen" | "opencode-zen" | "opencode_zen"
     )
+}
+
+/// Reads `context_window` from the ant model override config without depending on the `api` crate.
+/// Mirrors the lookup in `api::providers::ant_models` — same sources, same priority order.
+fn ant_context_window(model: &str) -> Option<u32> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Option<Vec<(String, String, Option<u32>)>>> = OnceLock::new();
+
+    let entries = CACHE.get_or_init(|| {
+        let raw = std::env::var("ELAI_ANT_MODEL_OVERRIDE").ok().or_else(|| {
+            let home = dirs::home_dir()?;
+            std::fs::read_to_string(home.join(".elai").join("ant_model_override.json")).ok()
+        })?;
+
+        #[derive(serde::Deserialize)]
+        struct M {
+            alias: String,
+            model: String,
+            context_window: Option<u32>,
+        }
+        #[derive(serde::Deserialize)]
+        struct C {
+            #[serde(default)]
+            ant_models: Vec<M>,
+        }
+
+        let cfg: C = serde_json::from_str(&raw).ok()?;
+        Some(
+            cfg.ant_models
+                .into_iter()
+                .map(|m| (m.alias, m.model, m.context_window))
+                .collect(),
+        )
+    });
+
+    let entries = entries.as_deref()?;
+    let lower = model.to_ascii_lowercase();
+    entries
+        .iter()
+        .find(|(alias, model_id, _)| {
+            alias == model || lower.contains(&model_id.to_ascii_lowercase())
+        })
+        .and_then(|(_, _, window)| *window)
 }
 
 #[cfg(test)]

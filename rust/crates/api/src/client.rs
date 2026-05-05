@@ -445,13 +445,9 @@ pub fn read_xai_base_url() -> String {
 mod tests {
     use super::should_use_codex_bridge;
     use crate::providers::{detect_provider_kind, resolve_model_alias, ProviderKind};
-    use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock")
+        crate::test_env_lock()
     }
 
     #[test]

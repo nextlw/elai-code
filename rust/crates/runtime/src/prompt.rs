@@ -74,6 +74,90 @@ const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
 const MAX_MENTIONED_FILE_BYTES: usize = 50 * 1024;
 const MAX_MENTIONED_TOTAL_BYTES: usize = 80 * 1024;
 
+// ── System Prompt Pipeline ────────────────────────────────────────────────────
+// Equivalent to `buildEffectiveSystemPrompt` + `appendSystemContext` from the
+// TypeScript reference (src/utils/systemPrompt.ts).
+
+/// Optional overlay layers applied on top of the base system prompt.
+/// Maps to the CLI flags `--system-prompt` (custom) and `--append-system-prompt` (append),
+/// plus a sub-agent prompt injected programmatically.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptLayers {
+    /// Replaces the standard intro with a user-supplied system prompt.
+    pub custom: Option<String>,
+    /// Appended verbatim after the base (or custom) prompt sections.
+    pub append: Option<String>,
+    /// Sub-agent persona injected when running in agent-tool mode.
+    pub agent: Option<String>,
+}
+
+/// Runtime context injected as a `<system-context>` block at the end of the
+/// effective system prompt, equivalent to `appendSystemContext` in the TS code.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemContext {
+    pub model: String,
+    pub effort_level: Option<String>,
+    pub working_dir: PathBuf,
+    /// ISO-8601 UTC timestamp.
+    pub timestamp_utc: String,
+}
+
+/// Combines a base prompt (joined sections string) with optional overlay layers.
+///
+/// Composition order:
+///   1. `base` (the rendered `SystemPromptBuilder` sections)
+///   2. `custom` — if set, the standard intro is already replaced upstream; this
+///      layer is appended after a separator so the user's prompt overrides tone/persona.
+///   3. `append` — verbatim suffix, e.g. project-wide rules loaded from env.
+///   4. `agent` — sub-agent persona, placed last so it has highest specificity.
+#[must_use]
+pub fn build_effective_system_prompt(base: &str, layers: &PromptLayers) -> String {
+    let sep = "\n\n---\n\n";
+    let mut parts: Vec<&str> = vec![base];
+
+    if let Some(custom) = layers.custom.as_deref() {
+        if !custom.trim().is_empty() {
+            parts.push(sep);
+            parts.push(custom.trim());
+        }
+    }
+    if let Some(append) = layers.append.as_deref() {
+        if !append.trim().is_empty() {
+            parts.push(sep);
+            parts.push(append.trim());
+        }
+    }
+    if let Some(agent) = layers.agent.as_deref() {
+        if !agent.trim().is_empty() {
+            parts.push(sep);
+            parts.push(agent.trim());
+        }
+    }
+
+    parts.concat()
+}
+
+/// Appends a `<system-context>` XML block to `prompt` with runtime metadata.
+/// Equivalent to the `appendSystemContext` helper in the TS reference.
+#[must_use]
+pub fn append_system_context(prompt: &str, ctx: &SystemContext) -> String {
+    let cwd = ctx.working_dir.display();
+    let effort = ctx
+        .effort_level
+        .as_deref()
+        .unwrap_or("default");
+    let block = format!(
+        "\n\n<system-context>\nmodel: {model}\neffort: {effort}\ncwd: {cwd}\ntimestamp: {ts}\n</system-context>",
+        model = ctx.model,
+        effort = effort,
+        cwd = cwd,
+        ts = ctx.timestamp_utc,
+    );
+    format!("{prompt}{block}")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFile {
     pub path: PathBuf,
@@ -734,14 +818,19 @@ mod tests {
     use crate::config::ConfigLoader;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("runtime-prompt-{nanos}"))
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("runtime-prompt-{nanos}-{id}"));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -1121,5 +1210,79 @@ mod tests {
         let rendered = super::render_mentioned_files(&files);
         // Output should not exceed budget + reasonable header overhead
         assert!(rendered.len() <= super::MAX_MENTIONED_TOTAL_BYTES + 1024);
+    }
+
+    // ── PromptLayers / build_effective_system_prompt tests ───────────────────
+
+    #[test]
+    fn build_effective_prompt_with_no_layers_returns_base() {
+        let base = "base prompt";
+        let layers = super::PromptLayers::default();
+        let result = super::build_effective_system_prompt(base, &layers);
+        assert_eq!(result, "base prompt");
+    }
+
+    #[test]
+    fn build_effective_prompt_with_all_layers() {
+        let base = "base";
+        let layers = super::PromptLayers {
+            custom: Some("custom layer".to_string()),
+            append: Some("append layer".to_string()),
+            agent: Some("agent layer".to_string()),
+        };
+        let result = super::build_effective_system_prompt(base, &layers);
+        assert!(result.starts_with("base"));
+        assert!(result.contains("custom layer"));
+        assert!(result.contains("append layer"));
+        assert!(result.contains("agent layer"));
+        // custom comes before append which comes before agent
+        let ci = result.find("custom layer").unwrap();
+        let ai = result.find("append layer").unwrap();
+        let ag = result.find("agent layer").unwrap();
+        assert!(ci < ai);
+        assert!(ai < ag);
+    }
+
+    #[test]
+    fn build_effective_prompt_ignores_empty_layers() {
+        let base = "base prompt";
+        let layers = super::PromptLayers {
+            custom: Some("   ".to_string()),
+            append: None,
+            agent: Some(String::new()),
+        };
+        let result = super::build_effective_system_prompt(base, &layers);
+        assert_eq!(result, "base prompt");
+    }
+
+    // ── append_system_context tests ───────────────────────────────────────────
+
+    #[test]
+    fn append_context_adds_model_block() {
+        let ctx = super::SystemContext {
+            model: "claude-sonnet-4-6".to_string(),
+            effort_level: Some("high".to_string()),
+            working_dir: PathBuf::from("/tmp/project"),
+            timestamp_utc: "2026-05-05T00:00:00Z".to_string(),
+        };
+        let result = super::append_system_context("base", &ctx);
+        assert!(result.contains("<system-context>"));
+        assert!(result.contains("model: claude-sonnet-4-6"));
+        assert!(result.contains("effort: high"));
+        assert!(result.contains("cwd: /tmp/project"));
+        assert!(result.contains("timestamp: 2026-05-05T00:00:00Z"));
+        assert!(result.contains("</system-context>"));
+    }
+
+    #[test]
+    fn append_context_defaults_effort_when_none() {
+        let ctx = super::SystemContext {
+            model: "claude-haiku-4-5-20251001".to_string(),
+            effort_level: None,
+            working_dir: PathBuf::from("/tmp"),
+            timestamp_utc: "2026-05-05T00:00:00Z".to_string(),
+        };
+        let result = super::append_system_context("x", &ctx);
+        assert!(result.contains("effort: default"));
     }
 }

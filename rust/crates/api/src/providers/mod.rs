@@ -4,6 +4,7 @@ use std::pin::Pin;
 use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
+pub mod ant_models;
 pub mod claude_code_spoof;
 pub mod codex_bridge;
 pub mod elai_provider;
@@ -291,6 +292,10 @@ pub fn resolve_model_alias(model: &str) -> String {
     if let Some((_, bare)) = parse_local_provider_prefix(model) {
         return bare;
     }
+    // Dynamic ant model overrides take priority over the static registry.
+    if let Some(ant) = ant_models::resolve_ant_model(model) {
+        return ant.model;
+    }
     let trimmed = model.trim();
     let lower = trimmed.to_ascii_lowercase();
     MODEL_REGISTRY
@@ -323,6 +328,12 @@ pub fn resolve_model_alias(model: &str) -> String {
 pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     // Prefixo explícito `ollama:NAME` / `lmstudio:NAME` / `go:NAME` curto-circuita
     // a detecção heurística — não tentamos adivinhar pelo nome bare do modelo.
+
+    // Dynamic ant override: resolve to real model, then recurse once.
+    if let Some(ant) = ant_models::resolve_ant_model(model) {
+        return metadata_for_model(&ant.model);
+    }
+
     if let Some((kind, _)) = parse_local_provider_prefix(model) {
         return Some(match kind {
             ProviderKind::Ollama => ProviderMetadata {
@@ -425,6 +436,13 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
     if let Some((kind, _)) = parse_local_provider_prefix(model) {
         if matches!(kind, ProviderKind::Ollama | ProviderKind::LmStudio) {
             return local_max_completion_tokens();
+        }
+    }
+
+    // Ant model override: respects explicit `default_max_tokens` from config.
+    if let Some(ant) = ant_models::resolve_ant_model(model) {
+        if let Some(limit) = ant.default_max_tokens {
+            return limit;
         }
     }
 
@@ -536,6 +554,24 @@ pub fn suggested_default_model() -> String {
 // OpenAI-compat providers that don't support thinking always get `None`.
 
 use crate::types::{EffortLevel, OutputConfig, ThinkingConfig};
+
+/// Returns `true` when an ant model override forces thinking on regardless of user effort setting.
+#[must_use]
+pub fn model_always_on_thinking(model: &str) -> bool {
+    ant_models::resolve_ant_model(model).is_some_and(|ant| ant.always_on_thinking)
+}
+
+/// Returns the thinking budget tokens for a model configured with `always_on_thinking`.
+/// `None` means the model does not force thinking on; `Some(n)` means activate with budget `n`.
+/// Falls back to 32 000 when `always_on_thinking` is true but no budget is specified.
+#[must_use]
+pub fn model_thinking_budget(model: &str) -> Option<u32> {
+    let ant = ant_models::resolve_ant_model(model)?;
+    if !ant.always_on_thinking {
+        return None;
+    }
+    Some(ant.thinking_budget_tokens.unwrap_or(32_000))
+}
 
 /// Returns `true` when the model supports extended thinking at all.
 /// Claude 4+ (including Haiku 4.5) on first-party.  Local and `OpenAI`
@@ -655,13 +691,8 @@ mod tests {
         detect_provider_kind, max_tokens_for_model, metadata_for_model, model_supports_thinking,
         parse_local_provider_prefix, resolve_model_alias, suggested_default_model, ProviderKind,
     };
-    use std::sync::{Mutex, OnceLock};
-
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock")
+        crate::test_env_lock()
     }
 
     #[test]

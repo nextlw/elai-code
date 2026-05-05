@@ -160,11 +160,7 @@ pub fn is_setup_complete() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    // Serialize env-mutation tests to avoid data races across threads.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvRestore {
         key: &'static str,
@@ -180,9 +176,7 @@ mod tests {
     }
 
     fn with_home(td: &TempDir, f: impl FnOnce()) {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = crate::test_env_lock();
         let _restore = EnvRestore {
             key: "HOME",
             prev: std::env::var_os("HOME"),

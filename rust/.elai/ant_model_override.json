@@ -1,0 +1,23 @@
+{
+  "ant_models": [
+    {
+      "alias": "capybara-fast",
+      "model": "claude-haiku-4-5-20251001",
+      "label": "Fast (Haiku)",
+      "always_on_thinking": false
+    },
+    {
+      "alias": "capybara",
+      "model": "claude-sonnet-4-6",
+      "label": "Balanced (Sonnet)",
+      "always_on_thinking": false
+    },
+    {
+      "alias": "capybara-ultra",
+      "model": "claude-opus-4-7",
+      "label": "Ultra (Opus + thinking)",
+      "always_on_thinking": true,
+      "thinking_budget_tokens": 16000
+    }
+  ]
+}

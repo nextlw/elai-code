@@ -852,16 +852,21 @@ mod tests {
     };
 
     fn temp_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("runtime-mcp-stdio-{nanos}"))
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("runtime-mcp-stdio-{nanos}-{id}"));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
     }
 
     fn write_echo_script() -> PathBuf {
         let root = temp_dir();
-        fs::create_dir_all(&root).expect("temp dir");
+        // temp_dir() already created the directory
         let script_path = root.join("echo-mcp.sh");
         fs::write(
             &script_path,
@@ -876,7 +881,6 @@ mod tests {
 
     fn write_jsonrpc_script() -> PathBuf {
         let root = temp_dir();
-        fs::create_dir_all(&root).expect("temp dir");
         let script_path = root.join("jsonrpc-mcp.py");
         let script = [
             "#!/usr/bin/env python3",
@@ -919,7 +923,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn write_mcp_server_script() -> PathBuf {
         let root = temp_dir();
-        fs::create_dir_all(&root).expect("temp dir");
         let script_path = root.join("fake-mcp-server.py");
         let script = [
             "#!/usr/bin/env python3",

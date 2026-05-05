@@ -637,12 +637,97 @@ fn extract_summary_timeline(summary: &str) -> Vec<String> {
     lines
 }
 
+// ── Micro-Compact ──────────────────────────────────────────────────────────────
+// Trims oversized individual content blocks *in place* rather than removing
+// whole messages.  This runs before the full compact pass and prevents context
+// explosions from single large tool outputs (e.g. a 200 KB file read).
+
+/// Configuration for per-block content trimming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroCompactConfig {
+    /// Maximum chars kept in a ToolResult `output` field.  Default: 8 000.
+    pub max_tool_result_chars: usize,
+    /// Maximum chars kept in a Thinking `thinking` field.  Default: 4 000.
+    pub max_thinking_chars: usize,
+}
+
+impl Default for MicroCompactConfig {
+    fn default() -> Self {
+        Self {
+            max_tool_result_chars: 8_000,
+            max_thinking_chars: 4_000,
+        }
+    }
+}
+
+/// Trims `text` to at most `max_chars`, keeping the first `head_chars` and last
+/// `tail_chars` characters separated by an omission marker.
+fn trim_with_marker(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    // Reserve space for the marker itself (~40 chars).
+    let head_chars = (max_chars * 3) / 4;
+    let tail_chars = max_chars.saturating_sub(head_chars);
+
+    let head: String = text.chars().take(head_chars).collect();
+    let tail_start = text.chars().count().saturating_sub(tail_chars);
+    let tail: String = text.chars().skip(tail_start).collect();
+    let omitted = text.chars().count() - head_chars - tail_chars;
+
+    format!("{head}\n[... {omitted} chars omitidos ...]\n{tail}")
+}
+
+/// Clones `messages`, trimming any `ToolResult` or `Thinking` blocks that exceed
+/// the configured limits.  Other block types and message metadata are preserved
+/// as-is.  This is a pure transformation — it never removes messages.
+#[must_use]
+pub fn micro_compact_messages(
+    messages: &[ConversationMessage],
+    config: MicroCompactConfig,
+) -> Vec<ConversationMessage> {
+    messages
+        .iter()
+        .map(|msg| {
+            let trimmed_blocks: Vec<ContentBlock> = msg
+                .blocks
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        tool_name,
+                        output,
+                        is_error,
+                    } => ContentBlock::ToolResult {
+                        tool_use_id: tool_use_id.clone(),
+                        tool_name: tool_name.clone(),
+                        output: trim_with_marker(output, config.max_tool_result_chars),
+                        is_error: *is_error,
+                    },
+                    ContentBlock::Thinking { thinking } => ContentBlock::Thinking {
+                        thinking: trim_with_marker(thinking, config.max_thinking_chars),
+                    },
+                    other => other.clone(),
+                })
+                .collect();
+            ConversationMessage {
+                role: msg.role,
+                blocks: trimmed_blocks,
+                usage: msg.usage.clone(),
+            }
+        })
+        .collect()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::{
         collect_key_files, compact_session, estimate_session_tokens, find_safe_cut_point,
         format_compact_summary, get_compact_continuation_message, group_into_rounds,
-        infer_pending_work, should_compact, CompactionConfig,
+        infer_pending_work, micro_compact_messages, should_compact, CompactionConfig,
+        MicroCompactConfig,
     };
     use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
 
@@ -1153,5 +1238,79 @@ mod tests {
         let small = CompactionConfig::for_model("ollama:llama3");
         let large = CompactionConfig::for_model("claude-sonnet-4-6");
         assert!(small.max_estimated_tokens < large.max_estimated_tokens);
+    }
+
+    // ── micro_compact_messages tests ─────────────────────────────────────────
+
+    #[test]
+    fn micro_compact_preserves_small_tool_result() {
+        let msg = ConversationMessage::tool_result("t1", "bash", "small output", false);
+        let result = micro_compact_messages(&[msg.clone()], MicroCompactConfig::default());
+        assert_eq!(result[0].blocks, msg.blocks);
+    }
+
+    #[test]
+    fn micro_compact_truncates_large_tool_result() {
+        let large_output = "x".repeat(20_000);
+        let msg = ConversationMessage::tool_result("t1", "bash", &large_output, false);
+        let result = micro_compact_messages(
+            &[msg],
+            MicroCompactConfig {
+                max_tool_result_chars: 8_000,
+                max_thinking_chars: 4_000,
+            },
+        );
+        match &result[0].blocks[0] {
+            ContentBlock::ToolResult { output, .. } => {
+                assert!(output.contains("chars omitidos"));
+                assert!(output.chars().count() < 20_000);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn micro_compact_truncates_large_thinking_block() {
+        let large_thinking = "t".repeat(10_000);
+        let msg = ConversationMessage {
+            role: MessageRole::Assistant,
+            blocks: vec![ContentBlock::Thinking {
+                thinking: large_thinking,
+            }],
+            usage: None,
+        };
+        let result = micro_compact_messages(
+            &[msg],
+            MicroCompactConfig {
+                max_tool_result_chars: 8_000,
+                max_thinking_chars: 4_000,
+            },
+        );
+        match &result[0].blocks[0] {
+            ContentBlock::Thinking { thinking } => {
+                assert!(thinking.contains("chars omitidos"));
+                assert!(thinking.chars().count() < 10_000);
+            }
+            other => panic!("expected Thinking, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn micro_compact_does_not_touch_text_blocks() {
+        let large_text = "z".repeat(100_000);
+        let msg = ConversationMessage::user_text(&large_text);
+        let result = micro_compact_messages(&[msg.clone()], MicroCompactConfig::default());
+        assert_eq!(result[0].blocks, msg.blocks);
+    }
+
+    #[test]
+    fn micro_compact_preserves_tool_use_identity() {
+        let msg = ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+            id: "u1".to_string(),
+            name: "read_file".to_string(),
+            input: r#"{"path":"foo.rs"}"#.to_string(),
+        }]);
+        let result = micro_compact_messages(&[msg.clone()], MicroCompactConfig::default());
+        assert_eq!(result[0].blocks, msg.blocks);
     }
 }

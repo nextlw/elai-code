@@ -171,8 +171,10 @@
     "thinking_footer": {
       "normal": [
         "Pensando...",
+
+        "Embedando JSON em next.js...",
         "Trabalhando...",
-        "Delulitizando...",
+        "Deslulitizando...",
         "Quebrando o quengo...",
         "Fritando um ovo...",
         "Olhando o leite pra não queimar...",
@@ -191,7 +193,8 @@
       ],
       "ultra": [
         "Ultra espremendo o quengo...",
-        "Ultra delulitizando a matrix...",
+        "Ultra embedando JSON em next.js...",
+        "Ultra deslulitizando a matrix...",
         "Ultra quebrando o quengo em camadas...",
         "Ultra fritando o ovo no fogão cósmico...",
         "Ultra de olho no leite pra nada queimar no multiverso...",

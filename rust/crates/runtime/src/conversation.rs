@@ -3,7 +3,8 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use crate::compact::{
-    compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
+    compact_session, estimate_session_tokens, micro_compact_messages, CompactionConfig,
+    CompactionResult, MicroCompactConfig,
 };
 
 const MAX_CONSECUTIVE_COMPACT_FAILURES: usize = 3;
@@ -239,6 +240,9 @@ where
             let mut api_messages = self.session.messages.clone();
             let repairs = crate::message_repair::validate_and_repair(&mut api_messages);
             crate::tool_output_budget::apply_tool_result_budget(&mut api_messages);
+            // Trim oversized ToolResult/Thinking blocks before they reach the API,
+            // reducing payload size without removing whole messages.
+            api_messages = micro_compact_messages(&api_messages, MicroCompactConfig::default());
             if !repairs.is_empty() {
                 self.notify(format!(
                     "[elai] message repair applied {} action(s) before API call: {:?}",

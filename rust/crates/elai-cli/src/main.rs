@@ -35,8 +35,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    default_thinking_config, max_tokens_for_model, metadata_for_model,
-    model_supports_adaptive_thinking, model_supports_thinking, resolve_model_alias,
+    ant_default_model, default_thinking_config, max_tokens_for_model, metadata_for_model,
+    model_always_on_thinking, model_thinking_budget, model_supports_adaptive_thinking,
+    model_supports_thinking, resolve_model_alias,
     resolve_output_config, suggested_default_model, ContentBlockDelta, EffortLevel,
     InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
     ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice,
@@ -54,13 +55,14 @@ use init::initialize_repo;
 use plugins::{PluginManager, PluginManagerConfig};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    check_rate_limit, generate_cache_key, load_budget_config, load_system_prompt, now_millis,
-    save_budget_config, ApiClient, ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus,
-    BudgetTracker, BudgetUsagePct, CachedResponse, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager, MessageRole,
-    PermissionMode, PermissionPolicy, ProjectContext, ResponseCache, RuntimeError, Session,
-    TaskStatus, TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage,
-    ToolError, ToolExecutor, UsageTracker,
+    append_system_context, build_effective_system_prompt, check_rate_limit, generate_cache_key,
+    load_budget_config, load_system_prompt, now_iso8601, now_millis, save_budget_config, ApiClient,
+    ApiRequest, AssistantEvent, BudgetConfig, BudgetStatus, BudgetTracker, BudgetUsagePct,
+    CachedResponse, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock, ConversationMessage,
+    ConversationRuntime, McpServerManager, MessageRole, PermissionMode, PermissionPolicy,
+    ProjectContext, PromptLayers, ResponseCache, RuntimeError, Session, SystemContext, TaskStatus,
+    TelemetryEvent, TelemetryHandle, TelemetryShutdown, TelemetryWorker, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
 };
 use serde_json::json;
 use tools::{GlobalToolRegistry, MatcherPattern, McpToolSource};
@@ -439,7 +441,9 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    let mut model = suggested_default_model();
+    let mut model = ant_default_model()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(suggested_default_model);
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode = default_permission_mode();
     let mut wants_version = false;
@@ -452,6 +456,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut budget_max_usd: Option<f64> = None;
     let mut budget_max_turns: Option<u32> = None;
     let mut no_budget = false;
+    let mut custom_system_prompt: Option<String> = None;
+    let mut append_system_prompt: Option<String> = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -610,12 +616,36 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 allowed_tool_values.push(flag[16..].to_string());
                 index += 1;
             }
+            "--system-prompt" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --system-prompt".to_string())?;
+                custom_system_prompt = Some(value.clone());
+                index += 2;
+            }
+            flag if flag.starts_with("--system-prompt=") => {
+                custom_system_prompt = Some(flag[16..].to_string());
+                index += 1;
+            }
+            "--append-system-prompt" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --append-system-prompt".to_string())?;
+                append_system_prompt = Some(value.clone());
+                index += 2;
+            }
+            flag if flag.starts_with("--append-system-prompt=") => {
+                append_system_prompt = Some(flag[23..].to_string());
+                index += 1;
+            }
             other => {
                 rest.push(other.to_string());
                 index += 1;
             }
         }
     }
+
+    set_system_prompt_overrides(custom_system_prompt, append_system_prompt);
 
     if wants_version {
         return Ok(CliAction::Version);
@@ -1387,14 +1417,14 @@ fn run_headless_send(
     let allowed_tools = None;
     let permission_mode = default_permission_mode();
 
-    // Detecta ultrathink no texto OU --ultrathink/--thinking flag.
+    // Detecta ultrathink no texto OU --ultrathink/--thinking flag OU always_on_thinking do modelo.
     let ultrathink_keyword = crate::ultrathink::message_contains_ultrathink_keyword(message);
+    let always_on_budget = model_thinking_budget(&model);
     let thinking_config: Option<ThinkingConfig> = match thinking_budget {
-        Some(budget) => Some(ThinkingConfig::Enabled {
-            budget_tokens: budget,
-        }),
-        None if ultrathink_keyword => Some(ThinkingConfig::Enabled {
-            budget_tokens: 32_000,
+        Some(budget) => Some(ThinkingConfig::Enabled { budget_tokens: budget }),
+        None if ultrathink_keyword => Some(ThinkingConfig::Enabled { budget_tokens: 32_000 }),
+        None if always_on_budget.is_some() => Some(ThinkingConfig::Enabled {
+            budget_tokens: always_on_budget.unwrap(),
         }),
         None => default_thinking_config(&model),
     };
@@ -2084,6 +2114,69 @@ fn run_tui_repl(
     // in-place (uma só linha viva por task).
     runtime::set_default_sink(Arc::new(tui_sink::ChannelSink::new(msg_tx.clone())));
 
+    // Buddy: load existing companion or hatch one in background on first run.
+    {
+        let buddy_tx = msg_tx.clone();
+        let buddy_model = model.clone();
+        thread::spawn(move || {
+            let user_id = env::var("USER")
+                .or_else(|_| env::var("USERNAME"))
+                .unwrap_or_else(|_| "user".to_string());
+
+            let is_new = runtime::buddy::load_stored_companion().is_none();
+
+            let companion = runtime::buddy::load_or_hatch(&user_id, move |prompt| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let client = ProviderClient::from_model(&buddy_model)
+                    .map_err(|e| e.to_string())?;
+                let request = MessageRequest {
+                    model: buddy_model.clone(),
+                    max_tokens: 100,
+                    messages: vec![InputMessage {
+                        role: "user".to_string(),
+                        content: vec![InputContentBlock::Text {
+                            text: prompt.to_string(),
+                        }],
+                    }],
+                    system: None,
+                    tools: None,
+                    tool_choice: None,
+                    stream: false,
+                    thinking: None,
+                    output_config: None,
+                    reasoning_effort: None,
+                };
+                let response = rt
+                    .block_on(client.send_message(&request))
+                    .map_err(|e| e.to_string())?;
+                let text: String = response
+                    .content
+                    .iter()
+                    .filter_map(|b| {
+                        if let OutputContentBlock::Text { text } = b {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                Ok::<_, String>(text)
+            });
+
+            if let Ok(companion) = companion {
+                let mut msg = runtime::buddy::render_companion_header(&companion);
+                if is_new {
+                    msg.push_str("\n✨ Seu companheiro nasceu!");
+                }
+                let _ = buddy_tx.send(tui::TuiMsg::SystemNote(msg));
+            }
+        });
+    }
+
     // Load recent sessions for the side panel.
     let recent_sessions: Vec<(String, usize)> = list_managed_sessions()
         .unwrap_or_default()
@@ -2287,8 +2380,8 @@ fn run_tui_repl(
                                 prompt_clone.push(crate::swd::SWD_FULL_SYSTEM_PROMPT.to_string());
                             }
                         }
-                        // Injeta CAPYBARA quando ultrathink está ativo.
-                        if ultrathink {
+                        // Injeta CAPYBARA quando ultrathink ou always_on_thinking estão ativos.
+                        if ultrathink || model_always_on_thinking(&app.model) {
                             prompt_clone.push(runtime::CAPYBARA_SYSTEM_PROMPT.to_string());
                         }
                         let session_clone = {
@@ -2302,13 +2395,13 @@ fn run_tui_repl(
                         let done_tx = thread_done_tx.clone();
                         let session_for_thread = Arc::clone(&session);
                         let swd_atomic_clone = Arc::clone(&swd_atomic);
-                        let thinking_override: Option<ThinkingConfig> = if ultrathink {
-                            Some(ThinkingConfig::Enabled {
-                                budget_tokens: 32_000,
-                            })
-                        } else {
-                            None
-                        };
+                        let thinking_override: Option<ThinkingConfig> =
+                            if ultrathink {
+                                Some(ThinkingConfig::Enabled { budget_tokens: 32_000 })
+                            } else {
+                                model_thinking_budget(&app.model)
+                                    .map(|budget| ThinkingConfig::Enabled { budget_tokens: budget })
+                            };
 
                         // JoinHandle descartado: thread daemon de execução principal do runtime de IA; encerra quando o canal fecha (TUI encerrando).
                         let _runtime_handle = thread::spawn(move || {
@@ -2351,6 +2444,11 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::SetModel(m) => {
+                    // Strip display label if picker shows "alias — Label" format.
+                    let m = m
+                        .split_once(" — ")
+                        .map(|(alias, _)| alias.trim().to_string())
+                        .unwrap_or(m);
                     let needs_go_key = metadata_for_model(&m)
                         .is_some_and(|md| md.provider == ProviderKind::OpenCodeGo)
                         && std::env::var_os("OPENCODE_GO_API_KEY").is_none_or(|v| v.is_empty());
@@ -2438,7 +2536,13 @@ fn run_tui_repl(
                     )));
                 }
                 tui::TuiAction::AuthComplete { label, model } => {
-                    let new_model = model.unwrap_or_else(preferred_model_after_auth);
+                    let new_model = model
+                        .map(|m| {
+                            m.split_once(" — ")
+                                .map(|(alias, _)| alias.trim().to_string())
+                                .unwrap_or(m)
+                        })
+                        .unwrap_or_else(preferred_model_after_auth);
                     app.model.clone_from(&new_model);
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} {label}\n  Modelo padrão: {new_model}"
@@ -2450,6 +2554,9 @@ fn run_tui_repl(
                         "Desinstalação concluída:\n{report}\n\nEla Code foi removido. Encerrando..."
                     )));
                     app.should_quit = true;
+                }
+                tui::TuiAction::RunScript(path) => {
+                    run_script_to_chat(path, &mut app, &msg_tx);
                 }
                 tui::TuiAction::None => {}
             }
@@ -2567,6 +2674,66 @@ fn run_tui_compact_session(
     out
 }
 
+fn scan_scripts(cwd: &std::path::Path) -> Vec<(String, String)> {
+    let mut scripts = Vec::new();
+    for subdir in ["scripts", ".elai/scripts"] {
+        let dir = cwd.join(subdir);
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_file() {
+                let name = format!("{}/{}", subdir, entry.file_name().to_string_lossy());
+                let abs = path.to_string_lossy().to_string();
+                scripts.push((name, abs));
+            }
+        }
+    }
+    scripts
+}
+
+fn run_script_to_chat(
+    path: String,
+    app: &mut tui::UiApp,
+    msg_tx: &mpsc::Sender<tui::TuiMsg>,
+) {
+    let display = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.clone());
+    app.push_chat(tui::ChatEntry::SystemNote(format!("▶ Executando {display}…")));
+    let tx = msg_tx.clone();
+    let display_clone = display.clone();
+    std::thread::spawn(move || {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&path)
+            .output();
+        let note = match output {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let mut text = format!("▶ {display_clone}\n{}", "─".repeat(40));
+                if !stdout.trim().is_empty() {
+                    text.push('\n');
+                    text.push_str(stdout.trim_end());
+                }
+                if !stderr.trim().is_empty() {
+                    text.push_str("\n[stderr]\n");
+                    text.push_str(stderr.trim_end());
+                }
+                if !o.status.success() {
+                    text.push_str(&format!("\n[exit: {}]", o.status));
+                }
+                text
+            }
+            Err(e) => format!("Erro ao executar {display_clone}: {e}"),
+        };
+        let _ = tx.send(tui::TuiMsg::SystemNote(note));
+    });
+}
+
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 fn handle_tui_slash_command(
     cmd: String,
@@ -2621,6 +2788,7 @@ fn handle_tui_slash_command(
   /logout        {logout}\n\
   /version       {version}\n\
   /locale [pt-BR|en] {locale}\n\
+  /run [script]  Executa um script da pasta scripts/\n\
   /exit          {exit}\n\
 {shortcuts}",
                 header = rust_i18n::t!("tui.repl.help.header"),
@@ -3371,6 +3539,28 @@ fn handle_tui_slash_command(
         }
         "exit" | "quit" => {
             app.should_quit = true;
+        }
+        "run" => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            if let Some(name) = arg {
+                let scripts = scan_scripts(&cwd);
+                if let Some((_n, path)) = scripts.iter().find(|(n, _)| n.contains(name)) {
+                    run_script_to_chat(path.clone(), app, msg_tx);
+                } else {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "Script '{name}' não encontrado em ./scripts/"
+                    )));
+                }
+            } else {
+                let scripts = scan_scripts(&cwd);
+                if scripts.is_empty() {
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "Nenhum script encontrado em ./scripts/ ou .elai/scripts/".into(),
+                    ));
+                } else {
+                    app.open_script_picker(scripts);
+                }
+            }
         }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(
@@ -5333,13 +5523,57 @@ fn resolve_export_path(
     Ok(cwd.join(final_name))
 }
 
+static SYSTEM_PROMPT_OVERRIDES: std::sync::OnceLock<(Option<String>, Option<String>)> =
+    std::sync::OnceLock::new();
+
+fn set_system_prompt_overrides(custom: Option<String>, append: Option<String>) {
+    let _ = SYSTEM_PROMPT_OVERRIDES.set((custom, append));
+}
+
+fn get_system_prompt_overrides() -> (Option<String>, Option<String>) {
+    SYSTEM_PROMPT_OVERRIDES
+        .get()
+        .cloned()
+        .unwrap_or((None, None))
+}
+
 fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Ok(load_system_prompt(
+    let mut parts = load_system_prompt(
         env::current_dir()?,
         DEFAULT_DATE,
         env::consts::OS,
         "unknown",
-    )?)
+    )?;
+
+    let (cli_custom, cli_append) = get_system_prompt_overrides();
+    let layers = PromptLayers {
+        custom: cli_custom
+            .or_else(|| env::var("ELAI_CUSTOM_SYSTEM_PROMPT").ok())
+            .filter(|v| !v.trim().is_empty()),
+        append: cli_append
+            .or_else(|| env::var("ELAI_APPEND_SYSTEM_PROMPT").ok())
+            .filter(|v| !v.trim().is_empty()),
+        agent: None,
+    };
+
+    if layers.custom.is_some() || layers.append.is_some() {
+        let base = parts.join("\n\n");
+        parts = vec![build_effective_system_prompt(&base, &layers)];
+    }
+
+    let ctx = SystemContext {
+        model: ant_default_model()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(suggested_default_model),
+        effort_level: None,
+        working_dir: env::current_dir()?,
+        timestamp_utc: now_iso8601(),
+    };
+    if let Some(last) = parts.last_mut() {
+        *last = append_system_context(last, &ctx);
+    }
+
+    Ok(parts)
 }
 
 /// Enriquece o input do usuário com conteúdo de arquivos mencionados via `@<path>`.
@@ -6097,9 +6331,10 @@ impl ApiClient for DefaultRuntimeClient {
         if let Some(progress_reporter) = &self.progress_reporter {
             progress_reporter.mark_model_phase();
         }
+        let resolved_model = resolve_model_alias(&self.model);
         let message_request = MessageRequest {
-            model: self.model.clone(),
-            max_tokens: max_tokens_for_model(&self.model),
+            model: resolved_model.clone(),
+            max_tokens: max_tokens_for_model(&resolved_model),
             messages: convert_messages(&request.messages),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: self.enable_tools.then(|| {
@@ -6112,20 +6347,20 @@ impl ApiClient for DefaultRuntimeClient {
             }),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
             stream: true,
-            thinking: if model_supports_thinking(&self.model) {
+            thinking: if model_supports_thinking(&resolved_model) {
                 self.thinking_override
                     .clone()
-                    .or_else(|| default_thinking_config(&self.model))
+                    .or_else(|| default_thinking_config(&resolved_model))
             } else {
                 None
             },
             // output_config (effort level) only for models with adaptive thinking support
             // (Opus/Sonnet 4.6+). Haiku and other models support thinking but not effort.
-            output_config: if model_supports_adaptive_thinking(&self.model) {
+            output_config: if model_supports_adaptive_thinking(&resolved_model) {
                 let effort = match self.thinking_override.as_ref() {
                     Some(ThinkingConfig::Enabled { .. }) => Some(EffortLevel::High),
                     Some(ThinkingConfig::Adaptive) | None
-                        if default_thinking_config(&self.model).is_some() =>
+                        if default_thinking_config(&resolved_model).is_some() =>
                     {
                         Some(EffortLevel::Medium)
                     }

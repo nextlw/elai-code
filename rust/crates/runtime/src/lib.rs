@@ -15,6 +15,7 @@
 
 mod bash;
 mod bootstrap;
+pub mod buddy;
 pub mod global_config;
 pub mod progress;
 pub mod auto_dream;
@@ -54,8 +55,9 @@ pub use budget::{
 };
 pub use compact::{
     compact_session, compact_session_with_summarizer, estimate_session_tokens,
-    format_compact_summary, get_compact_continuation_message, should_compact,
-    summarize_compact_excerpt, CompactionConfig, CompactionResult,
+    format_compact_summary, get_compact_continuation_message, micro_compact_messages,
+    should_compact, summarize_compact_excerpt, CompactionConfig, CompactionResult,
+    MicroCompactConfig,
 };
 pub use model_context::{
     compaction_trigger_estimated_tokens_for_model, input_context_tokens_for_model,
@@ -125,9 +127,11 @@ pub use oneshot::{
     build_elai_md_prompt, generate_elai_md_with, render_static_elai_md, OneshotError,
 };
 pub use prompt::{
-    load_system_prompt, load_system_prompt_with_output, parse_mentions, prepend_bullets,
-    read_mentioned_files, ContextFile, ProjectContext, PromptBuildError, SystemPromptBuilder,
-    SystemPromptOutput, CAPYBARA_SYSTEM_PROMPT, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    append_system_context, build_effective_system_prompt, load_system_prompt,
+    load_system_prompt_with_output, parse_mentions, prepend_bullets, read_mentioned_files,
+    ContextFile, ProjectContext, PromptBuildError, PromptLayers, SystemContext,
+    SystemPromptBuilder, SystemPromptOutput, CAPYBARA_SYSTEM_PROMPT, FRONTIER_MODEL_NAME,
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use skills::{
     build_skill_prompt_sections, load_all_skills, validate_skills, Skill, SkillMetadata,
