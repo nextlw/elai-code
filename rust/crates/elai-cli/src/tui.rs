@@ -145,6 +145,9 @@ pub enum TuiMsg {
     },
     #[allow(dead_code)]
     SystemNote(String),
+    /// Bloco ANSI cru (ex.: sprite Pokémon). Empurrado como `ChatEntry::AnsiBlock`.
+    #[allow(dead_code)]
+    AnsiBlock(String),
     /// Update da "linha viva" de uma task. O TUI substitui in-place a entry
     /// existente com mesmo `task_id` (scan reverso ≤ 8 entries) ou faz push.
     TaskProgress {
@@ -216,6 +219,9 @@ pub enum ChatEntry {
         finished: bool,
     },
     SystemNote(String),
+    /// Bloco com sequências ANSI 256-color (ex.: sprite Pokémon). É parseado
+    /// com `ansi-to-tui` para virar `Line`s coloridas no painel ratatui.
+    AnsiBlock(String),
     SwdLogEntry {
         transactions: Vec<crate::swd::SwdTransaction>,
         mode: crate::swd::SwdLevel,
@@ -629,6 +635,10 @@ pub struct UiApp {
     pub recent_sessions: Vec<(String, usize)>,
     pub indexed_paths: Vec<String>, // cache lazy de `.elai/index/metadata.json` ou re-walk
     pub should_quit: bool,
+    /// Quando `true`, o próximo `render` força `terminal.clear()` antes do
+    /// draw — usado depois de overlays de tela cheia (ex.: buddy picker) que
+    /// invalidam o buffer interno do ratatui.
+    pub force_clear: bool,
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub history_backup: String,
@@ -784,6 +794,7 @@ impl UiApp {
             recent_sessions,
             indexed_paths: Vec::new(),
             should_quit: false,
+            force_clear: false,
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
@@ -1067,6 +1078,9 @@ impl UiApp {
             }
             TuiMsg::SystemNote(note) => {
                 self.push_chat(ChatEntry::SystemNote(note));
+            }
+            TuiMsg::AnsiBlock(ansi) => {
+                self.push_chat(ChatEntry::AnsiBlock(ansi));
             }
             TuiMsg::TaskProgress {
                 task_id,
@@ -4335,6 +4349,10 @@ pub fn render(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut UiApp,
 ) -> io::Result<()> {
+    if app.force_clear {
+        terminal.clear()?;
+        app.force_clear = false;
+    }
     terminal.draw(|frame| {
         let size = frame.area();
 
@@ -4481,6 +4499,8 @@ fn shorten_cwd(max_width: usize) -> String {
 }
 
 fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
+    let text_area = area;
+
     // corpo do mascote e texto ELAI.CODE: laranja claro
     let body_style = Style::default().fg(theme().easter_egg.body);
     // olhos (▄ ▀ e █ depois de ▓): laranja saturado
@@ -4491,7 +4511,7 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
 
     let username = whoami_user();
     // Texto vai centralizado na coluna; reserva apenas 1 col de respiro de cada lado.
-    let cwd_budget = (area.width as usize).saturating_sub(2);
+    let cwd_budget = (text_area.width as usize).saturating_sub(2);
     let cwd = shorten_cwd(cwd_budget);
 
     // Margem mínima de 1 linha acima do mascote.
@@ -4570,7 +4590,7 @@ fn draw_elai_card(frame: &mut ratatui::Frame, area: Rect, _app: &UiApp) {
     let paragraph = Paragraph::new(lines)
         .block(Block::default())
         .alignment(Alignment::Center);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, text_area);
 }
 
 fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
@@ -5290,6 +5310,16 @@ fn lines_for_thinking_block(app: &UiApp, text: &str, finished: bool) -> Vec<Line
     result
 }
 
+/// Parseia um bloco ANSI 256-color (ex.: sprite Pokémon) para `Line`s ratatui.
+/// Usa o crate `ansi-to-tui` que converte cada `\x1b[...m` em `Style` apropriado.
+fn lines_for_ansi_block(ansi: &str) -> Vec<Line<'static>> {
+    use ansi_to_tui::IntoText;
+    match ansi.into_text() {
+        Ok(text) => text.lines.into_iter().collect(),
+        Err(_) => vec![Line::from(Span::raw(ansi.to_string()))],
+    }
+}
+
 fn lines_for_system_note(note: &str, wrap_width: usize) -> Vec<Line<'static>> {
     let style = Style::default().fg(theme().warn);
     let indent = "  ";
@@ -5542,6 +5572,7 @@ fn lines_for_chat_entry(app: &UiApp, entry: &ChatEntry, wrap_width: usize) -> Ve
             lines_for_thinking_block(app, text, *finished)
         }
         ChatEntry::SystemNote(note) => lines_for_system_note(note.as_str(), wrap_width),
+        ChatEntry::AnsiBlock(ansi) => lines_for_ansi_block(ansi.as_str()),
         ChatEntry::SwdLogEntry { transactions, mode } => {
             lines_for_swd_log(transactions.as_slice(), *mode)
         }

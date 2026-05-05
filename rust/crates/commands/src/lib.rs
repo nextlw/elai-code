@@ -593,6 +593,17 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         hidden: false,
         user_facing_name: None,
     },
+    SlashCommandSpec {
+        name: "buddy",
+        aliases: &[],
+        summary_key: "commands.buddy.summary",
+        argument_hint_key: Some("commands.buddy.argument_hint"),
+        resume_supported: true,
+        category: SlashCategory::Session,
+        is_enabled: always_enabled,
+        hidden: false,
+        user_facing_name: None,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -693,6 +704,9 @@ pub enum SlashCommand {
         script: String,
         args: Option<String>,
         update: bool,
+    },
+    Buddy {
+        action: Option<String>,
     },
     Unknown(String),
 }
@@ -843,6 +857,9 @@ impl SlashCommand {
                     update,
                 }
             }
+            "buddy" => Self::Buddy {
+                action: parts.next().map(ToOwned::to_owned),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -2277,6 +2294,7 @@ pub fn handle_slash_command(
         | SlashCommand::Providers { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
+        | SlashCommand::Buddy { .. }
         | SlashCommand::Unknown(_) => None,
         SlashCommand::Run { script, args, update } => {
             use script_runner::{run_script, ScriptConfig};
@@ -2702,8 +2720,8 @@ mod tests {
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
         assert!(help.contains("/locale [pt-BR|en]"));
-        assert_eq!(slash_command_specs().len(), 37);
-        assert_eq!(resume_supported_slash_commands().len(), 19);
+        assert_eq!(slash_command_specs().len(), 40);
+        assert_eq!(resume_supported_slash_commands().len(), 21);
     }
 
     #[test]

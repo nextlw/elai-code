@@ -4,8 +4,10 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::types::{Companion, CompanionBones, CompanionSoul, StoredCompanion};
 use super::generator::roll_bones;
+use super::types::{
+    pokemon_name, Companion, CompanionBones, CompanionSoul, PokemonId, StoredCompanion,
+};
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
@@ -48,11 +50,12 @@ fn now_unix_secs() -> u64 {
 fn hatch_prompt(bones: &CompanionBones) -> String {
     format!(
         "You are hatching a companion for an AI coding assistant named Elai.\n\
-         The companion is a {species} of {rarity} rarity.\n\
-         Give it a short, creative name (1-2 words) and a one-sentence personality description.\n\
+         The companion is a {species} (mascot #{id:03}) of {rarity} rarity.\n\
+         Give it a short, creative nickname (1-2 words) and a one-sentence personality description.\n\
          Respond ONLY in JSON: {{\"name\": \"...\", \"personality\": \"...\"}}\n\
          Keep the name under 20 characters and the personality under 80 characters.",
-        species = bones.species.as_str(),
+        species = pokemon_name(bones.pokemon_id),
+        id = bones.pokemon_id,
         rarity = bones.rarity.as_str(),
     )
 }
@@ -73,14 +76,58 @@ where
     let stored = StoredCompanion {
         soul: soul.clone(),
         hatched_at,
+        pokemon_id: Some(bones.pokemon_id),
     };
-    // Best-effort persist — ignore write errors in the hatch path.
+    let _ = save_stored_companion(&stored);
+    Ok(Companion::from_parts(bones, soul, hatched_at))
+}
+
+/// Updates only the `pokemon_id` of the stored companion (used by `/buddy pick`).
+/// If no companion is stored yet, writes a stub record so the next launch picks
+/// up the chosen id.
+pub fn update_pokemon_id(chosen: PokemonId) -> std::io::Result<()> {
+    let stored = if let Some(mut existing) = load_stored_companion() {
+        existing.pokemon_id = Some(chosen);
+        existing
+    } else {
+        StoredCompanion {
+            soul: CompanionSoul {
+                name: pokemon_name(chosen).to_string(),
+                personality: String::new(),
+            },
+            hatched_at: now_unix_secs(),
+            pokemon_id: Some(chosen),
+        }
+    };
+    save_stored_companion(&stored)
+}
+
+/// Hatch with a user-chosen Pokémon. Bones (rarity/eye/hat/shiny/stats) still
+/// derive from `user_id`, but `pokemon_id` is replaced by `chosen`.
+pub fn save_pokemon_choice<E, F>(
+    user_id: &str,
+    chosen: PokemonId,
+    call_llm: F,
+) -> Result<Companion, E>
+where
+    F: FnOnce(&str) -> Result<String, E>,
+{
+    let mut bones = roll_bones(user_id);
+    bones.pokemon_id = chosen;
+    let prompt = hatch_prompt(&bones);
+    let raw = call_llm(&prompt)?;
+    let soul = parse_soul_from_response(&raw, &bones);
+    let hatched_at = now_unix_secs();
+    let stored = StoredCompanion {
+        soul: soul.clone(),
+        hatched_at,
+        pokemon_id: Some(chosen),
+    };
     let _ = save_stored_companion(&stored);
     Ok(Companion::from_parts(bones, soul, hatched_at))
 }
 
 fn parse_soul_from_response(raw: &str, bones: &CompanionBones) -> CompanionSoul {
-    // Extract the first JSON object from the response (model may prefix with prose).
     if let Some(start) = raw.find('{') {
         if let Some(end) = raw[start..].find('}') {
             let json_str = &raw[start..=start + end];
@@ -99,27 +146,31 @@ fn parse_soul_from_response(raw: &str, bones: &CompanionBones) -> CompanionSoul 
             }
         }
     }
-    // Fallback when JSON parsing fails.
     default_soul(bones)
 }
 
 fn default_soul(bones: &CompanionBones) -> CompanionSoul {
     CompanionSoul {
-        name: format!("{}-{}", bones.species.as_str(), bones.rarity.as_str()),
+        name: format!("{}-{}", pokemon_name(bones.pokemon_id), bones.rarity.as_str()),
         personality: "A quiet companion who watches the code flow.".to_string(),
     }
 }
 
 /// Load existing companion or create one using the provided LLM callback.
 ///
-/// If a `StoredCompanion` already exists on disk, returns it (regenerating bones
-/// deterministically from `user_id`).  Otherwise calls `call_llm` to hatch.
+/// If a `StoredCompanion` already exists on disk, returns it (regenerating
+/// deterministic bones from `user_id` and overriding `pokemon_id` with the
+/// stored choice when present). Legacy records without `pokemon_id` keep the
+/// deterministic id from `roll_bones`.
 pub fn load_or_hatch<E, F>(user_id: &str, call_llm: F) -> Result<Companion, E>
 where
     F: FnOnce(&str) -> Result<String, E>,
 {
-    let bones = roll_bones(user_id);
+    let mut bones = roll_bones(user_id);
     if let Some(stored) = load_stored_companion() {
+        if let Some(id) = stored.pokemon_id {
+            bones.pokemon_id = id;
+        }
         return Ok(Companion::from_parts(bones, stored.soul, stored.hatched_at));
     }
     hatch_with_llm(user_id, call_llm)
@@ -158,9 +209,7 @@ mod tests {
     #[test]
     fn hatch_with_llm_uses_callback() {
         let companion = hatch_with_llm("user-abc", |_prompt| {
-            Ok::<_, String>(
-                r#"{"name": "Orb", "personality": "Loves refactoring."}"#.to_string(),
-            )
+            Ok::<_, String>(r#"{"name": "Orb", "personality": "Loves refactoring."}"#.to_string())
         })
         .unwrap();
         assert_eq!(companion.name, "Orb");

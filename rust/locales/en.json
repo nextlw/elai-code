@@ -368,6 +368,10 @@
       "summary": "Execute a script with optional LLM-driven update",
       "argument_hint": "<script> [--update] [args...]"
     },
+    "buddy": {
+      "summary": "Manage your mascot (pick / show)",
+      "argument_hint": "[pick|show]"
+    },
     "setup": {
       "title": "Configure API Key",
       "provider_question": "Choose your AI provider:",

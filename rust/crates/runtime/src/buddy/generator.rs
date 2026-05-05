@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::types::{
-    ALL_EYES, ALL_HATS, ALL_SPECIES, ALL_STAT_NAMES, RARITY_WEIGHTS, CompanionBones, Rarity,
+    ALL_EYES, ALL_HATS, ALL_STAT_NAMES, CompanionBones, POKEMON_COUNT, RARITY_WEIGHTS, Rarity,
     StatName,
 };
 
@@ -114,7 +114,7 @@ pub fn roll_bones(user_id: &str) -> CompanionBones {
     let mut rng = Mulberry32::new(seed);
 
     let rarity = roll_rarity(&mut rng);
-    let species = ALL_SPECIES[rng.next_usize(ALL_SPECIES.len())];
+    let pokemon_id = (rng.next_usize(POKEMON_COUNT as usize) + 1) as u16;
     let eye = ALL_EYES[rng.next_usize(ALL_EYES.len())];
     let hat = ALL_HATS[rng.next_usize(ALL_HATS.len())];
     // Shiny: ~5% chance regardless of rarity
@@ -123,7 +123,7 @@ pub fn roll_bones(user_id: &str) -> CompanionBones {
 
     CompanionBones {
         rarity,
-        species,
+        pokemon_id,
         eye,
         hat,
         shiny,
@@ -140,7 +140,7 @@ mod tests {
         let a = roll_bones("user-123");
         let b = roll_bones("user-123");
         assert_eq!(a.rarity, b.rarity);
-        assert_eq!(a.species, b.species);
+        assert_eq!(a.pokemon_id, b.pokemon_id);
         assert_eq!(a.eye, b.eye);
         assert_eq!(a.stats, b.stats);
     }
@@ -150,7 +150,15 @@ mod tests {
         let a = roll_bones("alice");
         let b = roll_bones("bob");
         // Very unlikely to be identical for two different seeds
-        assert!(a.species != b.species || a.rarity != b.rarity || a.eye != b.eye);
+        assert!(a.pokemon_id != b.pokemon_id || a.rarity != b.rarity || a.eye != b.eye);
+    }
+
+    #[test]
+    fn roll_bones_pokemon_id_in_range() {
+        for i in 0..200 {
+            let b = roll_bones(&format!("user-{i}"));
+            assert!(b.pokemon_id >= 1 && b.pokemon_id <= POKEMON_COUNT);
+        }
     }
 
     #[test]

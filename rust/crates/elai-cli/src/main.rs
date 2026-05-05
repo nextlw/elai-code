@@ -1,5 +1,6 @@
 mod args;
 mod auth;
+mod buddy_picker;
 mod cheese_theme;
 mod compact_llm;
 mod diff;
@@ -2014,6 +2015,7 @@ fn run_resume_command(
         | SlashCommand::Cache { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
+        | SlashCommand::Buddy { .. }
         | SlashCommand::Run { .. }
         | SlashCommand::Update
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
@@ -2115,17 +2117,40 @@ fn run_tui_repl(
     runtime::set_default_sink(Arc::new(tui_sink::ChannelSink::new(msg_tx.clone())));
 
     // Buddy: load existing companion or hatch one in background on first run.
+    //
+    // First run (or legacy record without `pokemon_id`) → run the picker
+    // synchronously here, before the TUI takes over the terminal. The chosen
+    // id is then passed to the background hatch thread, which keeps the LLM
+    // call (name + personality) off the startup critical path.
+    let buddy_user_id = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string());
+    let stored_companion = runtime::buddy::load_stored_companion();
+    let needs_picker = stored_companion
+        .as_ref()
+        .and_then(|s| s.pokemon_id)
+        .is_none();
+    let picked_pokemon: Option<runtime::buddy::PokemonId> = if needs_picker {
+        match buddy_picker::run_buddy_picker(None) {
+            Ok(choice) => choice,
+            Err(e) => {
+                eprintln!("[elai-buddy] picker failed: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let is_new_companion = stored_companion.is_none();
+
     {
         let buddy_tx = msg_tx.clone();
         let buddy_model = model.clone();
+        let user_id = buddy_user_id.clone();
         thread::spawn(move || {
-            let user_id = env::var("USER")
-                .or_else(|_| env::var("USERNAME"))
-                .unwrap_or_else(|_| "user".to_string());
+            let is_new = is_new_companion;
 
-            let is_new = runtime::buddy::load_stored_companion().is_none();
-
-            let companion = runtime::buddy::load_or_hatch(&user_id, move |prompt| {
+            let llm_call = move |prompt: &str| -> Result<String, String> {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -2165,10 +2190,19 @@ fn run_tui_repl(
                     .collect::<Vec<_>>()
                     .join("");
                 Ok::<_, String>(text)
-            });
+            };
+
+            let companion = match picked_pokemon {
+                Some(id) => runtime::buddy::save_pokemon_choice(&user_id, id, llm_call),
+                None => runtime::buddy::load_or_hatch(&user_id, llm_call),
+            };
 
             if let Ok(companion) = companion {
-                let mut msg = runtime::buddy::render_companion_header(&companion);
+                // Envia o sprite ANSI via canal dedicado — o renderer parseia
+                // com `ansi-to-tui` e produz Line/Span coloridos no chat.
+                let sprite = runtime::buddy::sprite_for_id(companion.pokemon_id).to_string();
+                let _ = buddy_tx.send(tui::TuiMsg::AnsiBlock(sprite));
+                let mut msg = companion.summary_line();
                 if is_new {
                     msg.push_str("\n✨ Seu companheiro nasceu!");
                 }
@@ -2732,6 +2766,108 @@ fn run_script_to_chat(
         };
         let _ = tx.send(tui::TuiMsg::SystemNote(note));
     });
+}
+
+/// Handles the `/buddy [pick|show]` slash command.
+/// `pick`: suspends the TUI alternate-screen, runs the picker, then forces the
+/// TUI to redraw. `show` (or no arg): pushes the current companion header into
+/// the chat as a SystemNote.
+fn handle_buddy_slash(arg: Option<&str>, app: &mut tui::UiApp) {
+    // Default action is `pick` — abrir o seletor é o caso de uso primário.
+    // `/buddy show` renderiza o mascote atual no chat.
+    let action = arg.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("pick");
+    let user_id = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string());
+
+    match action {
+        "pick" => {
+            use crossterm::{
+                execute,
+                terminal::{
+                    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+                },
+            };
+
+            let mut stdout = std::io::stdout();
+            // Suspende o TUI principal antes do picker tomar a tela.
+            let _ = execute!(stdout, LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+
+            let current = runtime::buddy::load_stored_companion()
+                .and_then(|s| s.pokemon_id);
+            let picked = match buddy_picker::run_buddy_picker(current) {
+                Ok(c) => c,
+                Err(e) => {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "buddy picker falhou: {e}"
+                    )));
+                    None
+                }
+            };
+
+            // Restaura o TUI principal. Marca `force_clear` para que o próximo
+            // render limpe o buffer interno do ratatui (caso contrário o diff
+            // não redesenha header/footer/input que foram apagados pelo picker).
+            let _ = enable_raw_mode();
+            let _ = execute!(stdout, EnterAlternateScreen);
+            app.force_clear = true;
+
+            if let Some(id) = picked {
+                if let Err(e) = runtime::buddy::update_pokemon_id(id) {
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "Erro ao salvar mascote: {e}"
+                    )));
+                    return;
+                }
+                let mut bones = runtime::buddy::roll_bones(&user_id);
+                bones.pokemon_id = id;
+                if let Some(stored) = runtime::buddy::load_stored_companion() {
+                    let companion = runtime::buddy::Companion::from_parts(
+                        bones,
+                        stored.soul,
+                        stored.hatched_at,
+                    );
+                    let sprite =
+                        runtime::buddy::sprite_for_id(companion.pokemon_id).to_string();
+                    app.push_chat(tui::ChatEntry::AnsiBlock(sprite));
+                    app.push_chat(tui::ChatEntry::SystemNote(format!(
+                        "✨ Mascote atualizado: {}",
+                        companion.summary_line()
+                    )));
+                }
+            } else {
+                app.push_chat(tui::ChatEntry::SystemNote("Seleção cancelada.".into()));
+            }
+        }
+        "show" => {
+            let stored = runtime::buddy::load_stored_companion();
+            match stored {
+                Some(s) => {
+                    let mut bones = runtime::buddy::roll_bones(&user_id);
+                    if let Some(id) = s.pokemon_id {
+                        bones.pokemon_id = id;
+                    }
+                    let companion =
+                        runtime::buddy::Companion::from_parts(bones, s.soul, s.hatched_at);
+                    let sprite =
+                        runtime::buddy::sprite_for_id(companion.pokemon_id).to_string();
+                    app.push_chat(tui::ChatEntry::AnsiBlock(sprite));
+                    app.push_chat(tui::ChatEntry::SystemNote(companion.summary_line()));
+                }
+                None => {
+                    app.push_chat(tui::ChatEntry::SystemNote(
+                        "Nenhum mascote ainda. Use `/buddy pick` para escolher.".into(),
+                    ));
+                }
+            }
+        }
+        other => {
+            app.push_chat(tui::ChatEntry::SystemNote(format!(
+                "/buddy: ação desconhecida '{other}'. Use `pick` ou `show`."
+            )));
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -3562,6 +3698,9 @@ fn handle_tui_slash_command(
                 }
             }
         }
+        "buddy" => {
+            handle_buddy_slash(arg, app);
+        }
         other => {
             app.push_chat(tui::ChatEntry::SystemNote(
                 rust_i18n::t!("tui.repl.feedback.unknown_command", cmd = other.to_string())
@@ -4196,6 +4335,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                     Err(e) => eprintln!("run: {e}"),
                 }
                 false
+            }
+            SlashCommand::Buddy { .. } => {
+                Self::repl_feature_not_wired("/buddy is only available in the TUI session")
             }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))

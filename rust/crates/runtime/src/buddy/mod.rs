@@ -22,23 +22,22 @@ pub mod sprites;
 pub mod types;
 
 pub use generator::roll_bones;
-pub use hatch::{load_or_hatch, load_stored_companion, save_stored_companion};
-pub use sprites::{render_sprite, sprite_for};
+pub use hatch::{
+    load_or_hatch, load_stored_companion, save_pokemon_choice, save_stored_companion,
+    update_pokemon_id,
+};
+pub use sprites::{render_sprite, sprite_for_id};
 pub use types::{
-    Companion, CompanionBones, CompanionSoul, Hat, Rarity, Species, StatName, StoredCompanion,
-    ALL_EYES, ALL_HATS, ALL_RARITIES, ALL_SPECIES, ALL_STAT_NAMES, RARITY_STARS, RARITY_WEIGHTS,
+    pokemon_name, Companion, CompanionBones, CompanionSoul, Hat, PokemonId, Rarity, StatName,
+    StoredCompanion, ALL_EYES, ALL_HATS, ALL_RARITIES, ALL_STAT_NAMES, POKEMON_COUNT,
+    POKEMON_NAMES, RARITY_STARS, RARITY_WEIGHTS,
 };
 
-/// Renders a compact TUI header line for the companion, e.g.:
-/// ```text
-///  /\_/\
-/// ( o.o )
-///  > ^ <
-/// Capri · capybara [rare] ★★★
-/// ```
+/// Renders a compact TUI header line for the companion. The sprite is the
+/// embedded ANSI Pokémon art; the summary line names it.
 #[must_use]
 pub fn render_companion_header(companion: &Companion) -> String {
-    let sprite = render_sprite(companion.species, companion.shiny);
+    let sprite = render_sprite(companion.pokemon_id, companion.shiny);
     let summary = companion.summary_line();
-    format!("{sprite}{summary}")
+    format!("{sprite}\n{summary}")
 }

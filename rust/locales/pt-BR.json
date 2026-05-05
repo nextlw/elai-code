@@ -141,6 +141,10 @@
     "run": {
       "summary": "Executa um script com suporte a atualização via LLM",
       "argument_hint": "<script> [--update] [args...]"
+    },
+    "buddy": {
+      "summary": "Gerencia o mascote (escolha, exibição)",
+      "argument_hint": "[pick|show]"
     }
   },
   "locale": {
