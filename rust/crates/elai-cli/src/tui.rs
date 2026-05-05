@@ -926,27 +926,132 @@ pub fn make_thinking_face_spinner() -> SpinnerState {
     SpinnerState::custom(frames, Duration::from_millis(150))
 }
 
+/// Creates a mega diverse eyes spinner that cycles through ALL variations.
+/// 
+/// Combines 12 different eye styles into one mega spinner with ~4s per style.
+/// Total cycle: ~48 seconds before repeating.
+/// 
+/// Styles in order:
+/// 1. Simple: `( .. )` → `( -- )` → `( .. )` → `( ^^ )`
+/// 2. Cute face: `( o.o )` → `( -.- )` → `( o.o )` → `( ^.^ )`
+/// 3. Bracket up: `[ .. ]` → `[ -- ]` → `[ .. ]` → `[ ^^ ]`
+/// 4. Minimal: `(..)` → `(--)` → `(..)` → `(oo)`
+/// 5. ASCII anime: `( · · )` → `( - - )` → `( ^ ^ )` → `( v v )`
+/// 6. Bracket classic: `[ .. ]` → `[ -- ]` → `[ .. ]`
+/// 7. Cute emoji: `(˶˶)` → `( - )` → `(^ ^)`
+/// 8. Side-to-side: `(<<)` → `(..)` → `(>>)` → `(..)`
+/// 9. Blink classic: `( . . )` → `( - - )` → `( o o )`
+/// 10. Bullet movement: `[●  ]` → `[ ● ]` → `[  ●]`
+/// 11. Thinking face: `(*_*)` → `(-_-)` → `(o_o)`
+/// 12. Eye dots: `· ·` → `· ·` → `· ·`
+pub fn make_mega_eyes_spinner() -> SpinnerState {
+    use std::time::Duration;
+
+    // ~4 seconds per style (4 frames × 180ms + 3×60ms transitions)
+    // Total: 12 styles × ~4s = ~48s full cycle
+    let frames: Vec<String> = vec![
+        // ── Style 1: Simple ──────────────────────────────
+        "( .. )".into(),   // 180ms
+        "( -- )".into(),   // 180ms
+        "( .. )".into(),   // 180ms
+        "( ^^ )".into(),   // 180ms
+        // Transition pause (smoother)
+        "( .. )".into(),   // 80ms
+        // ── Style 2: Cute face ──────────────────────────
+        "( o.o )".into(),  // 180ms
+        "( -.- )".into(),  // 180ms
+        "( o.o )".into(),  // 180ms
+        "( ^.^ )".into(),  // 180ms
+        "( o.o )".into(),  // 80ms
+        // ── Style 3: Bracket up ─────────────────────────
+        "[ .. ]".into(),   // 180ms
+        "[ -- ]".into(),   // 180ms
+        "[ .. ]".into(),   // 180ms
+        "[ ^^ ]".into(),   // 180ms
+        "[ .. ]".into(),   // 80ms
+        // ── Style 4: Minimal dots ───────────────────────
+        "(..)".into(),     // 200ms
+        "(--)".into(),     // 200ms
+        "(..)".into(),     // 200ms
+        "(oo)".into(),     // 200ms
+        "(..)".into(),     // 80ms
+        // ── Style 5: ASCII anime (extended) ─────────────
+        "( · · )".into(),  // 160ms
+        "( - - )".into(),  // 160ms
+        "( · · )".into(),  // 160ms
+        "( ^ ^ )".into(),  // 160ms
+        "( v v )".into(),  // 160ms
+        "( · · )".into(),  // 160ms
+        "( < < )".into(),  // 160ms
+        "( > > )".into(),  // 160ms
+        "( · · )".into(),  // 80ms
+        // ── Style 6: Bracket classic ────────────────────
+        "[ .. ]".into(),   // 180ms
+        "[ -- ]".into(),   // 180ms
+        "[ .. ]".into(),   // 180ms
+        "[..]".into(),     // 180ms
+        "[ .. ]".into(),   // 80ms
+        // ── Style 7: Cute emoji ─────────────────────────
+        "(˶˶)".into(),    // 180ms
+        "( - )".into(),    // 180ms
+        "(^^)".into(),     // 180ms
+        "( · )".into(),    // 180ms
+        "(˶˶)".into(),    // 80ms
+        // ── Style 8: Side-to-side ───────────────────────
+        "(<<)".into(),     // 180ms
+        "(..)".into(),     // 180ms
+        "(>>)".into(),     // 180ms
+        "(..)".into(),     // 180ms
+        "(<<)".into(),     // 80ms
+        // ── Style 9: Blink classic ──────────────────────
+        "( . . )".into(),  // 160ms
+        "( - - )".into(),  // 160ms
+        "( . . )".into(),  // 160ms
+        "( o o )".into(),  // 160ms
+        "( - - )".into(),  // 160ms
+        "( . . )".into(),  // 160ms
+        "( . . )".into(),  // 80ms
+        // ── Style 10: Bullet movement ────────────────────
+        "[●  ]".into(),    // 140ms
+        "[ ● ]".into(),    // 140ms
+        "[  ●]".into(),    // 140ms
+        "[ ● ]".into(),    // 140ms
+        "[●  ]".into(),    // 140ms
+        "[ ● ]".into(),    // 80ms
+        // ── Style 11: Thinking face ────────────────────
+        "(*_*)".into(),    // 180ms
+        "(-_-)".into(),    // 180ms
+        "(*_*)".into(),    // 180ms
+        "(o_o)".into(),    // 180ms
+        "(-_-)".into(),    // 180ms
+        "(*_*)".into(),    // 80ms
+        // ── Style 12: Eye dots (moving) ─────────────────
+        "  ·  ·  ".into(), // 130ms
+        " ·  ·  ".into(),  // 130ms
+        "·  ·   ".into(),  // 130ms
+        " ·  ·  ".into(),  // 130ms
+        "  · ·  ".into(),  // 130ms
+        "   · · ".into(),  // 130ms
+        "  · ·  ".into(),  // 130ms
+        " ·   · ".into(),  // 130ms
+        "─ ·  ·".into(),   // 130ms
+        "  ·  ·  ".into(), // 130ms
+        "─     ─".into(),  // 130ms
+        "·     ·".into(),  // 130ms
+        "─     ─".into(),  // 80ms
+        // Back to start
+        "( .. )".into(),   // 80ms
+    ];
+
+    SpinnerState::custom(frames, Duration::from_millis(130))
+}
+
 /// Returns a random eyes spinner for variety.
 /// 
-/// Cycles through different eye spinner styles.
-/// Call this function to get variety across sessions.
+/// Now uses `make_mega_eyes_spinner` which includes ALL 12 variations.
+/// Total cycle: ~48 seconds before repeating.
 pub fn make_random_eyes_spinner() -> SpinnerState {
-    // Pick a random spinner based on current time
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    
-    match seconds % 8 {
-        0 => make_ascii_eyes_spinner(),
-        1 => make_minimal_dots_spinner(),
-        2 => make_bracket_eyes_spinner(),
-        3 => make_cute_eyes_spinner(),
-        4 => make_side_eyes_spinner(),
-        5 => make_blink_eyes_spinner(),
-        6 => make_bullet_eyes_spinner(),
-        _ => make_thinking_face_spinner(),
-    }
+    make_mega_eyes_spinner()
 }
 
 impl UiApp {
@@ -980,7 +1085,7 @@ impl UiApp {
             history: Vec::new(),
             history_index: None,
             history_backup: String::new(),
-            spinner_state: make_ascii_eyes_spinner(),
+            spinner_state: make_mega_eyes_spinner(),
             dots_spinner: SpinnerState::new(SpinnerType::Ellipsis),
             last_tick: Instant::now(),
             caption_idx: fastrand::usize(..),
