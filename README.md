@@ -66,11 +66,10 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.3.0
+## What's New — v1.3.1
 
-- feat: add buddy picker and integrate ANSI sprites for Pokémon selection
-- docs: fix brew and scoop install/update commands in README
-- chore: update scoop bucket to v1.2.6
+- feat: enhance buddy picker with detailed stats panel and deterministic companion generation
+- chore: update scoop bucket to v1.3.0
 
 ---
 
