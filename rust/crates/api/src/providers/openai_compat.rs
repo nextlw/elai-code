@@ -801,6 +801,7 @@ struct ErrorBody {
 }
 
 fn build_chat_completion_request(request: &MessageRequest) -> Value {
+    let needs_reasoning_content = request.reasoning_effort.is_some();
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
         messages.push(json!({
@@ -809,7 +810,7 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
         }));
     }
     for message in &request.messages {
-        messages.extend(translate_message(message));
+        messages.extend(translate_message(message, needs_reasoning_content));
     }
 
     let mut payload = json!({
@@ -834,7 +835,7 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
     payload
 }
 
-fn translate_message(message: &InputMessage) -> Vec<Value> {
+fn translate_message(message: &InputMessage, needs_reasoning_content: bool) -> Vec<Value> {
     match message.role.as_str() {
         "assistant" => {
             let mut text = String::new();
@@ -869,8 +870,10 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                 if !tool_calls.is_empty() {
                     obj.insert("tool_calls".to_string(), Value::Array(tool_calls));
                 }
-                // Kimi/DeepSeek: include reasoning_content when thinking was captured.
-                if !thinking.is_empty() {
+                // Kimi/DeepSeek require reasoning_content on every assistant message when
+                // reasoning is enabled — use captured thinking or fall back to empty string
+                // so that history messages from before thinking was captured don't 400.
+                if needs_reasoning_content || !thinking.is_empty() {
                     obj.insert("reasoning_content".to_string(), Value::String(thinking));
                 }
                 vec![Value::Object(obj)]
