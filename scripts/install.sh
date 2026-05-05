@@ -16,6 +16,26 @@ done
 
 REPO="nextlw/elai-code"
 BIN_NAME="elai"
+_BREW_DONE=false
+
+# ── Homebrew install (macOS preferred path) ───────────────────────────────────
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1 && [ -z "${ELAI_NO_BREW:-}" ]; then
+  printf "  ${BOLD}Homebrew detectado — instalando via brew${RESET}\n\n"
+
+  if brew list --formula nextlw/elai-code/elai >/dev/null 2>&1; then
+    say "Atualizando via brew..."
+    brew upgrade nextlw/elai-code/elai || true
+    ok "elai atualizado via Homebrew."
+  else
+    say "Adicionando tap nextlw/elai-code..."
+    brew tap nextlw/elai-code https://github.com/nextlw/elai-code 2>/dev/null || true
+    say "Instalando elai..."
+    brew install nextlw/elai-code/elai
+    ok "elai instalado via Homebrew."
+  fi
+
+  _BREW_DONE=true
+fi
 
 # Prefer the Homebrew bin prefix on macOS arm64 so the binary lands ahead of
 # any stale files in /usr/local/bin when Homebrew is on the PATH.
@@ -123,49 +143,53 @@ detect_shell_rc() {
 SHELL_RC="$(detect_shell_rc)"
 
 # ── Step 1: Download binary ───────────────────────────────────────────────────
-printf "  ${BOLD}Step 1 — Instalando binário${RESET}\n\n"
-
-# Fetch latest version tag from GitHub API to skip download if already current.
-LATEST_VERSION=""
-if command -v curl >/dev/null 2>&1; then
-  LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-    | grep '"tag_name"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-fi
-
-if [ -n "$CURRENT_VERSION" ] && [ -n "$LATEST_VERSION" ] && [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-  ok "Binário já está na versão mais recente (v${CURRENT_VERSION}). Nada a fazer."
+if "$_BREW_DONE"; then
+  ELAI_BIN="$(command -v elai)"
 else
-  if [ -n "$LATEST_VERSION" ]; then
-    say "Baixando elai v${LATEST_VERSION} (${TARGET})..."
-  else
-    say "Baixando ${TARGET}..."
-  fi
+  printf "  ${BOLD}Step 1 — Instalando binário${RESET}\n\n"
 
-  URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
-  TMP="$(mktemp)"
-  trap 'rm -f "$TMP"' EXIT
-
+  # Fetch latest version tag from GitHub API to skip download if already current.
+  LATEST_VERSION=""
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$URL" -o "$TMP"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TMP" "$URL"
-  else
-    error "curl ou wget é necessário."
+    LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | grep '"tag_name"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   fi
 
-  chmod +x "$TMP"
-
-  if [ -w "$INSTALL_DIR" ]; then
-    mv "$TMP" "${INSTALL_DIR}/${BIN_NAME}"
+  if [ -n "$CURRENT_VERSION" ] && [ -n "$LATEST_VERSION" ] && [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+    ok "Binário já está na versão mais recente (v${CURRENT_VERSION}). Nada a fazer."
   else
-    say "Instalando em ${INSTALL_DIR} (sudo necessário)..."
-    sudo mv "$TMP" "${INSTALL_DIR}/${BIN_NAME}"
+    if [ -n "$LATEST_VERSION" ]; then
+      say "Baixando elai v${LATEST_VERSION} (${TARGET})..."
+    else
+      say "Baixando ${TARGET}..."
+    fi
+
+    URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$URL" -o "$TMP"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$TMP" "$URL"
+    else
+      error "curl ou wget é necessário."
+    fi
+
+    chmod +x "$TMP"
+
+    if [ -w "$INSTALL_DIR" ]; then
+      mv "$TMP" "${INSTALL_DIR}/${BIN_NAME}"
+    else
+      say "Instalando em ${INSTALL_DIR} (sudo necessário)..."
+      sudo mv "$TMP" "${INSTALL_DIR}/${BIN_NAME}"
+    fi
+
+    ok "Binário instalado → ${INSTALL_DIR}/${BIN_NAME}"
   fi
 
-  ok "Binário instalado → ${INSTALL_DIR}/${BIN_NAME}"
+  ELAI_BIN="${INSTALL_DIR}/${BIN_NAME}"
 fi
-
-ELAI_BIN="${INSTALL_DIR}/${BIN_NAME}"
 
 # ── Step 2: Authentication ────────────────────────────────────────────────────
 printf "\n  ${BOLD}Step 2 — Authentication${RESET}\n\n"

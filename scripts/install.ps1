@@ -116,7 +116,32 @@ try {
     }
 } catch { }
 
+# ── Scoop install (Windows preferred path) ────────────────────────────────────
+$ScoopDone = $false
+if (-not $env:ELAI_NO_SCOOP -and (Get-Command scoop -ErrorAction SilentlyContinue)) {
+    Write-Host "  Scoop detectado — instalando via scoop" -ForegroundColor White
+    Write-Host ""
+
+    $buckets = scoop bucket list 2>$null | Out-String
+    if ($buckets -notmatch 'nextlw') {
+        Say "Adicionando bucket nextlw/elai-code..."
+        scoop bucket add nextlw https://github.com/nextlw/elai-code
+    }
+
+    if (scoop list 2>$null | Out-String | Select-String 'elai') {
+        Say "Atualizando via scoop..."
+        scoop update elai
+    } else {
+        Say "Instalando elai..."
+        scoop install nextlw/elai
+    }
+
+    Ok "elai instalado via Scoop."
+    $ScoopDone = $true
+}
+
 # ── Step 1: Download binary ───────────────────────────────────────────────────
+if (-not $ScoopDone) {
 Write-Host "  Step 1 — Instalando binário" -ForegroundColor White
 Write-Host ""
 
@@ -162,6 +187,10 @@ if ($UserPath -notlike "*$InstallDir*") {
 }
 
 $ElaiBin = $OutFile
+} else {
+    # Scoop placed the binary on PATH automatically.
+    $ElaiBin = (Get-Command elai -ErrorAction SilentlyContinue).Source
+}
 
 # ── Step 2: Authentication ────────────────────────────────────────────────────
 Write-Host ""
