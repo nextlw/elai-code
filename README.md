@@ -66,9 +66,10 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.3.8
+## What's New — v1.3.9
 
-- feat: enhance session management with auto-title functionality
+- feat: include SHA256 hash in document system note
+- fix: resolve session title update issues during save operations
 
 ---
 
