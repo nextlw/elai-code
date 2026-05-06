@@ -8167,7 +8167,7 @@ fn push_assistant_blocks(
                     format!("{size} bytes")
                 };
                 app.push_chat(tui::ChatEntry::SystemNote(format!(
-                    "📄 Documento: `{doc_name}` · {media_type} · {size_str}"
+                    "📄 Documento: `{doc_name}` · {media_type} · {size_str} · sha256:{sha256}"
                 )));
             }
             runtime::ContentBlock::ToolUse { id, name, input } => {
