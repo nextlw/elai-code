@@ -84,7 +84,7 @@ jobs:
 
       - name: Build
         working-directory: rust
-        run: cargo build --release --bin elai --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+        run: cargo build --release -p elai-cli --bin elai --target ${{ matrix.target }} ${{ matrix.cargo_features }}
         env:
           CARGO_TERM_COLOR: always
           GIT_SHA: ${{ github.sha }}
@@ -142,7 +142,7 @@ jobs:
 
       - name: Build
         working-directory: rust
-        run: cargo build --release --bin elai --target ${{ matrix.target }} ${{ matrix.cargo_features }}
+        run: cargo build --release -p elai-cli --bin elai --target ${{ matrix.target }} ${{ matrix.cargo_features }}
         env:
           CARGO_TERM_COLOR: always
           GIT_SHA: ${{ github.sha }}
@@ -182,7 +182,7 @@ jobs:
 
       - name: Build
         working-directory: rust
-        run: cargo build --release --bin elai --target x86_64-pc-windows-msvc
+        run: cargo build --release -p elai-cli --bin elai --target x86_64-pc-windows-msvc
         env:
           CARGO_TERM_COLOR: always
           GIT_SHA: ${{ github.sha }}

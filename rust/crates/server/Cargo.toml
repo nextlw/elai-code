@@ -8,7 +8,11 @@ publish.workspace = true
 [dependencies]
 api = { path = "../api" }
 commands = { path = "../commands" }
-code_index = { path = "../code_index" }
+code_index = { path = "../code_index", default-features = false, features = [
+    "tree-sitter-langs",
+    "vec-sqlite",
+    "embed-http",
+] }
 plugins = { path = "../plugins" }
 tools = { path = "../tools" }
 runtime = { path = "../runtime" }
