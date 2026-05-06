@@ -1,3 +1,6 @@
+pub mod jwks;
+pub mod middleware;
+
 use std::sync::Arc;
 
 use axum::{
