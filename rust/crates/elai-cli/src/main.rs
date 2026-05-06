@@ -3714,11 +3714,11 @@ struct SessionHandle {
     path: PathBuf,
 }
 
+/// Summary info for session list — path is stored in session files, not here.
 #[derive(Debug, Clone)]
 struct ManagedSessionSummary {
     id: String,
     title: Option<String>,
-    path: PathBuf,
     modified_epoch_secs: u64,
     message_count: usize,
 }
@@ -5006,10 +5006,10 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
             .and_then(|value| value.to_str())
             .unwrap_or("unknown")
             .to_string();
+        // path is not stored — it's derivable from id via sessions_dir()
         sessions.push(ManagedSessionSummary {
             id,
             title,
-            path,
             modified_epoch_secs,
             message_count,
         });
