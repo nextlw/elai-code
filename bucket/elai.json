@@ -1,12 +1,12 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "CLI de agente de IA",
   "homepage": "https://github.com/nextlw/elai-code",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/nextlw/elai-code/releases/download/v1.4.0/elai-windows-x86_64.exe",
-      "hash": "b6f00d0ddd8464a358c884a8300b9d1337b2435db1d878e11ff8dd853dd093e9",
+      "url": "https://github.com/nextlw/elai-code/releases/download/v1.4.1/elai-windows-x86_64.exe",
+      "hash": "d1618906d19a167ca1813607a5c4ffac6ecad4683da105fc69ead930ed0d8c42",
       "bin": [
         [
           "elai-windows-x86_64.exe",
