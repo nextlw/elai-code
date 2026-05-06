@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::stream;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -862,4 +863,96 @@ fn to_sse(event: &ServerEvent) -> Result<Event, serde_json::Error> {
     Ok(Event::default()
         .event(event.event_name())
         .data(serde_json::to_string(event)?))
+}
+
+// ── WebSocket permissions channel ────────────────────────────────────────────
+
+/// `GET /v1/sessions/{id}/permissions/ws`
+///
+/// Upgrade to WebSocket. The server pushes `PermissionRequest` events as JSON
+/// text frames. The client responds with:
+///
+/// ```json
+/// { "request_id": "...", "outcome": "allow" | "deny", "reason": "optional" }
+/// ```
+///
+/// Both sides can send a `{"type":"ping"}` / `{"type":"pong"}` for keepalive.
+pub async fn permissions_ws(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = state
+        .sessions
+        .get(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    Ok(ws.on_upgrade(move |socket| handle_permissions_ws(socket, session)))
+}
+
+async fn handle_permissions_ws(mut socket: WebSocket, session: Arc<SessionData>) {
+    let mut rx = session.events.subscribe();
+
+    loop {
+        tokio::select! {
+            // Forward PermissionRequest events from the broadcast channel to the WS client.
+            result = rx.recv() => {
+                match result {
+                    Ok(event @ ServerEvent::PermissionRequest { .. }) => {
+                        let Ok(json) = serde_json::to_string(&event) else { continue };
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+
+            // Receive decisions from the WS client.
+            result = socket.recv() => {
+                match result {
+                    Some(Ok(Message::Text(text))) => {
+                        let Ok(msg) = serde_json::from_str::<WsClientMessage>(&text) else {
+                            continue;
+                        };
+                        match msg {
+                            WsClientMessage::Decide { request_id, outcome, reason } => {
+                                let decision = match outcome.as_str() {
+                                    "allow" => PermissionDecisionPayload::Allow,
+                                    "deny" => PermissionDecisionPayload::Deny {
+                                        reason: reason.unwrap_or_else(|| "denied".to_string()),
+                                    },
+                                    _ => continue,
+                                };
+                                let mut guard = session.pending_permissions.lock().await;
+                                if let Some(pending) = guard.remove(&request_id) {
+                                    let _ = pending.responder.send(decision);
+                                }
+                            }
+                            WsClientMessage::Ping => {
+                                let _ = socket.send(Message::Text(r#"{"type":"pong"}"#.into())).await;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => break,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WsClientMessage {
+    Decide {
+        request_id: String,
+        outcome: String,
+        reason: Option<String>,
+    },
+    Ping,
 }

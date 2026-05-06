@@ -56,6 +56,10 @@ pub fn app(state: AppState) -> Router {
             "/v1/permissions/{request_id}/decide",
             post(routes::sessions::decide_permission),
         )
+        .route(
+            "/v1/sessions/{id}/permissions/ws",
+            get(routes::sessions::permissions_ws),
+        )
         // workspace routes
         .route(
             "/v1/workspace/{session_id}/read",
@@ -80,6 +84,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/v1/workspace/{session_id}/tree",
             get(routes::workspace::tree),
+        )
+        .route(
+            "/v1/workspace/{session_id}/diff",
+            get(routes::workspace::diff),
         )
         // config routes
         .route("/v1/models", get(routes::config::list_models))

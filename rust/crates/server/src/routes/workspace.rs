@@ -55,6 +55,17 @@ pub struct TreeQuery {
     pub depth: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DiffQuery {
+    pub staged: Option<bool>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiffResponse {
+    pub diff: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TreeEntry {
     pub path: String,
@@ -273,6 +284,46 @@ pub async fn tree(
     Ok(Json(TreeResponse {
         cwd: session.cwd.clone(),
         entries,
+    }))
+}
+
+pub async fn diff(
+    State(state): State<AppState>,
+    AxumPath(session_id): AxumPath<String>,
+    Query(query): Query<DiffQuery>,
+) -> Result<Json<DiffResponse>, ApiError> {
+    let session = state
+        .sessions
+        .get(&session_id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    let cwd = session.cwd.clone();
+    let staged = query.staged.unwrap_or(false);
+    let filter_path = query.path.clone();
+
+    let output = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(&cwd).arg("diff");
+        if staged {
+            cmd.arg("--staged");
+        }
+        if let Some(p) = filter_path {
+            cmd.arg("--").arg(p);
+        }
+        cmd.output()
+    })
+    .await
+    .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "task_error", e.to_string()))?
+    .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "diff_error", e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(api_error(StatusCode::UNPROCESSABLE_ENTITY, "diff_error", stderr));
+    }
+
+    Ok(Json(DiffResponse {
+        diff: String::from_utf8_lossy(&output.stdout).into_owned(),
     }))
 }
 
