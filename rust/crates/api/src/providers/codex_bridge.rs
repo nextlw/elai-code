@@ -403,6 +403,15 @@ fn render_input_block(block: &InputContentBlock) -> String {
             )
         }
         InputContentBlock::Thinking { .. } => String::new(),
+        // Codex bridge é text-only: anexos viram um marcador textual para
+        // o histórico, mas não são realmente enviados ao modelo. A camada
+        // de runtime deve ter rejeitado o request bem antes de chegar aqui.
+        InputContentBlock::Image { source } => {
+            format!("[image media_type={} ({} bytes b64)]", source.media_type, source.data.len())
+        }
+        InputContentBlock::Document { source } => {
+            format!("[document media_type={} ({} bytes b64)]", source.media_type, source.data.len())
+        }
     }
 }
 

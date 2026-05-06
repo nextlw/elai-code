@@ -37,6 +37,12 @@ fn format_messages_for_summary(messages: &[ConversationMessage]) -> String {
         for block in &msg.blocks {
             match block {
                 ContentBlock::Text { text } => parts.push(text.clone()),
+                ContentBlock::Image { media_type, .. } => {
+                    parts.push(format!("[image {media_type}]"));
+                }
+                ContentBlock::Document { media_type, name, .. } => {
+                    parts.push(format!("[document {} ({media_type})]", name.as_deref().unwrap_or("anexo")));
+                }
                 ContentBlock::ToolUse { name, input, .. } => {
                     parts.push(format!("tool_use {name} {input}"));
                 }

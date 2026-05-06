@@ -104,29 +104,35 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
             let content: Vec<InputContentBlock> = message
                 .blocks
                 .iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text } => InputContentBlock::Text { text: text.clone() },
-                    ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => {
+                        Some(InputContentBlock::Text { text: text.clone() })
+                    }
+                    ContentBlock::ToolUse { id, name, input } => Some(InputContentBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         input: serde_json::from_str(input)
                             .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
-                    },
+                    }),
                     ContentBlock::ToolResult {
                         tool_use_id,
                         output,
                         is_error,
                         ..
-                    } => InputContentBlock::ToolResult {
+                    } => Some(InputContentBlock::ToolResult {
                         tool_use_id: tool_use_id.clone(),
                         content: vec![ToolResultContentBlock::Text {
                             text: output.clone(),
                         }],
                         is_error: *is_error,
-                    },
-                    ContentBlock::Thinking { thinking } => InputContentBlock::Thinking {
+                    }),
+                    ContentBlock::Thinking { thinking } => Some(InputContentBlock::Thinking {
                         thinking: thinking.clone(),
-                    },
+                    }),
+                    // Server bridge é text-only por enquanto — anexos são
+                    // descartados; o runtime já gateia multimodal via
+                    // `supports_multimodal()` antes de chegar aqui.
+                    ContentBlock::Image { .. } | ContentBlock::Document { .. } => None,
                 })
                 .collect();
             (!content.is_empty()).then(|| InputMessage {

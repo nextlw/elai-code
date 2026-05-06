@@ -1305,6 +1305,15 @@ impl UiApp {
         self.history_index = None;
     }
 
+    /// Reseta o estado de paste (placeholders `[Pasted text #N ...]`) para que
+    /// `/clear` libere memória e a próxima colagem volte a numerar a partir de `#1`.
+    /// Agent C estenderá este método para limpar também `pasted_attachments`/
+    /// `attachment_counter` quando esses campos existirem.
+    pub fn clear_paste_state(&mut self) {
+        self.pasted_contents.clear();
+        self.paste_counter = 0;
+    }
+
     #[allow(dead_code)]
     fn take_input(&mut self) -> String {
         let text = self.input.clone();
@@ -8724,6 +8733,19 @@ mod tests {
         assert!(!is_command_coming_soon("help"));
         assert!(!is_command_coming_soon("branch"));
         assert!(!is_command_coming_soon("update"));
+    }
+
+    #[test]
+    fn clear_paste_state_resets_counter_and_map() {
+        let mut app = make_app();
+        app.paste_counter = 5;
+        app.pasted_contents.insert(1, "hello".to_string());
+        app.pasted_contents.insert(2, "world".to_string());
+
+        app.clear_paste_state();
+
+        assert_eq!(app.paste_counter, 0);
+        assert!(app.pasted_contents.is_empty());
     }
 
     #[test]

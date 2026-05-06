@@ -39,11 +39,12 @@ use api::{
     ant_default_model, default_thinking_config, max_tokens_for_model, metadata_for_model,
     model_always_on_thinking, model_thinking_budget, model_supports_adaptive_thinking,
     model_supports_thinking, resolve_model_alias,
-    resolve_output_config, suggested_default_model, ContentBlockDelta, EffortLevel,
-    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ThinkingConfig, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    resolve_output_config, suggested_default_model, ContentBlockDelta, DocumentSource, EffortLevel,
+    ImageSource, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock, ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent,
+    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
 use commands::{
     handle_agents_slash_command, handle_commit_push_pr_slash_command, handle_plugins_slash_command,
@@ -2016,6 +2017,8 @@ fn run_resume_command(
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
         | SlashCommand::Buddy { .. }
+        | SlashCommand::Collection { .. }
+        | SlashCommand::Unlock { .. }
         | SlashCommand::Run { .. }
         | SlashCommand::Update
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
@@ -2436,6 +2439,7 @@ fn run_tui_repl(
                                     .map(|budget| ThinkingConfig::Enabled { budget_tokens: budget })
                             };
 
+                        let session_attach_dir = attachment_dir_for_session_path(&session_handle.path);
                         // JoinHandle descartado: thread daemon de execução principal do runtime de IA; encerra quando o canal fecha (TUI encerrando).
                         let _runtime_handle = thread::spawn(move || {
                             let result: Result<(), String> = (|| {
@@ -2448,6 +2452,7 @@ fn run_tui_repl(
                                     msg_tx_clone.clone(),
                                     swd_atomic_clone,
                                     thinking_override,
+                                    Some(session_attach_dir),
                                 )
                                 .map_err(|e| {
                                     let msg = e.to_string();
@@ -2895,6 +2900,7 @@ fn handle_tui_slash_command(
             // de "histórico limpo" sem precisar empurrar uma SystemNote que
             // contaminaria o `app.chat.is_empty()` checado pelo render_tips.
             app.reset_tips();
+            app.clear_paste_state();
         }
         "help" => {
             let help = format!(
@@ -4336,6 +4342,16 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
             SlashCommand::Buddy { .. } => {
                 Self::repl_feature_not_wired("/buddy is only available in the TUI session")
             }
+            SlashCommand::Collection { action } => {
+                let args: Vec<&str> = action.as_deref().map(|s| s.split_whitespace().collect()).unwrap_or_default();
+                println!("{}", commands::run_collection_command(&args));
+                false
+            }
+            SlashCommand::Unlock { action } => {
+                let args: Vec<&str> = action.as_deref().map(|s| s.split_whitespace().collect()).unwrap_or_default();
+                println!("{}", commands::run_unlock_command(&args));
+                false
+            }
             SlashCommand::Unknown(name) => {
                 Self::repl_feature_not_wired(&format!("unknown slash command: /{name}"))
             }
@@ -4917,6 +4933,28 @@ fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = cwd.join(".elai").join("sessions");
     fs::create_dir_all(&path)?;
     Ok(path)
+}
+
+/// Devolve o diretório base que abriga sidecar attachments de uma sessão.
+///
+/// Se `session_path` for `<cwd>/.elai/sessions/<id>.json`, o diretório
+/// retornado é `<cwd>/.elai/sessions/<id>/` — uma pasta com o stem do
+/// arquivo. O [`runtime::AttachmentStore`] adiciona `attachments/` por
+/// dentro, resultando em `<cwd>/.elai/sessions/<id>/attachments/<sha256>`.
+///
+/// Quando o `session_path` não tem stem (caso patológico), retorna o
+/// diretório pai diretamente — o store cria `attachments/` lá. Sem
+/// efeitos colaterais: este helper é puramente derivacional.
+fn attachment_dir_for_session_path(session_path: &Path) -> PathBuf {
+    if let Some(stem) = session_path.file_stem().and_then(|s| s.to_str()) {
+        if let Some(parent) = session_path.parent() {
+            return parent.join(stem);
+        }
+    }
+    session_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn create_managed_session_handle() -> Result<SessionHandle, Box<dyn std::error::Error>> {
@@ -5594,6 +5632,15 @@ fn render_export_text(session: &Session) -> String {
         for block in &message.blocks {
             match block {
                 ContentBlock::Text { text } => lines.push(text.clone()),
+                ContentBlock::Image { media_type, sha256, size } => {
+                    lines.push(format!("[image {media_type} sha256={sha256} size={size}]"));
+                }
+                ContentBlock::Document { media_type, sha256, size, name } => {
+                    lines.push(format!(
+                        "[document {} ({media_type}) sha256={sha256} size={size}]",
+                        name.as_deref().unwrap_or("anexo")
+                    ));
+                }
                 ContentBlock::ToolUse { id, name, input } => {
                     lines.push(format!("[tool_use id={id} name={name}] {input}"));
                 }
@@ -6241,24 +6288,29 @@ fn build_runtime_for_tui(
     tui_msg_tx: mpsc::Sender<tui::TuiMsg>,
     swd_level: Arc<std::sync::atomic::AtomicU8>,
     thinking_override: Option<ThinkingConfig>,
+    session_dir: Option<PathBuf>,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
     let notify_tx = tui_msg_tx.clone();
+    let mut client = DefaultRuntimeClient::new(
+        model,
+        true,
+        false, // emit_output=false; TUI gets text via channel
+        allowed_tools.clone(),
+        tool_registry.clone(),
+        None,
+        Arc::clone(&swd_level),
+        permission_mode,
+    )?
+    .with_tui_sender(tui_msg_tx.clone())
+    .with_thinking_opt(thinking_override);
+    if let Some(dir) = session_dir {
+        client = client.with_session_dir(dir);
+    }
     Ok(ConversationRuntime::new_with_features(
         session,
-        DefaultRuntimeClient::new(
-            model,
-            true,
-            false, // emit_output=false; TUI gets text via channel
-            allowed_tools.clone(),
-            tool_registry.clone(),
-            None,
-            Arc::clone(&swd_level),
-            permission_mode,
-        )?
-        .with_tui_sender(tui_msg_tx.clone())
-        .with_thinking_opt(thinking_override),
+        client,
         CliToolExecutor::new(
             allowed_tools.clone(),
             false,
@@ -6414,6 +6466,11 @@ struct DefaultRuntimeClient {
     correction_ctx: crate::swd::CorrectionContext,
     thinking_override: Option<ThinkingConfig>,
     permission_mode: PermissionMode,
+    /// Diretório onde residem os sidecar files de anexos
+    /// (`<session_dir>/attachments/<sha256>`). `None` quando o caller não
+    /// usa multimodal — `convert_messages` então descarta blocos
+    /// `Image`/`Document` silenciosamente.
+    session_dir: Option<PathBuf>,
 }
 
 impl DefaultRuntimeClient {
@@ -6450,7 +6507,16 @@ impl DefaultRuntimeClient {
             correction_ctx: crate::swd::CorrectionContext::new(),
             thinking_override: None,
             permission_mode,
+            session_dir: None,
         })
+    }
+
+    /// Define o diretório base onde anexos sidecar (imagens/PDFs) estão
+    /// persistidos. Sem isso, blocos multimodais não conseguem ser
+    /// reidratados pelo `convert_messages` e são descartados.
+    fn with_session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.session_dir = Some(dir.into());
+        self
     }
 
     fn with_tui_sender(mut self, tx: mpsc::Sender<tui::TuiMsg>) -> Self {
@@ -6481,7 +6547,7 @@ impl ApiClient for DefaultRuntimeClient {
         let message_request = MessageRequest {
             model: resolved_model.clone(),
             max_tokens: max_tokens_for_model(&resolved_model),
-            messages: convert_messages(&request.messages),
+            messages: convert_messages(&request.messages, self.session_dir.as_deref()),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: self.enable_tools.then(|| {
                 filter_tool_specs(
@@ -6813,6 +6879,27 @@ impl ApiClient for DefaultRuntimeClient {
         }
 
         Ok(result)
+    }
+
+    /// Multimodal (imagens / PDFs) é suportado apenas quando o modelo
+    /// resolvido aponta para a Anthropic — Codex/Go/OpenAI-compat e
+    /// providers locais (Ollama/LM Studio) ainda enviam só texto.
+    fn supports_multimodal(&self) -> bool {
+        metadata_for_model(&self.model)
+            .is_some_and(|m| matches!(m.provider, ProviderKind::ElaiApi))
+    }
+
+    fn provider_name(&self) -> &str {
+        match metadata_for_model(&self.model).map(|m| m.provider) {
+            Some(ProviderKind::ElaiApi) => "anthropic",
+            Some(ProviderKind::Xai) => "xai",
+            Some(ProviderKind::OpenAi) => "openai",
+            Some(ProviderKind::Ollama) => "ollama",
+            Some(ProviderKind::LmStudio) => "lmstudio",
+            Some(ProviderKind::OpenCodeGo) => "opencode-go",
+            Some(ProviderKind::OpenCodeZen) => "opencode-zen",
+            None => "unknown",
+        }
     }
 }
 
@@ -7780,7 +7867,18 @@ fn permission_policy(mode: PermissionMode, tool_registry: &GlobalToolRegistry) -
     )
 }
 
-fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
+/// Converte mensagens persistidas em mensagens prontas para a Messages API.
+///
+/// Quando `session_dir` é `Some`, blocos `Image`/`Document` são reidratados
+/// a partir dos sidecar files via [`runtime::AttachmentStore`] e codificados
+/// em base64 inline. Quando é `None` (caller text-only), tais blocos são
+/// silenciosamente descartados — chamadores que precisam de multimodal
+/// devem garantir o `session_dir`.
+fn convert_messages(
+    messages: &[ConversationMessage],
+    session_dir: Option<&Path>,
+) -> Vec<InputMessage> {
+    let store = session_dir.map(runtime::AttachmentStore::new);
     messages
         .iter()
         .filter_map(|message| {
@@ -7791,28 +7889,48 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
             let content = message
                 .blocks
                 .iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text } => InputContentBlock::Text { text: text.clone() },
-                    ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(InputContentBlock::Text { text: text.clone() }),
+                    ContentBlock::ToolUse { id, name, input } => Some(InputContentBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         input: serde_json::from_str(input)
                             .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
-                    },
+                    }),
                     ContentBlock::ToolResult {
                         tool_use_id,
                         output,
                         is_error,
                         ..
-                    } => InputContentBlock::ToolResult {
+                    } => Some(InputContentBlock::ToolResult {
                         tool_use_id: tool_use_id.clone(),
                         content: vec![ToolResultContentBlock::Text {
                             text: output.clone(),
                         }],
                         is_error: *is_error,
-                    },
+                    }),
                     ContentBlock::Thinking { thinking } => {
-                        InputContentBlock::Thinking { thinking: thinking.clone() }
+                        Some(InputContentBlock::Thinking { thinking: thinking.clone() })
+                    }
+                    ContentBlock::Image { media_type, sha256, .. } => {
+                        let bytes = store.as_ref()?.load(sha256).ok()?;
+                        Some(InputContentBlock::Image {
+                            source: ImageSource {
+                                kind: "base64".to_string(),
+                                media_type: media_type.clone(),
+                                data: B64.encode(&bytes),
+                            },
+                        })
+                    }
+                    ContentBlock::Document { media_type, sha256, .. } => {
+                        let bytes = store.as_ref()?.load(sha256).ok()?;
+                        Some(InputContentBlock::Document {
+                            source: DocumentSource {
+                                kind: "base64".to_string(),
+                                media_type: media_type.clone(),
+                                data: B64.encode(&bytes),
+                            },
+                        })
                     }
                 })
                 .collect::<Vec<_>>();
@@ -7964,6 +8082,15 @@ fn push_user_blocks(app: &mut tui::UiApp, blocks: &[runtime::ContentBlock], max:
                     app.push_chat(tui::ChatEntry::UserMessage(text.clone()));
                 }
             }
+            runtime::ContentBlock::Image { media_type, .. } => {
+                app.push_chat(tui::ChatEntry::SystemNote(format!("[image {media_type}]")));
+            }
+            runtime::ContentBlock::Document { media_type, name, .. } => {
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "[document {} ({media_type})]",
+                    name.as_deref().unwrap_or("anexo")
+                )));
+            }
             runtime::ContentBlock::ToolResult {
                 tool_name,
                 output,
@@ -8020,6 +8147,9 @@ fn push_assistant_blocks(
                     app.push_chat(tui::ChatEntry::AssistantText(text.clone()));
                 }
             }
+            // Assistant não envia anexos hoje, mas o match precisa cobrir os
+            // novos variantes para compilar; ignoramos silenciosamente.
+            runtime::ContentBlock::Image { .. } | runtime::ContentBlock::Document { .. } => {}
             runtime::ContentBlock::ToolUse { id, name, input } => {
                 let status = match tool_statuses.get(id.as_str()) {
                     Some(true) => tui::ToolItemStatus::Err,
@@ -8791,7 +8921,7 @@ mod tests {
             },
         ];
 
-        let converted = super::convert_messages(&messages);
+        let converted = super::convert_messages(&messages, None);
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[1].role, "assistant");
         assert_eq!(converted[2].role, "user");

@@ -126,6 +126,43 @@ pub enum InputContentBlock {
     Thinking {
         thinking: String,
     },
+    /// Imagem inline na requisição da Anthropic. `source.kind` é sempre
+    /// `"base64"` por enquanto; URLs são uma extensão futura.
+    Image {
+        source: ImageSource,
+    },
+    /// Documento (PDF) inline. Mesma forma de `Image` — Anthropic distingue
+    /// pelo `type` no nível do bloco.
+    Document {
+        source: DocumentSource,
+    },
+}
+
+/// Wire format do `source` de um bloco `image` na Messages API.
+/// Ver: <https://docs.anthropic.com/en/docs/build-with-claude/vision>.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSource {
+    /// Sempre `"base64"` por ora. Strict para sair literal no JSON.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// MIME real da imagem após conversões (`image/png`, `image/jpeg`, etc.).
+    pub media_type: String,
+    /// Base64 puro (sem prefixo `data:`); o adapter codifica os bytes do
+    /// sidecar antes de enviar.
+    pub data: String,
+}
+
+/// Wire format do `source` de um bloco `document` (PDF) na Messages API.
+/// Ver: <https://docs.anthropic.com/en/docs/build-with-claude/pdf-support>.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentSource {
+    /// Sempre `"base64"` por ora.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// `application/pdf`. Outros formatos não são suportados pela API hoje.
+    pub media_type: String,
+    /// Base64 puro do arquivo.
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -345,6 +382,80 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert!(json.get("thinking").is_none());
         assert!(json.get("output_config").is_none());
+    }
+
+    #[test]
+    fn image_input_block_serializes_to_anthropic_wire_format() {
+        let block = InputContentBlock::Image {
+            source: ImageSource {
+                kind: "base64".to_string(),
+                media_type: "image/png".to_string(),
+                data: "AAAA".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&block).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "AAAA",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn document_input_block_serializes_to_anthropic_wire_format() {
+        let block = InputContentBlock::Document {
+            source: DocumentSource {
+                kind: "base64".to_string(),
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0xLg==".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&block).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "JVBERi0xLg==",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn input_content_block_image_round_trips() {
+        let block = InputContentBlock::Image {
+            source: ImageSource {
+                kind: "base64".to_string(),
+                media_type: "image/jpeg".to_string(),
+                data: "/9j/4AAQ".to_string(),
+            },
+        };
+        let json_str = serde_json::to_string(&block).unwrap();
+        let restored: InputContentBlock = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(restored, block);
+    }
+
+    #[test]
+    fn input_content_block_document_round_trips() {
+        let block = InputContentBlock::Document {
+            source: DocumentSource {
+                kind: "base64".to_string(),
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0".to_string(),
+            },
+        };
+        let json_str = serde_json::to_string(&block).unwrap();
+        let restored: InputContentBlock = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(restored, block);
     }
 
     #[test]

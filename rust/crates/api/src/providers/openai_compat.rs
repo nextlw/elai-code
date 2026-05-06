@@ -868,6 +868,10 @@ fn translate_message(message: &InputMessage, needs_reasoning_content: bool) -> V
                     })),
                     InputContentBlock::ToolResult { .. } => {}
                     InputContentBlock::Thinking { thinking: t } => thinking.push_str(t),
+                    // OpenAI-compat path é text-only por enquanto. Multimodal
+                    // é gated em camada superior; aqui apenas ignoramos o
+                    // bloco para não estourar o serializer.
+                    InputContentBlock::Image { .. } | InputContentBlock::Document { .. } => {}
                 }
             }
             if text.is_empty() && tool_calls.is_empty() {
@@ -911,7 +915,10 @@ fn translate_message(message: &InputMessage, needs_reasoning_content: bool) -> V
                     "tool_call_id": tool_use_id,
                     "content": flatten_tool_result_content(content),
                 })),
-                InputContentBlock::ToolUse { .. } | InputContentBlock::Thinking { .. } => None,
+                InputContentBlock::ToolUse { .. }
+                | InputContentBlock::Thinking { .. }
+                | InputContentBlock::Image { .. }
+                | InputContentBlock::Document { .. } => None,
             })
             .collect(),
     }

@@ -1,6 +1,10 @@
+pub mod collection;
 pub mod providers;
 pub mod stats;
+pub mod unlock_cmd;
 pub mod user_commands;
+pub use collection::run_collection_command;
+pub use unlock_cmd::run_unlock_command;
 pub use user_commands::{
     expand_template, parse_user_command, UserCommand, UserCommandRegistry, UserCommandScope,
 };
@@ -708,6 +712,12 @@ pub enum SlashCommand {
     Buddy {
         action: Option<String>,
     },
+    Collection {
+        action: Option<String>,
+    },
+    Unlock {
+        action: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -858,6 +868,12 @@ impl SlashCommand {
                 }
             }
             "buddy" => Self::Buddy {
+                action: parts.next().map(ToOwned::to_owned),
+            },
+            "collection" => Self::Collection {
+                action: parts.next().map(ToOwned::to_owned),
+            },
+            "unlock" => Self::Unlock {
                 action: parts.next().map(ToOwned::to_owned),
             },
             other => Self::Unknown(other.to_string()),
@@ -2294,8 +2310,38 @@ pub fn handle_slash_command(
         | SlashCommand::Providers { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
-        | SlashCommand::Buddy { .. }
         | SlashCommand::Unknown(_) => None,
+        SlashCommand::Buddy { action: _ } => Some(SlashCommandResult {
+            // Buddy picker requires interactive TUI — use /buddy in elai-cli directly
+            message: "Buddy / Companion\n\n  This command requires the interactive TUI.\n  Run `elai-cli buddy` to select your companion.\n  Use `/collection` to see your unlocked mascotes.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Collection { action } => Some(SlashCommandResult {
+            message: run_collection_command(
+                action
+                    .as_ref()
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| *s)
+                    .collect::<Vec<_>>()
+                    .as_ref(),
+            ),
+            session: session.clone(),
+        }),
+        SlashCommand::Unlock { action } => Some(SlashCommandResult {
+            message: run_unlock_command(
+                action
+                    .as_ref()
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| *s)
+                    .collect::<Vec<_>>()
+                    .as_ref(),
+            ),
+            session: session.clone(),
+        }),
         SlashCommand::Run { script, args, update } => {
             use script_runner::{run_script, ScriptConfig};
             let mut cfg = ScriptConfig::new(&script);

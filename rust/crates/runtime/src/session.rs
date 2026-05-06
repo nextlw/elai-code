@@ -136,6 +136,21 @@ pub enum ContentBlock {
     Thinking {
         thinking: String,
     },
+    /// Imagem persistida como sidecar file (`<session_dir>/attachments/<sha256>`).
+    /// O JSON da sessão guarda apenas o hash + metadados — os bytes são
+    /// reidratados sob demanda quando construímos o request da Anthropic.
+    Image {
+        media_type: String,
+        sha256: String,
+        size: u64,
+    },
+    /// Documento (atualmente apenas PDF) persistido como sidecar file.
+    Document {
+        media_type: String,
+        sha256: String,
+        size: u64,
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -271,9 +286,27 @@ impl Default for Session {
 impl ConversationMessage {
     #[must_use]
     pub fn user_text(text: impl Into<String>) -> Self {
+        Self::user_with_attachments(text, Vec::new())
+    }
+
+    /// Constrói uma mensagem `user` combinando texto e blocos de anexo já
+    /// resolvidos (`Image`/`Document`). O bloco de texto é omitido quando o
+    /// `text` é vazio — útil quando o usuário envia apenas anexos. A ordem
+    /// preserva texto-primeiro seguido dos anexos na ordem fornecida.
+    #[must_use]
+    pub fn user_with_attachments(
+        text: impl Into<String>,
+        attachments: Vec<ContentBlock>,
+    ) -> Self {
+        let text = text.into();
+        let mut blocks = Vec::with_capacity(usize::from(!text.is_empty()) + attachments.len());
+        if !text.is_empty() {
+            blocks.push(ContentBlock::Text { text });
+        }
+        blocks.extend(attachments);
         Self {
             role: MessageRole::User,
-            blocks: vec![ContentBlock::Text { text: text.into() }],
+            blocks,
             usage: None,
         }
     }
@@ -418,6 +451,31 @@ impl ContentBlock {
                 object.insert("type".to_string(), JsonValue::String("thinking".to_string()));
                 object.insert("thinking".to_string(), JsonValue::String(thinking.clone()));
             }
+            Self::Image { media_type, sha256, size } => {
+                object.insert("type".to_string(), JsonValue::String("image".to_string()));
+                object.insert(
+                    "media_type".to_string(),
+                    JsonValue::String(media_type.clone()),
+                );
+                object.insert("sha256".to_string(), JsonValue::String(sha256.clone()));
+                // JsonValue::Number is i64; cap u64 → i64 for in-memory representation.
+                // Sizes for clipboard images/PDFs always fit in i64 (max ~32 MB per cap).
+                let size_i64 = i64::try_from(*size).unwrap_or(i64::MAX);
+                object.insert("size".to_string(), JsonValue::Number(size_i64));
+            }
+            Self::Document { media_type, sha256, size, name } => {
+                object.insert("type".to_string(), JsonValue::String("document".to_string()));
+                object.insert(
+                    "media_type".to_string(),
+                    JsonValue::String(media_type.clone()),
+                );
+                object.insert("sha256".to_string(), JsonValue::String(sha256.clone()));
+                let size_i64 = i64::try_from(*size).unwrap_or(i64::MAX);
+                object.insert("size".to_string(), JsonValue::Number(size_i64));
+                if let Some(name) = name {
+                    object.insert("name".to_string(), JsonValue::String(name.clone()));
+                }
+            }
         }
         JsonValue::Object(object)
     }
@@ -450,6 +508,20 @@ impl ContentBlock {
             }),
             "thinking" => Ok(Self::Thinking {
                 thinking: required_string(object, "thinking")?,
+            }),
+            "image" => Ok(Self::Image {
+                media_type: required_string(object, "media_type")?,
+                sha256: required_string(object, "sha256")?,
+                size: required_u64(object, "size")?,
+            }),
+            "document" => Ok(Self::Document {
+                media_type: required_string(object, "media_type")?,
+                sha256: required_string(object, "sha256")?,
+                size: required_u64(object, "size")?,
+                name: object
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .map(String::from),
             }),
             other => Err(SessionError::Format(format!(
                 "unsupported block type: {other}"
@@ -508,6 +580,14 @@ fn required_u32(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u32, 
         .and_then(JsonValue::as_i64)
         .ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
     u32::try_from(value).map_err(|_| SessionError::Format(format!("{key} out of range")))
+}
+
+fn required_u64(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u64, SessionError> {
+    let value = object
+        .get(key)
+        .and_then(JsonValue::as_i64)
+        .ok_or_else(|| SessionError::Format(format!("missing {key}")))?;
+    u64::try_from(value).map_err(|_| SessionError::Format(format!("{key} out of range")))
 }
 
 #[cfg(test)]
@@ -628,5 +708,122 @@ mod tests {
         session.messages.push(ConversationMessage::user_text("hello world"));
         session.auto_title();
         assert_eq!(session.title, Some("Custom Title".to_string()));
+    }
+
+    #[test]
+    fn image_content_block_round_trips_through_session_json() {
+        let mut session = Session::new();
+        session
+            .messages
+            .push(ConversationMessage::user_with_attachments(
+                "look at this",
+                vec![ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    sha256: "deadbeef".repeat(8),
+                    size: 1_234_567,
+                }],
+            ));
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("runtime-image-block-{nanos}.json"));
+        session.save_to_path(&path).expect("save");
+        let restored = Session::load_from_path(&path).expect("load");
+        fs::remove_file(&path).expect("rm");
+
+        assert_eq!(restored, session);
+        let blocks = &restored.messages[0].blocks;
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "look at this"));
+        match &blocks[1] {
+            ContentBlock::Image { media_type, sha256, size } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(sha256.len(), 64);
+                assert_eq!(*size, 1_234_567);
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn document_content_block_round_trips_with_optional_name() {
+        let mut session = Session::new();
+        session
+            .messages
+            .push(ConversationMessage::user_with_attachments(
+                "summarize",
+                vec![
+                    ContentBlock::Document {
+                        media_type: "application/pdf".to_string(),
+                        sha256: "cafef00d".repeat(8),
+                        size: 9_876,
+                        name: Some("contract.pdf".to_string()),
+                    },
+                    ContentBlock::Document {
+                        media_type: "application/pdf".to_string(),
+                        sha256: "1a2b3c4d".repeat(8),
+                        size: 42,
+                        name: None,
+                    },
+                ],
+            ));
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("runtime-document-block-{nanos}.json"));
+        session.save_to_path(&path).expect("save");
+        let restored = Session::load_from_path(&path).expect("load");
+        fs::remove_file(&path).expect("rm");
+
+        assert_eq!(restored, session);
+        let blocks = &restored.messages[0].blocks;
+        assert_eq!(blocks.len(), 3);
+        match &blocks[1] {
+            ContentBlock::Document { name, .. } => {
+                assert_eq!(name.as_deref(), Some("contract.pdf"));
+            }
+            other => panic!("expected Document, got {other:?}"),
+        }
+        match &blocks[2] {
+            ContentBlock::Document { name, size, .. } => {
+                assert!(name.is_none());
+                assert_eq!(*size, 42);
+            }
+            other => panic!("expected Document, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_with_attachments_omits_empty_text_block() {
+        let msg = ConversationMessage::user_with_attachments(
+            "",
+            vec![ContentBlock::Image {
+                media_type: "image/jpeg".to_string(),
+                sha256: "ff".repeat(32),
+                size: 16,
+            }],
+        );
+        assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.blocks.len(), 1);
+        assert!(matches!(&msg.blocks[0], ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn user_with_attachments_keeps_text_first() {
+        let msg = ConversationMessage::user_with_attachments(
+            "ola",
+            vec![ContentBlock::Document {
+                media_type: "application/pdf".to_string(),
+                sha256: "ab".repeat(32),
+                size: 1,
+                name: None,
+            }],
+        );
+        assert!(matches!(&msg.blocks[0], ContentBlock::Text { text } if text == "ola"));
+        assert!(matches!(&msg.blocks[1], ContentBlock::Document { .. }));
     }
 }

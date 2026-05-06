@@ -295,7 +295,10 @@ fn summarize_messages(messages: &[ConversationMessage]) -> String {
         .filter_map(|block| match block {
             ContentBlock::ToolUse { name, .. } => Some(name.as_str()),
             ContentBlock::ToolResult { tool_name, .. } => Some(tool_name.as_str()),
-            ContentBlock::Text { .. } | ContentBlock::Thinking { .. } => None,
+            ContentBlock::Text { .. }
+            | ContentBlock::Thinking { .. }
+            | ContentBlock::Image { .. }
+            | ContentBlock::Document { .. } => None,
         })
         .collect::<Vec<_>>();
     tool_names.sort_unstable();
@@ -411,6 +414,13 @@ fn summarize_block(block: &ContentBlock) -> String {
             if *is_error { "error " } else { "" }
         ),
         ContentBlock::Thinking { .. } => return String::new(),
+        ContentBlock::Image { media_type, size, .. } => {
+            format!("image ({media_type}, {size} bytes)")
+        }
+        ContentBlock::Document { media_type, size, name, .. } => match name {
+            Some(name) => format!("document {name} ({media_type}, {size} bytes)"),
+            None => format!("document ({media_type}, {size} bytes)"),
+        },
     };
     truncate_summary(&raw, 160)
 }
@@ -462,7 +472,9 @@ fn collect_key_files(messages: &[ConversationMessage]) -> Vec<String> {
             ContentBlock::Text { text } => Some(text.as_str()),
             ContentBlock::ToolUse { input, .. } => Some(input.as_str()),
             ContentBlock::ToolResult { output, .. } => Some(output.as_str()),
-            ContentBlock::Thinking { .. } => None,
+            ContentBlock::Thinking { .. }
+            | ContentBlock::Image { .. }
+            | ContentBlock::Document { .. } => None,
         })
         .flat_map(extract_file_candidates)
         .collect::<Vec<_>>();
@@ -486,7 +498,9 @@ fn first_text_block(message: &ConversationMessage) -> Option<&str> {
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
         | ContentBlock::Text { .. }
-        | ContentBlock::Thinking { .. } => None,
+        | ContentBlock::Thinking { .. }
+        | ContentBlock::Image { .. }
+        | ContentBlock::Document { .. } => None,
     })
 }
 
@@ -537,6 +551,10 @@ fn estimate_message_tokens(message: &ConversationMessage) -> usize {
                 tool_name, output, ..
             } => (tool_name.len() + output.len()) / 4 + 1,
             ContentBlock::Thinking { thinking } => thinking.len() / 4 + 1,
+            // Anexos binários ficam fora da janela de tokens — bytes não são tokens
+            // de texto. A Anthropic factura imagens/documentos por uma fórmula
+            // separada que não é contabilizada aqui (estimador rude para compaction).
+            ContentBlock::Image { .. } | ContentBlock::Document { .. } => 0,
         })
         .sum()
 }

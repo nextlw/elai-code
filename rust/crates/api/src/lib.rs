@@ -36,9 +36,10 @@ pub use providers::{
 pub use sse::{parse_frame, SseParser};
 pub use types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
-    EffortLevel, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
-    MessageResponse, MessageStartEvent, MessageStopEvent, OutputConfig, OutputContentBlock,
-    StreamEvent, ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
+    DocumentSource, EffortLevel, ImageSource, InputContentBlock, InputMessage, MessageDelta,
+    MessageDeltaEvent, MessageRequest, MessageResponse, MessageStartEvent, MessageStopEvent,
+    OutputConfig, OutputContentBlock, StreamEvent, ThinkingConfig, ToolChoice, ToolDefinition,
+    ToolResultContentBlock, Usage,
 };
 
 #[cfg(test)]

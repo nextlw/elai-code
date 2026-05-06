@@ -36,11 +36,61 @@ use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::telemetry::{now_millis, TelemetryEvent, TelemetryHandle};
 use crate::usage::{TokenUsage, UsageTracker};
+use crate::buddy::{PokemonId, Rarity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRequest {
     pub system_prompt: Vec<String>,
     pub messages: Vec<ConversationMessage>,
+}
+
+/// Entrada de uma rodada de conversa: texto do usuário + anexos opcionais
+/// (imagens / PDFs persistidos via [`crate::AttachmentStore`]).
+///
+/// Usado pelo [`ConversationRuntime::run_turn`]. Para o caso comum (apenas
+/// texto), use [`UserInput::text`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UserInput {
+    pub text: String,
+    pub attachments: Vec<ContentBlock>,
+}
+
+impl UserInput {
+    /// Constrói uma entrada apenas-texto (sem anexos).
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    /// Constrói uma entrada com texto e anexos previamente persistidos.
+    #[must_use]
+    pub fn with_attachments(
+        text: impl Into<String>,
+        attachments: Vec<ContentBlock>,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            attachments,
+        }
+    }
+
+    /// Retorna `true` se o input contém pelo menos um bloco de anexo
+    /// (`Image` ou `Document`). Outros blocos são ignorados.
+    #[must_use]
+    pub fn has_attachments(&self) -> bool {
+        self.attachments
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { .. } | ContentBlock::Document { .. }))
+    }
+}
+
+impl<S: Into<String>> From<S> for UserInput {
+    fn from(text: S) -> Self {
+        Self::text(text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +110,23 @@ pub enum AssistantEvent {
 
 pub trait ApiClient {
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError>;
+
+    /// Reporta se o provider por trás deste client aceita anexos
+    /// multimodais (imagens / PDFs) no payload. Default `false` —
+    /// providers que suportam (Anthropic) devem sobrescrever.
+    ///
+    /// O [`ConversationRuntime::run_turn`] consulta este método quando o
+    /// [`UserInput`] traz anexos e devolve [`RuntimeError::multimodal_not_supported`]
+    /// se `false`, antes mesmo de gastar tokens.
+    fn supports_multimodal(&self) -> bool {
+        false
+    }
+
+    /// Nome amigável do provider, usado em mensagens de erro
+    /// (`MultimodalNotSupported(provider)`). Default `"unknown"`.
+    fn provider_name(&self) -> &str {
+        "unknown"
+    }
 }
 
 pub trait ToolExecutor {
@@ -100,6 +167,37 @@ impl RuntimeError {
             message: message.into(),
         }
     }
+
+    /// Erro tipado emitido quando o usuário envia anexos multimodais para
+    /// um provider que não os suporta. A mensagem incorpora o nome do
+    /// provider para que a TUI possa exibir uma `SystemNote` clara.
+    ///
+    /// O texto sempre começa com `MULTIMODAL_NOT_SUPPORTED:` para que o
+    /// caller possa detectar o tipo programaticamente via
+    /// [`is_multimodal_not_supported`](Self::is_multimodal_not_supported).
+    #[must_use]
+    pub fn multimodal_not_supported(provider: impl Into<String>) -> Self {
+        let provider = provider.into();
+        Self {
+            message: format!(
+                "MULTIMODAL_NOT_SUPPORTED: provider `{provider}` não aceita imagens ou PDFs no payload"
+            ),
+        }
+    }
+
+    /// Devolve `true` quando este erro foi originado em
+    /// [`Self::multimodal_not_supported`]. Útil pra TUI mapear para mensagem
+    /// amigável ao invés de propagar como erro genérico.
+    #[must_use]
+    pub fn is_multimodal_not_supported(&self) -> bool {
+        self.message.starts_with("MULTIMODAL_NOT_SUPPORTED:")
+    }
+
+    /// Acessa a mensagem subjacente (sem prefixo de tipo).
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl Display for RuntimeError {
@@ -131,6 +229,11 @@ pub struct ConversationRuntime<C, T> {
     model_name: Option<String>,
     consecutive_compact_failures: usize,
     notify_fn: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    // Sistema de unlock de mascotes
+    unlock_integration: Option<super::buddy::unlock_integration::UnlockIntegration>,
+    // Flags para controle de pausa em milestone
+    milestone_paused: bool,
+    pending_unlock_mascot: Option<(super::buddy::PokemonId, super::buddy::Rarity)>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -179,6 +282,9 @@ where
             model_name: None,
             consecutive_compact_failures: 0,
             notify_fn: None,
+            unlock_integration: None,
+            milestone_paused: false,
+            pending_unlock_mascot: None,
         }
     }
 
@@ -214,15 +320,125 @@ where
         }
     }
 
+    // ── Unlock Integration ─────────────────────────────────────────────────────
+
+    /// Habilita o sistema de unlock de mascotes
+    #[must_use]
+    pub fn with_unlock_integration(mut self) -> Self {
+        use crate::buddy::unlock_integration::UnlockIntegration;
+        self.unlock_integration = Some(UnlockIntegration::new());
+        self
+    }
+
+    /// Habilita unlock com callback de notificação
+    #[must_use]
+    pub fn with_unlock_integration_and_notify(mut self, notify: impl Fn(String) + Send + Sync + 'static) -> Self {
+        use crate::buddy::unlock_integration::UnlockIntegration;
+        let integration = UnlockIntegration::new()
+            .with_notify(notify);
+        self.unlock_integration = Some(integration);
+        self
+    }
+
+    /// Retorna o mascote pendente de unlock (se houver)
+    #[must_use]
+    pub fn pending_unlock_mascot(&self) -> Option<(crate::buddy::PokemonId, crate::buddy::Rarity)> {
+        self.pending_unlock_mascot
+    }
+
+    /// Confirma o unlock pendente (retorna true se confirmou)
+    pub fn confirm_pending_unlock(&mut self) -> bool {
+        if let Some((id, _)) = self.pending_unlock_mascot {
+            if let Some(ref mut integration) = self.unlock_integration {
+                let outcome = integration.confirm_unlock();
+                if outcome.success {
+                    self.pending_unlock_mascot = None;
+                    self.milestone_paused = false;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Cancela o unlock pendente
+    pub fn cancel_pending_unlock(&mut self) {
+        if let Some(ref mut integration) = self.unlock_integration {
+            integration.cancel_unlock();
+        }
+        self.pending_unlock_mascot = None;
+        self.milestone_paused = false;
+    }
+
+    /// Processa usage e verifica milestones
+    fn process_usage_for_unlock(&mut self, usage: &TokenUsage) {
+        let mut pending_notifications = Vec::new();
+        let mut pending_mascot: Option<(PokemonId, Rarity)> = None;
+        
+        {
+            if let Some(ref mut integration) = self.unlock_integration {
+                if let Some(milestone) = integration.process_usage(usage) {
+                    // Milestone atingido! Pausa a tarefa e dispara evento
+                    pending_notifications.push(format!(
+                        "🎯 MILESTONE ATINGIDO: {} tokens ({:?})",
+                        milestone.tokens_threshold,
+                        milestone.rarity
+                    ));
+                    
+                    // Avalia complexidade para determinar raridade final
+                    if let Some(evaluation) = integration.evaluate_current_task() {
+                        pending_notifications.push(format!(
+                            "📊 Complexidade: {}/10 — Raridade: {:?}",
+                            evaluation.complexity_score,
+                            evaluation.determined_rarity
+                        ));
+                        
+                        // Cria evento de unlock
+                        if let Some(event) = integration.orchestrator_mut().create_unlock_event(&evaluation) {
+                            if let Some(mascot_id) = event.chosen_mascot {
+                                pending_mascot = Some((mascot_id, event.rarity));
+                                pending_notifications.push(format!(
+                                    "✨ MASCOTE SORTEADO: #{} {} ({:?})",
+                                    mascot_id,
+                                    crate::buddy::pokemon_name(mascot_id),
+                                    event.rarity
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Aplica mudanças e notifica fora do borrow
+        if let Some((id, rarity)) = pending_mascot {
+            self.milestone_paused = true;
+            self.pending_unlock_mascot = Some((id, rarity));
+        }
+        for msg in pending_notifications {
+            self.notify(msg);
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn run_turn(
         &mut self,
-        user_input: impl Into<String>,
+        user_input: impl Into<UserInput>,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
+        let input: UserInput = user_input.into();
+        // Gate multimodal antes de gastar tokens: se o usuário trouxe anexos
+        // e o provider não suporta, falhe com erro tipado que a TUI possa
+        // mapear para mensagem amigável.
+        if input.has_attachments() && !self.api_client.supports_multimodal() {
+            return Err(RuntimeError::multimodal_not_supported(
+                self.api_client.provider_name(),
+            ));
+        }
+        let UserInput { text, attachments } = input;
         self.session
             .messages
-            .push(ConversationMessage::user_text(user_input.into()));
+            .push(ConversationMessage::user_with_attachments(text, attachments));
 
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
@@ -287,6 +503,10 @@ where
             };
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
+                
+                // Process unlock integration if enabled
+                self.process_usage_for_unlock(&usage);
+                
                 let model = self
                     .model_name
                     .clone()

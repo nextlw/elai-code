@@ -15,6 +15,7 @@
 
 mod bash;
 mod bootstrap;
+pub mod attachment_store;
 pub mod buddy;
 pub mod global_config;
 pub mod progress;
@@ -72,7 +73,7 @@ pub use config::{
 };
 pub use conversation::{
     error_indicates_context_limit, ApiClient, ApiRequest, AssistantEvent, ConversationRuntime,
-    RuntimeError, StaticToolExecutor, ToolError, ToolExecutor, TurnSummary,
+    RuntimeError, StaticToolExecutor, ToolError, ToolExecutor, TurnSummary, UserInput,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
@@ -150,6 +151,7 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use attachment_store::AttachmentStore;
 pub use message_repair::{validate_and_repair, RepairAction};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
