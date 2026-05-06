@@ -1,0 +1,2129 @@
+openapi: 3.1.0
+info:
+  title: elai-server HTTP API
+  version: "1.0.0"
+  summary: API REST do elai-server (Axum) para sessões de IA, workspace, ferramentas, MCP, plugins e telemetria.
+  description: |
+    `elai-server` é um servidor HTTP (Rust + Axum) que expõe orquestração de sessões de IA,
+    operações de workspace (read/write/edit/glob/grep), Git, ferramentas (tools), provedores LLM,
+    autenticação (API key/OAuth), MCP, plugins/skills/agents, telemetria e cache.
+
+    ## Autenticação
+    Todos os endpoints (exceto `GET /v1/health`) exigem **Bearer token** no header
+    `Authorization: Bearer <token>`. O token é gerado/persistido pelo binário `elai-server`
+    em `~/.elai/server-token` (ou no caminho informado por `--token-file`).
+
+    ## Streaming
+    - **SSE** (`text/event-stream`): `GET /v1/sessions/{id}/events`
+    - **WebSocket**: `GET /v1/sessions/{id}/permissions/ws`
+
+    ## Convenções de Erro
+    Erros retornam JSON `{ "error": "<mensagem>" }` com códigos HTTP padrão (400, 401, 403, 404, 409, 422, 500, 501).
+  contact:
+    name: elai-code
+    url: https://github.com/willy3087/elai-code
+  license:
+    name: Proprietary
+servers:
+  - url: http://127.0.0.1:8456
+    description: Loopback local (default)
+  - url: http://{host}:{port}
+    description: Servidor customizado
+    variables:
+      host:
+        default: 127.0.0.1
+      port:
+        default: "8456"
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Health
+    description: Saúde e versão do servidor.
+  - name: Sessions
+    description: CRUD de sessões, mensagens, eventos SSE e permissões.
+  - name: Workspace
+    description: Operações de arquivo (read/write/edit/glob/grep/tree/diff) escopadas à sessão.
+  - name: Git
+    description: Comandos Git executados no `cwd` da sessão.
+  - name: Config
+    description: Modelos, provedores, configuração global, budget e tema.
+  - name: Commands
+    description: Slash-commands listáveis e executáveis por sessão.
+  - name: Tools
+    description: Ferramentas disponíveis para o LLM e seu controle por sessão.
+  - name: Tasks
+    description: Tarefas em segundo plano (run/cancel/output).
+  - name: Telemetry
+    description: Telemetria, uso e cache.
+  - name: Auth
+    description: Status, API keys, OAuth e import de credenciais.
+  - name: MCP
+    description: Servidores MCP (Model Context Protocol).
+  - name: Plugins
+    description: Plugins, skills, agents e hooks.
+  - name: UserCommands
+    description: Slash-commands customizadas pelo usuário.
+
+paths:
+  # ===================== HEALTH =====================
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Healthcheck público
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /v1/version:
+    get:
+      tags: [Health]
+      summary: Versão do servidor
+      operationId: version
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Version"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===================== SESSIONS =====================
+  /v1/sessions:
+    post:
+      tags: [Sessions]
+      summary: Criar sessão
+      operationId: createSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSessionRequest" }
+      responses:
+        "201":
+          description: Sessão criada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateSessionResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    get:
+      tags: [Sessions]
+      summary: Listar sessões
+      operationId: listSessions
+      responses:
+        "200":
+          description: Sessões
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionsList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: Obter sessão + mensagens
+      operationId: getSession
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Sessions]
+      summary: Apagar sessão
+      operationId: deleteSession
+      responses:
+        "204": { description: Sem conteúdo }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Sessions]
+      summary: Atualizar modelo / permission_mode
+      operationId: patchSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchSessionRequest" }
+      responses:
+        "200":
+          description: Sessão atualizada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Enviar mensagem (assíncrono → turn_id)
+      description: |
+        Aceita uma mensagem do usuário e dispara um *turn* assíncrono.
+        Para acompanhar a resposta em tempo real, conecte-se a
+        `GET /v1/sessions/{id}/events` (SSE).
+      operationId: sendMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendMessageRequest" }
+      responses:
+        "202":
+          description: Turn enfileirado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TurnAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/sessions/{id}/turns/{turn_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - in: path
+        name: turn_id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Sessions]
+      summary: Cancelar turn em execução
+      operationId: cancelTurn
+      responses:
+        "204": { description: Cancelado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: Stream SSE de eventos da sessão
+      description: |
+        Stream `text/event-stream`. Eventos típicos: `snapshot`, `text_delta`,
+        `thinking_delta`, `tool_use_started`, `tool_use_input_delta`,
+        `message_appended`, `tool_result`, `usage_delta`, `turn_completed`,
+        `turn_cancelled`, `turn_error`, `permission_request`.
+      operationId: streamEvents
+      parameters:
+        - in: query
+          name: since
+          schema: { type: integer, minimum: 0 }
+          description: Sequência inicial para retomar o stream.
+      responses:
+        "200":
+          description: Stream SSE
+          content:
+            text/event-stream:
+              schema: { type: string, description: "linhas SSE: 'event:' + 'data:'" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/cost:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: Custo agregado da sessão
+      operationId: getSessionCost
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionCost" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/permissions/pending:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: Permissões pendentes
+      operationId: listPendingPermissions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PendingPermissions" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/permissions/{request_id}/decide:
+    parameters:
+      - in: path
+        name: request_id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Sessions]
+      summary: Decidir permissão pendente
+      operationId: decidePermission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecidePermissionRequest" }
+      responses:
+        "204": { description: Decisão registrada }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/permissions/ws:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: WebSocket para fluxo de permissões
+      description: |
+        Faz upgrade para WebSocket. O servidor envia `PermissionRequest`;
+        o cliente responde com `{request_id, outcome: "allow"|"deny", reason?}`
+        ou `{ "type": "ping" }` para keepalive.
+      operationId: permissionsWs
+      responses:
+        "101": { description: Switching Protocols }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/clone:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Clonar sessão (com histórico)
+      operationId: cloneSession
+      responses:
+        "201":
+          description: Sessão clonada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateSessionResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/compact:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Compactar histórico da sessão
+      operationId: compactSessionDirect
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompactResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/export:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Exportar sessão (json|md)
+      operationId: exportSessionDirect
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json, md]
+            default: json
+      responses:
+        "200":
+          description: Conteúdo exportado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportSessionJson" }
+            text/markdown:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/resume:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Retomar sessão
+      operationId: resumeSessionDirect
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ===================== WORKSPACE =====================
+  /v1/workspace/{session_id}/read:
+    parameters:
+      - $ref: "#/components/parameters/SessionPathId"
+    post:
+      tags: [Workspace]
+      summary: Ler arquivo
+      operationId: workspaceRead
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WsReadRequest" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsReadResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /v1/workspace/{session_id}/write:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Workspace]
+      summary: Escrever arquivo
+      operationId: workspaceWrite
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WsWriteRequest" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsWriteResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /v1/workspace/{session_id}/edit:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Workspace]
+      summary: Edição por substituição (old_string→new_string)
+      operationId: workspaceEdit
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WsEditRequest" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsEditResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /v1/workspace/{session_id}/glob:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Workspace]
+      summary: Glob de arquivos
+      operationId: workspaceGlob
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WsGlobRequest" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsGlobResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /v1/workspace/{session_id}/grep:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Workspace]
+      summary: Grep recursivo
+      operationId: workspaceGrep
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WsGrepRequest" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsGrepResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /v1/workspace/{session_id}/tree:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Workspace]
+      summary: Árvore de diretórios
+      operationId: workspaceTree
+      parameters:
+        - in: query
+          name: depth
+          schema: { type: integer, minimum: 1, default: 3 }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsTreeResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/workspace/{session_id}/diff:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Workspace]
+      summary: Git diff (do workspace)
+      operationId: workspaceDiff
+      parameters:
+        - in: query
+          name: staged
+          schema: { type: boolean, default: false }
+        - in: query
+          name: path
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/WsDiffResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  # ===================== GIT =====================
+  /v1/workspace/{session_id}/git/status:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Git]
+      summary: git status --porcelain
+      operationId: gitStatus
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/workspace/{session_id}/git/diff:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Git]
+      summary: git diff
+      operationId: gitDiff
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/workspace/{session_id}/git/log:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Git]
+      summary: git log --oneline -N
+      operationId: gitLog
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 10 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/workspace/{session_id}/git/branches:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    get:
+      tags: [Git]
+      summary: git branch -a
+      operationId: gitBranches
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/workspace/{session_id}/git/commit:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Git]
+      summary: git commit (stage + commit)
+      operationId: gitCommit
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/GitCommitRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/workspace/{session_id}/git/branch/create:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Git]
+      summary: git checkout -b
+      operationId: gitBranchCreate
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/GitBranchCreateRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/workspace/{session_id}/git/worktree/create:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Git]
+      summary: git worktree add
+      operationId: gitWorktreeCreate
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/GitWorktreeCreateRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/workspace/{session_id}/git/pr/create:
+    parameters: [{ $ref: "#/components/parameters/SessionPathId" }]
+    post:
+      tags: [Git]
+      summary: gh pr create (requer GitHub CLI)
+      operationId: gitPrCreate
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/GitPrCreateRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GitOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ===================== CONFIG =====================
+  /v1/models:
+    get:
+      tags: [Config]
+      summary: Listar modelos
+      operationId: listModels
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModelsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/providers:
+    get:
+      tags: [Config]
+      summary: Listar provedores
+      operationId: listProviders
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProvidersList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/config:
+    get:
+      tags: [Config]
+      summary: Configuração atual
+      operationId: getConfig
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Config" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [Config]
+      summary: Atualizar configuração global
+      operationId: patchConfig
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PatchConfig" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GlobalConfig" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/config/sources:
+    get:
+      tags: [Config]
+      summary: Fontes de configuração
+      operationId: getConfigSources
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigSources" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/providers/{id}/test:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Config]
+      summary: Testar credenciais de provedor
+      operationId: testProvider
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderTestResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/budget:
+    get:
+      tags: [Config]
+      summary: Obter orçamento
+      operationId: getBudget
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [Config]
+      summary: Atualizar orçamento
+      operationId: patchBudget
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/theme:
+    get:
+      tags: [Config]
+      summary: Obter tema
+      operationId: getTheme
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Theme" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [Config]
+      summary: Atualizar tema
+      operationId: patchTheme
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Theme" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Theme" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ===================== COMMANDS =====================
+  /v1/commands:
+    get:
+      tags: [Commands]
+      summary: Listar slash-commands
+      operationId: listCommands
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CommandsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/sessions/{id}/commands/run:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Commands]
+      summary: Executar slash-command
+      operationId: runCommand
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RunCommandRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CommandOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/commands/compact:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Commands]
+      summary: /compact (via commands.rs)
+      operationId: compactSession
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CommandOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/commands/export:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Commands]
+      summary: /export (markdown|json)
+      operationId: exportSessionCmd
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [markdown, json], default: markdown }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExportSessionJson" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/commands/resume:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Commands]
+      summary: /resume
+      operationId: resumeSessionCmd
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/ResumeRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ===================== TOOLS =====================
+  /v1/tools:
+    get:
+      tags: [Tools]
+      summary: Listar tools
+      operationId: listTools
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ToolsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/tools/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Tools]
+      summary: Detalhe de uma tool
+      operationId: getTool
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ToolDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/tools/allow:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Tools]
+      summary: Allow patterns
+      operationId: toolsAllow
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PatternsRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AllowResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{id}/tools/deny:
+    parameters: [{ $ref: "#/components/parameters/SessionId" }]
+    post:
+      tags: [Tools]
+      summary: Deny patterns
+      operationId: toolsDeny
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PatternsRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DenyResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/tools/rate-limit:
+    get:
+      tags: [Tools]
+      summary: Status de rate-limit
+      operationId: toolsRateLimit
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RateLimitStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===================== TASKS =====================
+  /v1/tasks:
+    get:
+      tags: [Tasks]
+      summary: Listar tasks
+      operationId: listTasks
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TasksList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/tasks/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Tasks]
+      summary: Obter task
+      operationId: getTask
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/tasks/{id}/output:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Tasks]
+      summary: Saída da task
+      operationId: getTaskOutput
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CommandOutput" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/tasks/{id}/cancel:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Tasks]
+      summary: Cancelar task
+      operationId: cancelTask
+      responses:
+        "204": { description: Cancelado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ===================== CACHE =====================
+  /v1/cache/stats:
+    get:
+      tags: [Telemetry]
+      summary: Estatísticas de cache
+      operationId: cacheStats
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CacheStats" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/cache/clear:
+    post:
+      tags: [Telemetry]
+      summary: Limpar cache
+      operationId: cacheClear
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===================== TELEMETRY =====================
+  /v1/telemetry:
+    get:
+      tags: [Telemetry]
+      summary: Eventos de telemetria
+      operationId: getTelemetry
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/usage/summary:
+    get:
+      tags: [Telemetry]
+      summary: Sumário de uso
+      operationId: getUsageSummary
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UsageSummary" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===================== AUTH =====================
+  /v1/auth/status:
+    get:
+      tags: [Auth]
+      summary: Status de autenticação
+      operationId: getAuthStatus
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AuthStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/methods:
+    get:
+      tags: [Auth]
+      summary: Métodos de auth disponíveis
+      operationId: listAuthMethods
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AuthMethodsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/api-key:
+    post:
+      tags: [Auth]
+      summary: Definir API key
+      operationId: setApiKey
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SetApiKeyRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderStatus" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/api-key/{provider}:
+    parameters:
+      - in: path
+        name: provider
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Auth]
+      summary: Remover API key
+      operationId: deleteApiKey
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/auth/oauth/start:
+    post:
+      tags: [Auth]
+      summary: Iniciar OAuth (PKCE)
+      operationId: oauthStart
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProviderRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OAuthStart" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/oauth/callback:
+    get:
+      tags: [Auth]
+      summary: Callback OAuth
+      operationId: oauthCallback
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string }
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+        - in: query
+          name: error
+          schema: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /v1/auth/oauth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh OAuth
+      operationId: oauthRefresh
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProviderRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/import/claude-code:
+    post:
+      tags: [Auth]
+      summary: Importar credenciais do Claude Code
+      operationId: importClaudeCode
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/auth/import/codex:
+    post:
+      tags: [Auth]
+      summary: Importar credenciais do Codex
+      operationId: importCodex
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # ===================== MCP =====================
+  /v1/mcp/servers:
+    get:
+      tags: [MCP]
+      summary: Listar servidores MCP
+      operationId: listMcpServers
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/McpServersList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [MCP]
+      summary: Adicionar servidor MCP
+      operationId: addMcpServer
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpAddServerRequest" } } }
+      responses:
+        "201": { description: Criado, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/mcp/servers/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    put:
+      tags: [MCP]
+      summary: Atualizar servidor MCP
+      operationId: updateMcpServer
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpUpdateServerRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [MCP]
+      summary: Remover servidor MCP
+      operationId: deleteMcpServer
+      responses:
+        "204": { description: Removido }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/mcp/servers/{name}/restart:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    post:
+      tags: [MCP]
+      summary: Reiniciar servidor MCP
+      operationId: restartMcpServer
+      responses:
+        "501": { description: Not Implemented }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/mcp/servers/{name}/tools:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    get:
+      tags: [MCP]
+      summary: Listar tools do servidor MCP
+      operationId: listMcpServerTools
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/McpToolsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/mcp/servers/{name}/resources:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    get:
+      tags: [MCP]
+      summary: Listar resources do servidor MCP
+      operationId: listMcpServerResources
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/McpResourcesList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/mcp/servers/{name}/tools/{tool}/call:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+      - in: path
+        name: tool
+        required: true
+        schema: { type: string }
+    post:
+      tags: [MCP]
+      summary: Chamar tool de servidor MCP
+      operationId: callMcpTool
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpCallToolRequest" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/McpCallToolResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ===================== PLUGINS / SKILLS / AGENTS / HOOKS =====================
+  /v1/plugins:
+    get:
+      tags: [Plugins]
+      summary: Listar plugins
+      operationId: listPlugins
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PluginsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/plugins/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Plugins]
+      summary: Instalar plugin
+      operationId: installPlugin
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [Plugins]
+      summary: Atualizar plugin
+      operationId: updatePlugin
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Plugins]
+      summary: Desinstalar plugin
+      operationId: uninstallPlugin
+      responses:
+        "204": { description: Removido }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/skills:
+    get:
+      tags: [Plugins]
+      summary: Listar skills
+      operationId: listSkills
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SkillsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/skills/validate:
+    get:
+      tags: [Plugins]
+      summary: Validar skills
+      operationId: validateSkills
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SkillsValidation" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/agents:
+    get:
+      tags: [Plugins]
+      summary: Listar agents
+      operationId: listAgents
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AgentsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/agents/{name}/run:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Plugins]
+      summary: Executar agent
+      operationId: runAgent
+      responses:
+        "501": { description: Not Implemented }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/hooks:
+    get:
+      tags: [Plugins]
+      summary: Listar hooks
+      operationId: listHooks
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HooksList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [Plugins]
+      summary: Atualizar hooks (não implementado)
+      operationId: updateHooks
+      responses:
+        "200":
+          description: not_implemented
+          content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===================== USER COMMANDS =====================
+  /v1/user-commands:
+    get:
+      tags: [UserCommands]
+      summary: Listar user-commands
+      operationId: listUserCommands
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserCommandsList" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [UserCommands]
+      summary: Criar user-command
+      operationId: createUserCommand
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UserCommandUpsert" } } }
+      responses:
+        "201": { description: Criado, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/user-commands/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string }
+    put:
+      tags: [UserCommands]
+      summary: Atualizar user-command
+      operationId: updateUserCommand
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UserCommandContent" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StatusResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [UserCommands]
+      summary: Apagar user-command
+      operationId: deleteUserCommand
+      responses:
+        "204": { description: Removido }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Token gerado em `~/.elai/server-token` (ou `--token-file`).
+        Validado por SHA-256 contra o token persistido.
+
+  parameters:
+    SessionId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+      description: ID da sessão.
+    SessionPathId:
+      in: path
+      name: session_id
+      required: true
+      schema: { type: string }
+      description: ID da sessão.
+
+  responses:
+    BadRequest:
+      description: Requisição inválida
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Token ausente/ inválido
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: "Acesso negado (ex.: path traversal)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Recurso não encontrado
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: "Conflito de estado (ex.: turn já em execução)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unprocessable:
+      description: Não foi possível processar
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    InternalError:
+      description: Erro interno
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        version: { type: string }
+      required: [ok, version]
+
+    Version:
+      type: object
+      properties:
+        ok: { type: boolean }
+        version: { type: string }
+        name: { type: string }
+      required: [ok, version, name]
+
+    PermissionMode:
+      type: string
+      description: Modo de permissão da sessão.
+      enum: [read-only, workspace-write, danger-full-access, prompt, allow]
+
+    SessionSummary:
+      type: object
+      properties:
+        id: { type: string }
+        cwd: { type: string }
+        created_at: { type: integer, format: int64 }
+        model: { type: string }
+        permission_mode: { $ref: "#/components/schemas/PermissionMode" }
+        title: { type: string, nullable: true }
+        message_count: { type: integer, nullable: true }
+      required: [id, cwd, created_at, model, permission_mode]
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        cwd: { type: string, description: "Diretório de trabalho. Default: cwd do servidor." }
+        model: { type: string }
+        permission_mode: { $ref: "#/components/schemas/PermissionMode" }
+
+    CreateSessionResponse:
+      type: object
+      properties:
+        session_id: { type: string }
+        session: { $ref: "#/components/schemas/SessionSummary" }
+      required: [session_id, session]
+
+    SessionsList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/SessionSummary" }
+      required: [sessions]
+
+    MessageBlock:
+      type: object
+      properties:
+        type: { type: string, description: "ex.: text, code, tool_use, tool_result, thinking" }
+        text: { type: string, nullable: true }
+        language: { type: string, nullable: true }
+      required: [type]
+
+    Message:
+      type: object
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/MessageBlock" }
+      required: [role, blocks]
+
+    SessionDetail:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/SessionSummary" }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+      required: [session, messages]
+
+    PatchSessionRequest:
+      type: object
+      properties:
+        model: { type: string }
+        permission_mode: { $ref: "#/components/schemas/PermissionMode" }
+
+    SendMessageRequest:
+      type: object
+      properties:
+        content: { type: string }
+      required: [content]
+
+    TurnAccepted:
+      type: object
+      properties:
+        turn_id: { type: string }
+      required: [turn_id]
+
+    SessionCost:
+      type: object
+      properties:
+        total_tokens: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        estimated_usd: { type: number, format: double }
+      required: [total_tokens, input_tokens, output_tokens, estimated_usd]
+
+    PendingPermission:
+      type: object
+      properties:
+        request_id: { type: string }
+        tool_name: { type: string }
+        input: { type: string, description: "JSON serializado dos argumentos" }
+        required_mode: { type: string }
+      required: [request_id, tool_name, input, required_mode]
+
+    PendingPermissions:
+      type: object
+      properties:
+        pending:
+          type: array
+          items: { $ref: "#/components/schemas/PendingPermission" }
+      required: [pending]
+
+    DecidePermissionRequest:
+      type: object
+      properties:
+        outcome: { type: string, enum: [allow, deny] }
+        reason: { type: string, nullable: true }
+      required: [outcome]
+
+    CompactResult:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        removed_message_count: { type: integer }
+      required: [status, removed_message_count]
+
+    ExportSessionJson:
+      type: object
+      properties:
+        id: { type: string }
+        cwd: { type: string }
+        model: { type: string }
+        permission_mode: { type: string }
+        markdown: { type: string, nullable: true }
+        messages:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/Message" }
+
+    StatusResponse:
+      type: object
+      properties:
+        status: { type: string }
+        message: { type: string, nullable: true }
+        session_id: { type: string, nullable: true }
+      required: [status]
+
+    # Workspace
+    WsReadRequest:
+      type: object
+      properties:
+        path: { type: string }
+        offset: { type: integer, format: int64 }
+        limit: { type: integer, format: int64 }
+      required: [path]
+
+    WsReadResponse:
+      type: object
+      properties:
+        path: { type: string }
+        content: { type: string }
+        is_binary: { type: boolean, nullable: true }
+        offset: { type: integer, nullable: true }
+        limit: { type: integer, nullable: true }
+        total_size: { type: integer, nullable: true }
+      required: [path, content]
+
+    WsWriteRequest:
+      type: object
+      properties:
+        path: { type: string }
+        content: { type: string }
+      required: [path, content]
+
+    WsWriteResponse:
+      type: object
+      properties:
+        path: { type: string }
+        bytes_written: { type: integer }
+      required: [path, bytes_written]
+
+    WsEditRequest:
+      type: object
+      properties:
+        path: { type: string }
+        old_string: { type: string }
+        new_string: { type: string }
+        replace_all: { type: boolean, default: false }
+      required: [path, old_string, new_string]
+
+    WsEditResponse:
+      type: object
+      properties:
+        path: { type: string }
+        replacements: { type: integer, nullable: true }
+        replaced_count: { type: integer, nullable: true }
+        content: { type: string, nullable: true }
+      required: [path]
+
+    WsGlobRequest:
+      type: object
+      properties:
+        pattern: { type: string }
+      required: [pattern]
+
+    WsGlobResponse:
+      type: object
+      properties:
+        matches:
+          type: array
+          items: { type: string }
+        count: { type: integer, nullable: true }
+      required: [matches]
+
+    WsGrepRequest:
+      type: object
+      properties:
+        pattern: { type: string }
+        path: { type: string, nullable: true }
+        case_insensitive: { type: boolean, default: false }
+      required: [pattern]
+
+    GrepMatch:
+      type: object
+      properties:
+        file: { type: string, nullable: true }
+        path: { type: string, nullable: true }
+        line: { type: integer, nullable: true }
+        line_number: { type: integer, nullable: true }
+        column: { type: integer, nullable: true }
+        text: { type: string, nullable: true }
+
+    WsGrepResponse:
+      type: object
+      properties:
+        matches:
+          type: array
+          items: { $ref: "#/components/schemas/GrepMatch" }
+        count: { type: integer, nullable: true }
+      required: [matches]
+
+    TreeEntry:
+      type: object
+      properties:
+        path: { type: string }
+        kind: { type: string, enum: [file, dir] }
+        depth: { type: integer }
+      required: [path, kind, depth]
+
+    WsTreeResponse:
+      type: object
+      properties:
+        cwd: { type: string }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/TreeEntry" }
+      required: [cwd, entries]
+
+    WsDiffResponse:
+      type: object
+      properties:
+        diff: { type: string }
+      required: [diff]
+
+    # Git
+    GitOutput:
+      type: object
+      properties:
+        output: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+
+    GitCommitRequest:
+      type: object
+      properties:
+        message: { type: string }
+        files:
+          type: array
+          items: { type: string }
+      required: [message]
+
+    GitBranchCreateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        from: { type: string, nullable: true }
+      required: [name]
+
+    GitWorktreeCreateRequest:
+      type: object
+      properties:
+        path: { type: string }
+        branch: { type: string }
+      required: [path, branch]
+
+    GitPrCreateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string, nullable: true }
+        base: { type: string, nullable: true }
+      required: [title]
+
+    # Config
+    Model:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        max_tokens: { type: integer, nullable: true }
+        supports_thinking: { type: boolean }
+        supports_vision: { type: boolean }
+      required: [id, name, supports_thinking, supports_vision]
+
+    ModelsList:
+      type: object
+      properties:
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/Model" }
+      required: [models]
+
+    Provider:
+      type: object
+      properties:
+        id: { type: string }
+        available: { type: boolean }
+        description: { type: string }
+      required: [id, available, description]
+
+    ProvidersList:
+      type: object
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/Provider" }
+      required: [providers]
+
+    GlobalConfig:
+      type: object
+      properties:
+        setup_complete: { type: boolean }
+        default_model: { type: string }
+        default_permission_mode: { type: string }
+        locale: { type: string }
+        theme: { $ref: "#/components/schemas/Theme" }
+
+    Config:
+      type: object
+      properties:
+        global: { $ref: "#/components/schemas/GlobalConfig" }
+        runtime: { type: object, additionalProperties: true }
+
+    PatchConfig:
+      type: object
+      properties:
+        setup_complete: { type: boolean }
+        default_model: { type: string }
+        default_permission_mode: { type: string }
+        locale: { type: string }
+
+    ConfigSource:
+      type: object
+      properties:
+        source: { type: string }
+        path: { type: string }
+        exists: { type: boolean }
+
+    ConfigSources:
+      type: object
+      properties:
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigSource" }
+
+    ProviderTestResult:
+      type: object
+      properties:
+        provider: { type: string }
+        status: { type: string, enum: [ok, error] }
+        message: { type: string }
+
+    Budget:
+      type: object
+      properties:
+        monthly_limit: { type: number, format: double, nullable: true }
+        soft_limit: { type: number, format: double, nullable: true }
+        tracking_period: { type: string, nullable: true }
+
+    Theme:
+      type: object
+      properties:
+        primary_color: { type: string, nullable: true }
+        accent_color: { type: string, nullable: true }
+        dark_mode: { type: boolean, nullable: true }
+
+    # Commands
+    Command:
+      type: object
+      properties:
+        name: { type: string }
+        summary: { type: string }
+        category: { type: string }
+        argument_hint: { type: string, nullable: true }
+      required: [name, summary, category]
+
+    CommandsList:
+      type: object
+      properties:
+        commands:
+          type: array
+          items: { $ref: "#/components/schemas/Command" }
+
+    RunCommandRequest:
+      type: object
+      properties:
+        name: { type: string }
+        args: { type: string, nullable: true }
+      required: [name]
+
+    CommandOutput:
+      type: object
+      properties:
+        output: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+
+    ResumeRequest:
+      type: object
+      properties:
+        session: { type: object, additionalProperties: true, nullable: true }
+
+    # Tools
+    Tool:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+        input_schema: { type: object, additionalProperties: true }
+      required: [name]
+
+    ToolsList:
+      type: object
+      properties:
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/Tool" }
+
+    ToolDetail:
+      $ref: "#/components/schemas/Tool"
+
+    PatternsRequest:
+      type: object
+      properties:
+        patterns:
+          type: array
+          items: { type: string }
+      required: [patterns]
+
+    AllowResult:
+      type: object
+      properties:
+        status: { type: string }
+        allow_patterns:
+          type: array
+          items: { type: string }
+
+    DenyResult:
+      type: object
+      properties:
+        status: { type: string }
+        deny_patterns:
+          type: array
+          items: { type: string }
+
+    RateLimitRejection:
+      type: object
+      properties:
+        tool_id: { type: string }
+        reason: { type: string }
+
+    RateLimitStatus:
+      type: object
+      properties:
+        rejected_count: { type: integer }
+        rejected:
+          type: array
+          items: { $ref: "#/components/schemas/RateLimitRejection" }
+
+    # Tasks
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status: { type: string }
+        created_at: { type: integer, format: int64 }
+      required: [id, name, status, created_at]
+
+    TasksList:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+
+    # Cache & Telemetry
+    CacheStats:
+      type: object
+      properties:
+        total_entries: { type: integer }
+        total_hits: { type: integer }
+        oldest_entry_ms: { type: integer, format: int64, nullable: true }
+        newest_entry_ms: { type: integer, format: int64, nullable: true }
+
+    TelemetryEntry:
+      type: object
+      properties:
+        timestamp: { type: integer, format: int64 }
+        event: { type: string }
+        data: { type: object, additionalProperties: true }
+
+    TelemetryList:
+      type: object
+      properties:
+        telemetry:
+          type: array
+          items: { $ref: "#/components/schemas/TelemetryEntry" }
+
+    UsageSummary:
+      type: object
+      properties:
+        total_input_tokens: { type: integer }
+        total_output_tokens: { type: integer }
+        total_cache_write_tokens: { type: integer }
+        total_cache_read_tokens: { type: integer }
+        total_cost_usd: { type: number, format: double }
+        request_count: { type: integer }
+
+    # Auth
+    AuthProviderStatus:
+      type: object
+      properties:
+        provider: { type: string }
+        authenticated: { type: boolean }
+        method: { type: string, nullable: true }
+        expires_at: { type: integer, format: int64, nullable: true }
+
+    AuthStatus:
+      type: object
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/AuthProviderStatus" }
+
+    AuthMethodEntry:
+      type: object
+      properties:
+        provider: { type: string }
+        methods:
+          type: array
+          items: { type: string }
+
+    AuthMethodsList:
+      type: object
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/AuthMethodEntry" }
+
+    SetApiKeyRequest:
+      type: object
+      properties:
+        provider: { type: string }
+        key: { type: string }
+      required: [provider, key]
+
+    ProviderRequest:
+      type: object
+      properties:
+        provider: { type: string }
+      required: [provider]
+
+    ProviderStatus:
+      type: object
+      properties:
+        status: { type: string }
+        provider: { type: string }
+
+    OAuthStart:
+      type: object
+      properties:
+        authorization_url: { type: string, format: uri }
+        state: { type: string }
+
+    ImportResult:
+      type: object
+      properties:
+        status: { type: string }
+        imported: { type: boolean }
+
+    # MCP
+    McpServer:
+      type: object
+      properties:
+        name: { type: string }
+        transport: { type: string }
+        status: { type: string }
+
+    McpServersList:
+      type: object
+      properties:
+        servers:
+          type: array
+          items: { $ref: "#/components/schemas/McpServer" }
+
+    McpAddServerRequest:
+      type: object
+      properties:
+        name: { type: string }
+        transport: { type: string }
+        config: { type: object, additionalProperties: true }
+      required: [name, transport]
+
+    McpUpdateServerRequest:
+      type: object
+      properties:
+        config: { type: object, additionalProperties: true }
+
+    McpToolItem:
+      type: object
+      properties:
+        name: { type: string }
+
+    McpToolsList:
+      type: object
+      properties:
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/McpToolItem" }
+
+    McpResourceItem:
+      type: object
+      properties:
+        uri: { type: string }
+
+    McpResourcesList:
+      type: object
+      properties:
+        resources:
+          type: array
+          items: { $ref: "#/components/schemas/McpResourceItem" }
+
+    McpCallToolRequest:
+      type: object
+      properties:
+        arguments: { type: object, additionalProperties: true }
+
+    McpCallToolResponse:
+      type: object
+      properties:
+        status: { type: string }
+        result: { type: object, additionalProperties: true, nullable: true }
+
+    # Plugins / Skills / Agents / Hooks
+    PluginItem:
+      type: object
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+
+    PluginsList:
+      type: object
+      properties:
+        plugins:
+          type: array
+          items: { $ref: "#/components/schemas/PluginItem" }
+
+    SkillItem:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+
+    SkillsList:
+      type: object
+      properties:
+        skills:
+          type: array
+          items: { $ref: "#/components/schemas/SkillItem" }
+
+    SkillsValidation:
+      type: object
+      properties:
+        valid: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+
+    AgentItem:
+      type: object
+      properties:
+        name: { type: string }
+
+    AgentsList:
+      type: object
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AgentItem" }
+
+    HookEntry:
+      type: object
+      properties:
+        event: { type: string }
+        commands:
+          type: array
+          items: { type: string }
+
+    HooksList:
+      type: object
+      properties:
+        hooks:
+          type: array
+          items: { $ref: "#/components/schemas/HookEntry" }
+
+    # User Commands
+    UserCommandItem:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        scope: { type: string }
+
+    UserCommandsList:
+      type: object
+      properties:
+        commands:
+          type: array
+          items: { $ref: "#/components/schemas/UserCommandItem" }
+
+    UserCommandUpsert:
+      type: object
+      properties:
+        name: { type: string }
+        content: { type: string }
+      required: [name, content]
+
+    UserCommandContent:
+      type: object
+      properties:
+        content: { type: string }
+      required: [content]

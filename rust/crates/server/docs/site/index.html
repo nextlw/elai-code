@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>elai-server API — Documentação</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Documentação interativa da API HTTP do elai-server (Axum)." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230B5FFF'/%3E%3Ctext x='50%25' y='55%25' font-family='ui-sans-serif' font-size='34' font-weight='800' text-anchor='middle' fill='white'%3Ee%3C/text%3E%3C/svg%3E" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #0f1530;
+        --text: #e6e9f5;
+        --muted: #98a2c4;
+        --primary: #4f8cff;
+        --accent: #00d3a7;
+        --border: #1c2350;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font-family: "Inter", system-ui, sans-serif; }
+      header.topbar {
+        position: sticky; top: 0; z-index: 30;
+        display: flex; align-items: center; gap: 16px;
+        padding: 14px 22px;
+        background: linear-gradient(135deg, #0b1020 0%, #131a3f 100%);
+        border-bottom: 1px solid var(--border);
+        backdrop-filter: blur(8px);
+      }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -0.01em; }
+      .brand .dot { width: 22px; height: 22px; border-radius: 6px;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+        box-shadow: 0 0 24px rgba(79,140,255,.4);
+      }
+      .brand b { font-size: 17px; }
+      .pill {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px; padding: 3px 8px; border-radius: 999px;
+        border: 1px solid var(--border); color: var(--muted);
+      }
+      nav.tabs { display: flex; gap: 4px; margin-left: auto; }
+      nav.tabs a {
+        text-decoration: none; color: var(--muted); padding: 8px 12px;
+        border-radius: 8px; font-size: 14px; font-weight: 600;
+        border: 1px solid transparent; transition: all 0.15s ease;
+      }
+      nav.tabs a:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+      nav.tabs a.active { color: white; background: var(--primary); border-color: var(--primary); }
+      nav.tabs a.gh {
+        color: var(--muted); border-color: var(--border);
+      }
+
+      .hero {
+        max-width: 1100px; margin: 0 auto; padding: 56px 24px 24px;
+      }
+      .hero h1 { font-size: 40px; line-height: 1.1; margin: 0 0 12px;
+        background: linear-gradient(135deg, #fff 0%, #b9c4ff 60%, var(--accent) 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent; }
+      .hero p.lead { font-size: 17px; color: var(--muted); max-width: 760px; line-height: 1.55; }
+      .hero .meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+      .hero .meta .pill { font-size: 13px; }
+
+      .grid {
+        max-width: 1100px; margin: 24px auto; padding: 0 24px 64px;
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;
+      }
+      .card {
+        background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+        padding: 16px 18px;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+      .card:hover { transform: translateY(-2px); border-color: var(--primary); }
+      .card h3 { margin: 0 0 6px; font-size: 15px; }
+      .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+      .card .tag { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--accent); }
+
+      .frame-wrapper { max-width: 100%; margin: 0; height: calc(100vh - 64px); }
+      .frame-wrapper iframe { width: 100%; height: 100%; border: 0; background: white; }
+
+      footer { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+      footer code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", monospace; }
+
+      .hidden { display: none; }
+
+      @media (max-width: 720px) {
+        nav.tabs a { padding: 6px 10px; font-size: 13px; }
+        .hero h1 { font-size: 30px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand"><span class="dot"></span><b>elai-server API</b></span>
+      <span class="pill" id="version-pill">v1 · OpenAPI 3.1</span>
+      <nav class="tabs">
+        <a href="#home" data-view="home" class="active">Início</a>
+        <a href="#redoc" data-view="redoc">Redoc</a>
+        <a href="#swagger" data-view="swagger">Swagger UI</a>
+        <a href="openapi.yaml" class="gh" target="_blank" rel="noopener">YAML</a>
+      </nav>
+    </header>
+
+    <!-- HOME -->
+    <section id="view-home">
+      <div class="hero">
+        <h1>Documentação da API HTTP do elai-server</h1>
+        <p class="lead">
+          O <b>elai-server</b> é um servidor HTTP em Rust (Axum) que expõe orquestração de sessões de IA,
+          operações de workspace, Git, ferramentas, MCP, plugins e telemetria — pensado para integrações
+          locais via loopback com autenticação por <i>Bearer token</i>.
+        </p>
+        <div class="meta">
+          <span class="pill">Base padrão: 127.0.0.1:8456</span>
+          <span class="pill">Auth: Bearer (token em ~/.elai/server-token)</span>
+          <span class="pill">Streaming: SSE + WebSocket</span>
+          <span class="pill">~70 endpoints · 16 grupos</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <a class="card" href="#redoc" data-view="redoc">
+          <span class="tag">/v1</span>
+          <h3>Referência completa (Redoc)</h3>
+          <p>Visão limpa em três colunas, ideal para leitura e consulta de schemas.</p>
+        </a>
+        <a class="card" href="#swagger" data-view="swagger">
+          <span class="tag">try-it</span>
+          <h3>Console interativo (Swagger UI)</h3>
+          <p>Execute requisições direto do navegador com autenticação Bearer.</p>
+        </a>
+        <a class="card" href="openapi.yaml" target="_blank">
+          <span class="tag">spec</span>
+          <h3>OpenAPI 3.1 (YAML)</h3>
+          <p>Arquivo-fonte para gerar SDKs, mocks e clientes em qualquer linguagem.</p>
+        </a>
+        <div class="card">
+          <span class="tag">sessions</span>
+          <h3>Sessões &amp; SSE</h3>
+          <p>Crie sessões, envie mensagens e consuma o stream de eventos em tempo real.</p>
+        </div>
+        <div class="card">
+          <span class="tag">workspace</span>
+          <h3>Workspace</h3>
+          <p>read/write/edit/glob/grep/tree/diff escopados ao <code>cwd</code> da sessão.</p>
+        </div>
+        <div class="card">
+          <span class="tag">mcp</span>
+          <h3>MCP &amp; Plugins</h3>
+          <p>Gerencie servidores MCP, plugins, skills, agents e hooks pelo HTTP.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- REDOC -->
+    <section id="view-redoc" class="hidden frame-wrapper">
+      <iframe src="redoc.html" title="elai-server API · Redoc"></iframe>
+    </section>
+
+    <!-- SWAGGER -->
+    <section id="view-swagger" class="hidden frame-wrapper">
+      <iframe src="swagger.html" title="elai-server API · Swagger UI"></iframe>
+    </section>
+
+    <footer id="footer">
+      Sirva localmente: <code>cd rust/crates/server/docs/site &amp;&amp; python3 -m http.server 8080</code>
+      &nbsp;·&nbsp; <a href="openapi.yaml" style="color: var(--accent);">openapi.yaml</a>
+    </footer>
+
+    <script>
+      const views = ["home", "redoc", "swagger"];
+      function setView(name) {
+        if (!views.includes(name)) name = "home";
+        for (const v of views) {
+          document.getElementById("view-" + v).classList.toggle("hidden", v !== name);
+        }
+        document.querySelectorAll("nav.tabs a[data-view]").forEach((a) =>
+          a.classList.toggle("active", a.getAttribute("data-view") === name)
+        );
+        document.getElementById("footer").style.display = name === "home" ? "block" : "none";
+      }
+      function fromHash() {
+        const h = (location.hash || "#home").replace("#", "");
+        setView(h);
+      }
+      document.querySelectorAll("a[data-view]").forEach((a) => {
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          const v = a.getAttribute("data-view");
+          history.replaceState(null, "", "#" + v);
+          setView(v);
+        });
+      });
+      window.addEventListener("hashchange", fromHash);
+      fromHash();
+    </script>
+  </body>
+</html>
