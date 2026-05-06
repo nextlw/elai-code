@@ -66,10 +66,16 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.3.5
+## What's New — v1.3.7
 
-- feat: implement session title generation and update session management
-- chore: update scoop bucket to v1.3.1
+- refactor: update ManagedSessionSummary structure to remove path field
+- feat: add pricing and analysis models for NOKK-CHAT
+- feat: implement project-level configuration management
+- feat: add WebSocket support for session permissions and Git diff endpoint
+- feat: add plugin and MCP server management routes
+- feat: add image and document support in input content blocks
+- chore: update scoop bucket to v1.3.5
+- feat: implement session management and authentication features
 
 ---
 
