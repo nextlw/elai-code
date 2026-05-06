@@ -98,6 +98,7 @@ pub async fn stream_events(
     let s = stream! {
         loop {
             match receiver.recv().await {
+                Ok(text) if text == "__done__" => break,
                 Ok(text) => {
                     yield Ok::<Event, Infallible>(
                         Event::default().event("text_delta").data(
@@ -184,16 +185,20 @@ async fn generate_ai_response(
     };
 
     let mut full_text = String::new();
-    let mut buf = String::new();
+    let mut raw_buf: Vec<u8> = Vec::new();
     let mut response = response;
 
-    while let Ok(Some(chunk)) = response.chunk().await {
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(nl) = buf.find('\n') {
-            let line = buf[..nl].trim().to_string();
-            buf = buf[nl + 1..].to_string();
+    'outer: while let Ok(Some(chunk)) = response.chunk().await {
+        raw_buf.extend_from_slice(&chunk);
+        while let Some(pos) = raw_buf.iter().position(|&b| b == b'\n') {
+            let line_bytes = raw_buf.drain(..=pos).collect::<Vec<u8>>();
+            let line = match String::from_utf8(line_bytes) {
+                Ok(s) => s,
+                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+            };
+            let line = line.trim();
             let Some(data) = line.strip_prefix("data: ") else { continue };
-            if data == "[DONE]" { break }
+            if data == "[DONE]" { break 'outer; }
             let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else { continue };
             if let Some(text) = val["choices"][0]["delta"]["content"].as_str() {
                 if !text.is_empty() {
