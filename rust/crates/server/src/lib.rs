@@ -28,6 +28,37 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/health", get(routes::health::health))
         .with_state(state.clone());
 
+    let saas = Router::new()
+        .route(
+            "/v1/me",
+            get(routes::me::get_me).patch(routes::me::patch_me),
+        )
+        .route(
+            "/v1/conversations",
+            post(routes::conversations::create).get(routes::conversations::list),
+        )
+        .route(
+            "/v1/conversations/{id}",
+            delete(routes::conversations::delete),
+        )
+        .route(
+            "/v1/conversations/{id}/messages",
+            get(routes::messages::get_messages).post(routes::messages::send_message),
+        )
+        .route(
+            "/v1/conversations/{id}/events",
+            get(routes::messages::stream_events),
+        )
+        .layer(from_fn_with_state(
+            state.clone(),
+            auth::middleware::require_auth,
+        ))
+        .with_state(state.clone());
+
+    let webhooks = Router::new()
+        .route("/webhooks/clerk", post(routes::webhooks::handle))
+        .with_state(state.clone());
+
     let protected = Router::new()
         .route("/v1/version", get(routes::health::version))
         .route(
@@ -306,5 +337,5 @@ pub fn app(state: AppState) -> Router {
         ))
         .with_state(state);
 
-    public.merge(protected).layer(cors)
+    public.merge(webhooks).merge(saas).merge(protected).layer(cors)
 }

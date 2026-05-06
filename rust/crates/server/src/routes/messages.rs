@@ -98,7 +98,10 @@ pub async fn stream_events(
     let s = stream! {
         loop {
             match receiver.recv().await {
-                Ok(text) if text == "__done__" => break,
+                Ok(text) if text == "__done__" => {
+                    yield Ok::<Event, Infallible>(Event::default().event("done").data("{}"));
+                    break;
+                }
                 Ok(text) => {
                     yield Ok::<Event, Infallible>(
                         Event::default().event("text_delta").data(
