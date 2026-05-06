@@ -3,7 +3,7 @@ use std::sync::Arc;
 use runtime::{PermissionMode, PermissionPromptDecision, PermissionPrompter, PermissionRequest};
 use tokio::sync::oneshot;
 
-use crate::db::{PendingPermission, PermissionDecisionPayload, SessionData};
+use crate::session_store::{PendingPermission, PermissionDecisionPayload, SessionData};
 use crate::streaming::ServerEvent;
 
 /// Sync prompter that emits an SSE `permission_request` event and blocks waiting

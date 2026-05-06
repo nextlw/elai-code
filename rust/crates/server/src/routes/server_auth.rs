@@ -272,7 +272,7 @@ pub async fn oauth_start(
 
             // Persist pending OAuth state for callback validation
             {
-                let created_at = crate::db::now_millis();
+                let created_at = crate::session_store::now_millis();
                 let pending = crate::state::OAuthPendingState {
                     pkce,
                     redirect_uri,
@@ -366,7 +366,7 @@ pub async fn oauth_callback(
         .to_string();
     let refresh_token = token_data["refresh_token"].as_str().map(str::to_string);
     let expires_in = token_data["expires_in"].as_u64();
-    let expires_at = expires_in.map(|secs| crate::db::now_millis() / 1000 + secs);
+    let expires_at = expires_in.map(|secs| crate::session_store::now_millis() / 1000 + secs);
 
     let token_set = runtime::OAuthTokenSet {
         access_token,
@@ -444,7 +444,7 @@ pub async fn oauth_refresh(
         .to_string();
     let new_refresh = token_data["refresh_token"].as_str().map(str::to_string);
     let expires_in = token_data["expires_in"].as_u64();
-    let expires_at = expires_in.map(|secs| crate::db::now_millis() / 1000 + secs);
+    let expires_at = expires_in.map(|secs| crate::session_store::now_millis() / 1000 + secs);
 
     let new_token_set = runtime::OAuthTokenSet {
         access_token,

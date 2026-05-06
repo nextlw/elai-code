@@ -5,7 +5,7 @@ use runtime::{McpServerManager, ResponseCache};
 use tokio::sync::Mutex;
 
 use crate::auth::AuthState;
-use crate::db::SessionStore;
+use crate::session_store::SessionStore;
 
 /// OAuth PKCE state stored between /oauth/start and /oauth/callback.
 pub struct OAuthPendingState {

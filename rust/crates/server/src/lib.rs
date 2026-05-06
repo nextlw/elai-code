@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod db;
 pub mod permission_bridge;
+pub mod session_store;
 pub mod routes;
 pub mod runtime_bridge;
 pub mod state;
