@@ -2211,11 +2211,11 @@ fn run_tui_repl(
     }
 
     // Load recent sessions for the side panel.
-    let recent_sessions: Vec<(String, usize)> = list_managed_sessions()
+    let recent_sessions: Vec<(String, Option<String>, usize)> = list_managed_sessions()
         .unwrap_or_default()
         .into_iter()
         .take(5)
-        .map(|s| (s.id, s.message_count))
+        .map(|s| (s.id, s.title, s.message_count))
         .collect();
 
     let session_handle = create_managed_session_handle()?;
@@ -3715,6 +3715,7 @@ struct SessionHandle {
 #[derive(Debug, Clone)]
 struct ManagedSessionSummary {
     id: String,
+    title: Option<String>,
     path: PathBuf,
     modified_epoch_secs: u64,
     message_count: usize,
@@ -4342,7 +4343,9 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
     }
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.runtime.session().save_to_path(&self.session.path)?;
+        let mut session = self.runtime.session().clone();
+        session.auto_title();
+        session.save_to_path(&self.session.path)?;
         Ok(())
     }
 
@@ -4963,8 +4966,8 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
-        let message_count = Session::load_from_path(&path)
-            .map(|session| session.messages.len())
+        let (message_count, title) = Session::load_from_path(&path)
+            .map(|session| (session.messages.len(), session.title))
             .unwrap_or_default();
         let id = path
             .file_stem()
@@ -4973,6 +4976,7 @@ fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, Box<dyn std::er
             .to_string();
         sessions.push(ManagedSessionSummary {
             id,
+            title,
             path,
             modified_epoch_secs,
             message_count,
@@ -4998,12 +5002,16 @@ fn render_session_list(active_session_id: &str) -> Result<String, Box<dyn std::e
         } else {
             "○ saved"
         };
+        let display_name = session
+            .title
+            .as_deref()
+            .unwrap_or(&session.id);
         lines.push(format!(
-            "  {id:<20} {marker:<10} msgs={msgs:<4} modified={modified} path={path}",
+            "  {name:<30} {marker:<10} msgs={msgs:<4} modified={modified} id={id}",
+            name = display_name,
             id = session.id,
             msgs = session.message_count,
             modified = session.modified_epoch_secs,
-            path = session.path.display(),
         ));
     }
     Ok(lines.join("\n"))
@@ -7593,6 +7601,74 @@ impl CliToolExecutor {
             Err(_) => {
                 if let Some(ref tx_sender) = self.tui_sender {
                     let _ = tx_sender.send(tui::TuiMsg::ToolResult { ok: false });
+                }
+            }
+        }
+
+        // Envia o diff da alteração para o chat (sempre, em todos os modos).
+        if tool_ok
+            && matches!(
+                tool_name,
+                "edit_file" | "write_file" | "Edit" | "Write"
+            )
+        {
+            let after_content = if path.is_empty() {
+                String::new()
+            } else {
+                std::fs::read_to_string(&path).unwrap_or_default()
+            };
+            let before_content =
+                String::from_utf8_lossy(before_bytes.as_deref().unwrap_or_default());
+            let hunks = crate::diff::compute_diff(&before_content, &after_content, 3);
+            if !hunks.is_empty() {
+                if let Some(ref sender) = self.tui_sender {
+                    let _ = sender.send(tui::TuiMsg::ToolDiff {
+                        path: path.clone(),
+                        hunks,
+                    });
+                }
+            }
+        }
+
+        // Envia resumo truncado do output de grep/glob para o chat.
+        if tool_ok && matches!(tool_name, "grep_search" | "glob_search" | "GrepSearch" | "GlobSearch") {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(input) {
+                if let Some(ref sender) = self.tui_sender {
+                    let summary = match tool_name {
+                        "grep_search" | "GrepSearch" => {
+                            let num_matches = parsed.get("numMatches").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let num_files = parsed.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let content = parsed.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                            let filenames = parsed.get("filenames")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str()).take(5).collect::<Vec<_>>().join("\n"))
+                                .unwrap_or_default();
+                            let content_lines: Vec<_> = content.lines().take(5).collect();
+                            let mut summary_parts = vec![format!("grep_search: {num_matches} matches across {num_files} files")];
+                            if !content_lines.is_empty() {
+                                summary_parts.push(content_lines.join("\n"));
+                            } else if !filenames.is_empty() {
+                                summary_parts.push(filenames);
+                            }
+                            summary_parts.join("\n")
+                        }
+                        "glob_search" | "GlobSearch" => {
+                            let num_files = parsed.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let filenames = parsed.get("filenames")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str()).take(5).collect::<Vec<_>>().join("\n"))
+                                .unwrap_or_default();
+                            let mut summary_parts = vec![format!("glob_search: {num_files} files found")];
+                            if !filenames.is_empty() {
+                                summary_parts.push(filenames);
+                            }
+                            summary_parts.join("\n")
+                        }
+                        _ => String::new(),
+                    };
+                    if !summary.is_empty() {
+                        let _ = sender.send(tui::TuiMsg::ToolOutputSummary { summary });
+                    }
                 }
             }
         }

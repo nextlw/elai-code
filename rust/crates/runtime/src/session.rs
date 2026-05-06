@@ -8,6 +8,105 @@ use serde::{Deserialize, Serialize};
 use crate::json::{JsonError, JsonValue};
 use crate::usage::TokenUsage;
 
+/// Gera um título curto e legível a partir do texto da primeira mensagem do usuário.
+///
+/// Regras:
+/// - Pega o texto bruto da primeira mensagem com `role == User`.
+/// - Remove prefixos comuns de comandos (`/`, `.`) e interjeições.
+/// - Trunca em palavra completa até `max_len` (padrão 40).
+/// - Capitaliza a primeira letra.
+/// - Retorna `None` se não houver mensagem de usuário ou o texto for vazio.
+#[must_use]
+pub fn generate_session_title(session: &Session, max_len: usize) -> Option<String> {
+    let first_user_text = session
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::User)
+        .and_then(|m| m.blocks.iter().find_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        }))?;
+
+    let trimmed = first_user_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Remove prefixos comuns de comandos e interjeições
+    let without_prefix = trimmed
+        .trim_start_matches('/')
+        .trim_start_matches('.')
+        .trim_start();
+
+    // Remove interjeições iniciais comuns (case-insensitive), char-based
+    let cleaned = strip_prefix_ci_chars(without_prefix, "hey ")
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "hi "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "hello "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "ok "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "so "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "please "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "can you "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "could you "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "i need "))
+        .or_else(|| strip_prefix_ci_chars(without_prefix, "i want "))
+        .unwrap_or(without_prefix);
+
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    // Trunca em palavra completa até max_len
+    let truncated = if cleaned.chars().count() <= max_len {
+        cleaned.to_string()
+    } else {
+        let mut result = String::new();
+        let mut count = 0;
+        for word in cleaned.split_whitespace() {
+            let word_len = word.chars().count();
+            let sep = if count > 0 { 1 } else { 0 };
+            if count + sep + word_len > max_len {
+                break;
+            }
+            if !result.is_empty() {
+                result.push(' ');
+            }
+            result.push_str(word);
+            count += sep + word_len;
+        }
+        result
+    };
+
+    if truncated.is_empty() {
+        return None;
+    }
+
+    // Capitaliza a primeira letra
+    let mut chars = truncated.chars();
+    let first = chars.next()?;
+    Some(format!("{}{}", first.to_uppercase(), chars.as_str()))
+}
+
+/// `strip_prefix` case-insensitive baseado em caracteres (não bytes), evitando
+/// problemas com UTF-8 multi-byte.
+fn strip_prefix_ci_chars<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let prefix_chars: Vec<char> = prefix.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    if text_chars.len() < prefix_chars.len() {
+        return None;
+    }
+    let head_matches = text_chars
+        .iter()
+        .zip(prefix_chars.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b));
+    if !head_matches {
+        return None;
+    }
+    // Reconstrói a substring a partir da contagem de caracteres do prefixo
+    let skip_bytes: usize = prefix.chars().map(char::len_utf8).sum();
+    Some(&text[skip_bytes..])
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
@@ -49,6 +148,8 @@ pub struct ConversationMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
     pub version: u32,
+    /// Título humano-legível da sessão, gerado a partir da primeira mensagem do usuário.
+    pub title: Option<String>,
     pub messages: Vec<ConversationMessage>,
 }
 
@@ -88,7 +189,16 @@ impl Session {
     pub fn new() -> Self {
         Self {
             version: 1,
+            title: None,
             messages: Vec::new(),
+        }
+    }
+
+    /// Atualiza o título da sessão com base na primeira mensagem do usuário,
+    /// mas apenas se ainda não tiver um título definido.
+    pub fn auto_title(&mut self) {
+        if self.title.is_none() {
+            self.title = generate_session_title(self, 40);
         }
     }
 
@@ -109,6 +219,12 @@ impl Session {
             "version".to_string(),
             JsonValue::Number(i64::from(self.version)),
         );
+        if let Some(ref title) = self.title {
+            object.insert(
+                "title".to_string(),
+                JsonValue::String(title.clone()),
+            );
+        }
         object.insert(
             "messages".to_string(),
             JsonValue::Array(
@@ -131,6 +247,10 @@ impl Session {
             .ok_or_else(|| SessionError::Format("missing version".to_string()))?;
         let version = u32::try_from(version)
             .map_err(|_| SessionError::Format("version out of range".to_string()))?;
+        let title = object
+            .get("title")
+            .and_then(JsonValue::as_str)
+            .map(String::from);
         let messages = object
             .get("messages")
             .and_then(JsonValue::as_array)
@@ -138,7 +258,7 @@ impl Session {
             .iter()
             .map(ConversationMessage::from_json)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { version, messages })
+        Ok(Self { version, title, messages })
     }
 }
 
@@ -392,7 +512,7 @@ fn required_u32(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u32, 
 
 #[cfg(test)]
 mod tests {
-    use super::{ContentBlock, ConversationMessage, MessageRole, Session};
+    use super::{generate_session_title, ContentBlock, ConversationMessage, MessageRole, Session};
     use crate::usage::TokenUsage;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -442,5 +562,71 @@ mod tests {
             restored.messages[1].usage.expect("usage").total_tokens(),
             17
         );
+    }
+
+    #[test]
+    fn generate_title_from_first_user_message() {
+        let mut session = Session::new();
+        session.messages.push(ConversationMessage::user_text(
+            "como faço para implementar autenticação JWT?",
+        ));
+        session.auto_title();
+        assert_eq!(
+            session.title,
+            Some("Como faço para implementar autenticação".to_string())
+        );
+    }
+
+    #[test]
+    fn generate_title_removes_common_prefixes() {
+        let mut session = Session::new();
+        session.messages.push(ConversationMessage::user_text(
+            "hey can you help me refactor the parser code?",
+        ));
+        session.auto_title();
+        assert_eq!(
+            session.title,
+            Some("Can you help me refactor the parser".to_string())
+        );
+    }
+
+    #[test]
+    fn generate_title_handles_slash_commands() {
+        let mut session = Session::new();
+        session.messages.push(ConversationMessage::user_text(
+            "/diff mostra as diferenças entre os branches",
+        ));
+        session.auto_title();
+        assert_eq!(
+            session.title,
+            Some("Diff mostra as diferenças entre os".to_string())
+        );
+    }
+
+    #[test]
+    fn generate_title_truncates_at_word_boundary() {
+        let mut session = Session::new();
+        session.messages.push(ConversationMessage::user_text(
+            "esta é uma mensagem extremamente longa que precisa ser truncada corretamente em limite de palavra",
+        ));
+        session.auto_title();
+        let title = session.title.expect("should have title");
+        assert!(title.chars().count() <= 40, "title should be <= 40 chars");
+        assert!(!title.ends_with(' '));
+    }
+
+    #[test]
+    fn generate_title_returns_none_for_empty_session() {
+        let session = Session::new();
+        assert_eq!(generate_session_title(&session, 40), None);
+    }
+
+    #[test]
+    fn auto_title_does_not_override_existing() {
+        let mut session = Session::new();
+        session.title = Some("Custom Title".to_string());
+        session.messages.push(ConversationMessage::user_text("hello world"));
+        session.auto_title();
+        assert_eq!(session.title, Some("Custom Title".to_string()));
     }
 }

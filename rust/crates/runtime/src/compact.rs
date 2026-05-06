@@ -248,6 +248,7 @@ where
             formatted_summary,
             compacted_session: Session {
                 version: session.version,
+                title: session.title.clone(),
                 messages: compacted_messages,
             },
             removed_message_count: removed.len(),
@@ -829,6 +830,7 @@ mod tests {
     fn leaves_small_sessions_unchanged() {
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![ConversationMessage::user_text("hello")],
         };
 
@@ -843,6 +845,7 @@ mod tests {
     fn compacts_older_messages_into_a_system_summary() {
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("one ".repeat(200)),
                 ConversationMessage::assistant(vec![ContentBlock::Text {
@@ -894,6 +897,7 @@ mod tests {
     fn keeps_previous_compacted_context_when_compacting_again() {
         let initial_session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("Investigate rust/crates/runtime/src/compact.rs"),
                 ConversationMessage::assistant(vec![ContentBlock::Text {
@@ -924,6 +928,7 @@ mod tests {
         let second = compact_session(
             &Session {
                 version: 1,
+                title: None,
                 messages: follow_up_messages,
             },
             config,
@@ -958,6 +963,7 @@ mod tests {
         let summary = "<summary>Conversation summary:\n- Scope: earlier work preserved.\n- Key timeline:\n  - user: large preserved context\n</summary>";
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage {
                     role: MessageRole::System,
@@ -1025,6 +1031,7 @@ mod tests {
         // The fix must push keep_from to 3 (after the pair ends at index 2).
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("hello ".repeat(400)),
                 ConversationMessage::assistant(vec![ContentBlock::ToolUse {
@@ -1060,6 +1067,7 @@ mod tests {
         // preserve=0 → keep entire tail → safe cut removes both messages as one round.
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                     id: "t1".to_string(),
@@ -1088,6 +1096,7 @@ mod tests {
         // Should compact exactly as before the boundary-aware fix.
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("msg1 ".repeat(200)),
                 ConversationMessage::assistant(vec![ContentBlock::Text {
@@ -1124,6 +1133,7 @@ mod tests {
         // The pair is indivisible.
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("start ".repeat(300)),
                 ConversationMessage::assistant(vec![
@@ -1219,6 +1229,7 @@ mod tests {
     fn should_compact_triggers_for_few_huge_messages() {
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![
                 ConversationMessage::user_text("x".repeat(50_000)),
                 ConversationMessage::user_text("y".repeat(50_000)),

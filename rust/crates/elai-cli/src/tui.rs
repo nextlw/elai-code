@@ -139,6 +139,15 @@ pub enum TuiMsg {
         attempt: u8,
         max_attempts: u8,
     },
+    /// Diff de uma tool de modificação de arquivo (edit_file/write_file).
+    /// Enviado sempre em modo SWD partial (e full) para mostrar o que mudou.
+    ToolDiff {
+        path: String,
+        hunks: Vec<crate::diff::DiffHunk>,
+    },
+    /// Resumo truncado do output de tools como grep_search/glob_search (máx 5 linhas).
+    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    ToolOutputSummary { summary: String },
     SwdDiffPreview {
         actions: Vec<(String, Vec<crate::diff::DiffHunk>)>,
         reply_tx: std::sync::mpsc::SyncSender<bool>,
@@ -234,6 +243,15 @@ pub enum ChatEntry {
         attempt: u8,
         max_attempts: u8,
     },
+    /// Diff de tool de modificação de arquivo (edit_file/write_file).
+    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    ToolDiff {
+        path: String,
+        hunks: Vec<crate::diff::DiffHunk>,
+    },
+    /// Resumo truncado do output de tools como grep_search/glob_search (máx 5 linhas).
+    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    ToolOutputSummary { summary: String },
     SwdDiffEntry {
         path: String,
         hunks: Vec<crate::diff::DiffHunk>,
@@ -282,7 +300,7 @@ pub enum OverlayKind {
         anchor_pos: usize,  // posição do `@` no input (em chars, não bytes)
     },
     SessionPicker {
-        items: Vec<(String, usize)>,
+        items: Vec<(String, Option<String>, usize)>,
         selected: usize,
     },
     ScriptPicker {
@@ -636,7 +654,7 @@ pub struct UiApp {
     pub output_tokens: u32,
     #[allow(dead_code)]
     pub cost_usd: f64,
-    pub recent_sessions: Vec<(String, usize)>,
+    pub recent_sessions: Vec<(String, Option<String>, usize)>,
     pub indexed_paths: Vec<String>, // cache lazy de `.elai/index/metadata.json` ou re-walk
     pub should_quit: bool,
     /// Quando `true`, o próximo `render` força `terminal.clear()` antes do
@@ -678,6 +696,15 @@ pub struct UiApp {
     pub pending_outgoing: Option<String>,
     /// `true` se a mensagem atual contém a keyword `ultrathink`.
     pub ultrathink_active: bool,
+    /// Contador sequencial de pastes longos (≥3 linhas) — gera o `#N` exibido
+    /// no placeholder `[Pasted text #N +M lines]` no input. Nunca é decrementado
+    /// para que histórico (↑) e mensagens enfileiradas continuem expandindo
+    /// corretamente após múltiplos envios.
+    pub paste_counter: u32,
+    /// Conteúdo real de cada paste longo, indexado pelo seu `#N`. Mantido pela
+    /// sessão inteira para que placeholders em mensagens enfileiradas, no
+    /// histórico e re-editadas continuem expansíveis.
+    pub pasted_contents: std::collections::HashMap<u32, String>,
 }
 
 /// Spinner de "rosto pensando" com timing orgânico.
@@ -778,7 +805,7 @@ impl UiApp {
         model: String,
         permission_mode: String,
         session_id: String,
-        recent_sessions: Vec<(String, usize)>,
+        recent_sessions: Vec<(String, Option<String>, usize)>,
         swd_level: Arc<AtomicU8>,
     ) -> Self {
         let mouse_capture_enabled = env::var("ELAI_TUI_MOUSE_CAPTURE")
@@ -825,6 +852,8 @@ impl UiApp {
             message_queue: std::collections::VecDeque::new(),
             pending_outgoing: None,
             ultrathink_active: false,
+            paste_counter: 0,
+            pasted_contents: std::collections::HashMap::new(),
         }
         .with_shuffled_tips()
     }
@@ -1073,6 +1102,12 @@ impl UiApp {
                     attempt,
                     max_attempts,
                 });
+            }
+            TuiMsg::ToolDiff { path, hunks } => {
+                self.push_chat(ChatEntry::ToolDiff { path, hunks });
+            }
+            TuiMsg::ToolOutputSummary { summary } => {
+                self.push_chat(ChatEntry::ToolOutputSummary { summary });
             }
             TuiMsg::SwdDiffPreview { actions, reply_tx } => {
                 let action_count = actions.len();
@@ -1673,6 +1708,53 @@ pub fn leave_tui(stdout: &mut impl io::Write) -> io::Result<()> {
 
 // ─── Main TUI loop ────────────────────────────────────────────────────────────
 
+/// Expande placeholders `[Pasted text #N +M lines]` no `text` substituindo
+/// pelo conteúdo original guardado em `map`. Placeholders cujo `#N` não esteja
+/// no mapa, ou que estejam malformados (ex.: usuário editou no meio), são
+/// preservados literalmente. Operação O(n) sem regex.
+pub fn expand_paste_placeholders(
+    text: &str,
+    map: &std::collections::HashMap<u32, String>,
+) -> String {
+    const PREFIX: &str = "[Pasted text #";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(PREFIX) {
+        out.push_str(&rest[..pos]);
+        let after_prefix = &rest[pos + PREFIX.len()..];
+        // Tenta parsear `<digits> +<digits> lines]`; se não casar, copia o
+        // PREFIX literal e segue do próximo char para tentar de novo.
+        let (parsed_n, after_n) = take_u32(after_prefix);
+        if let Some(n) = parsed_n {
+            if let Some(after_sep) = after_n.strip_prefix(" +") {
+                let (parsed_m, after_m) = take_u32(after_sep);
+                if parsed_m.is_some() {
+                    if let Some(after_close) = after_m.strip_prefix(" lines]") {
+                        if let Some(content) = map.get(&n) {
+                            out.push_str(content);
+                            rest = after_close;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        out.push_str(PREFIX);
+        rest = after_prefix;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn take_u32(s: &str) -> (Option<u32>, &str) {
+    let end = s.bytes().take_while(u8::is_ascii_digit).count();
+    if end == 0 {
+        (None, s)
+    } else {
+        (s[..end].parse::<u32>().ok(), &s[end..])
+    }
+}
+
 /// Result returned when the user submits input or picks an action inside the TUI.
 pub enum TuiAction {
     SendMessage(String),
@@ -1775,52 +1857,98 @@ pub fn poll_and_handle(
             if app.read_mode {
                 return TuiAction::None;
             }
-            // Bracketed paste: aceita no campo principal e no modal de auth.
+            // Bracketed paste: aceita no campo principal e nos modais com campo
+            // de texto (auth secret e deep-research key).
             // No auth token removemos quebras de linha e espaços extras de borda.
-            if let Some(OverlayKind::AuthPicker {
-                step:
-                    AuthStep::PasteSecret {
-                        method,
-                        input,
-                        cursor,
-                        masked,
-                    },
-            }) = app.overlay.take()
-            {
-                let mut input = input;
-                let mut cursor = cursor;
-                let cleaned = pasted
-                    .replace("\r\n", "\n")
-                    .replace('\r', "\n")
-                    .replace('\n', "")
-                    .trim()
-                    .to_string();
-                if !cleaned.is_empty() {
-                    let idx = input
-                        .char_indices()
-                        .nth(cursor)
-                        .map_or(input.len(), |(i, _)| i);
-                    input.insert_str(idx, &cleaned);
-                    cursor += cleaned.chars().count();
+            match app.overlay.take() {
+                Some(OverlayKind::AuthPicker {
+                    step:
+                        AuthStep::PasteSecret {
+                            method,
+                            input,
+                            cursor,
+                            masked,
+                        },
+                }) => {
+                    let mut input = input;
+                    let mut cursor = cursor;
+                    let cleaned = pasted
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                        .replace('\n', "")
+                        .trim()
+                        .to_string();
+                    if !cleaned.is_empty() {
+                        let idx = input
+                            .char_indices()
+                            .nth(cursor)
+                            .map_or(input.len(), |(i, _)| i);
+                        input.insert_str(idx, &cleaned);
+                        cursor += cleaned.chars().count();
+                    }
+                    app.overlay = Some(OverlayKind::AuthPicker {
+                        step: AuthStep::PasteSecret {
+                            method,
+                            input,
+                            cursor,
+                            masked,
+                        },
+                    });
+                    return TuiAction::None;
                 }
-                app.overlay = Some(OverlayKind::AuthPicker {
-                    step: AuthStep::PasteSecret {
-                        method,
-                        input,
-                        cursor,
-                        masked,
-                    },
-                });
-                return TuiAction::None;
-            }
-            if app.overlay.is_some() {
-                return TuiAction::None;
+                Some(OverlayKind::DeepResearchKeyInput { mut input, mut cursor }) => {
+                    let cleaned = pasted
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                        .replace('\n', "")
+                        .trim()
+                        .to_string();
+                    if !cleaned.is_empty() {
+                        let idx = input
+                            .char_indices()
+                            .nth(cursor)
+                            .map_or(input.len(), |(i, _)| i);
+                        input.insert_str(idx, &cleaned);
+                        cursor += cleaned.chars().count();
+                    }
+                    app.overlay = Some(OverlayKind::DeepResearchKeyInput { input, cursor });
+                    return TuiAction::None;
+                }
+                Some(other) => {
+                    app.overlay = Some(other);
+                    return TuiAction::None;
+                }
+                None => {}
             }
             // Normaliza CRLF/CR para '\n' para manter consistência no editor multilinha.
             let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
-            for ch in normalized.chars() {
-                app.input_char(ch);
+            if normalized.is_empty() {
+                return TuiAction::None;
             }
+            // Pastes ≥3 linhas viram placeholder `[Pasted text #N +M lines]`
+            // (mesmo padrão do claude-code/opencode): mantém o input enxuto,
+            // evita custo de wrap/render em cada keystroke depois e o conteúdo
+            // real é guardado em `pasted_contents` para expansão no envio.
+            let line_count = normalized.lines().count().max(1);
+            let to_insert: String = if line_count >= 3 {
+                app.paste_counter += 1;
+                let n = app.paste_counter;
+                let placeholder = format!("[Pasted text #{n} +{line_count} lines]");
+                app.pasted_contents.insert(n, normalized);
+                placeholder
+            } else {
+                normalized
+            };
+            // `insert_str` em chamada única: `String::insert` char-a-char era
+            // O(n²) e travava o terminal antes de voltar ao `event::poll`.
+            let idx = app
+                .input
+                .char_indices()
+                .nth(app.cursor_col)
+                .map_or(app.input.len(), |(i, _)| i);
+            app.input.insert_str(idx, &to_insert);
+            app.cursor_col += to_insert.chars().count();
+            app.history_index = None;
             TuiAction::None
         }
 
@@ -1943,11 +2071,17 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
     match (key.modifiers, key.code) {
         // Submit
         (KeyModifiers::NONE, KeyCode::Enter) => {
-            let text = app.input.trim().to_string();
-            if text.is_empty() {
+            let raw = app.input.trim().to_string();
+            if raw.is_empty() {
                 return TuiAction::None;
             }
-            app.push_history(text.clone());
+            // Histórico guarda o input cru (com placeholder) — ↑ devolve a
+            // versão compacta exatamente como o usuário a viu.
+            app.push_history(raw.clone());
+            // O runtime e o chat recebem a versão expandida (com o conteúdo
+            // real dos pastes). Slash commands e /exit ficam pré-expansão
+            // porque nunca contêm placeholders.
+            let text = expand_paste_placeholders(&raw, &app.pasted_contents);
 
             // Se o runtime está processando, enfileira a mensagem para envio posterior.
             if app.thinking {
@@ -1960,22 +2094,22 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                 return TuiAction::None;
             }
 
-            if matches!(text.as_str(), "/exit" | "/quit") {
+            if matches!(raw.as_str(), "/exit" | "/quit") {
                 return TuiAction::Quit;
             }
 
             // Slash commands that open overlays.
-            if text == "/model" {
+            if raw == "/model" {
                 app.clear_input();
                 app.open_model_picker();
                 return TuiAction::None;
             }
-            if text == "/permissions" {
+            if raw == "/permissions" {
                 app.clear_input();
                 app.open_permission_picker();
                 return TuiAction::None;
             }
-            if text == "/session" {
+            if raw == "/session" {
                 app.clear_input();
                 app.open_session_picker();
                 return TuiAction::None;
@@ -1988,7 +2122,7 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
             app.ultrathink_active = crate::ultrathink::message_contains_ultrathink_keyword(&text);
 
             // Detect other slash commands.
-            if text.starts_with('/') {
+            if raw.starts_with('/') {
                 return TuiAction::SlashCommand(text);
             }
             TuiAction::SendMessage(text)
@@ -2514,7 +2648,7 @@ fn handle_overlay_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
                     app.overlay = Some(OverlayKind::SessionPicker { items, selected });
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
-                    if let Some((session_id, _)) = items.get(selected) {
+                    if let Some((session_id, _, _)) = items.get(selected) {
                         let s = session_id.clone();
                         app.overlay = None;
                         return TuiAction::ResumeSession(s);
@@ -4643,17 +4777,21 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
             muted,
         )));
     } else {
-        for (session_id, msg_count) in app.recent_sessions.iter().take(3) {
-            let short_id = session_id
-                .strip_prefix("session-")
-                .unwrap_or(session_id)
-                .chars()
-                .take(12)
-                .collect::<String>();
+        for (session_id, title, msg_count) in app.recent_sessions.iter().take(3) {
+            let display = if let Some(ref t) = title {
+                t.clone()
+            } else {
+                session_id
+                    .strip_prefix("session-")
+                    .unwrap_or(session_id)
+                    .chars()
+                    .take(12)
+                    .collect::<String>()
+            };
             let msgs_label =
                 rust_i18n::t!("tui.side_panel.session_msgs", count = msg_count.to_string());
             lines.push(Line::from(Span::styled(
-                format!("  • {short_id} ({msgs_label})"),
+                format!("  • {display} ({msgs_label})"),
                 muted,
             )));
         }
@@ -5610,6 +5748,25 @@ fn lines_for_chat_entry(app: &UiApp, entry: &ChatEntry, wrap_width: usize) -> Ve
             attempt,
             max_attempts,
         } => lines_for_correction_retry(*attempt, *max_attempts),
+        ChatEntry::ToolDiff { path, hunks } => {
+            lines_for_swd_diff(path.as_str(), hunks.as_slice())
+        }
+        ChatEntry::ToolOutputSummary { summary } => {
+            let mut lines = vec![Line::from(Span::styled(
+                "📄 Output: ".to_string(),
+                Style::default()
+                    .fg(theme().text_secondary)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            for ln in summary.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("   {}", ln),
+                    Style::default().fg(theme().text_secondary),
+                )));
+            }
+            lines.push(Line::from(""));
+            lines
+        }
         ChatEntry::SwdDiffEntry { path, hunks } => {
             lines_for_swd_diff(path.as_str(), hunks.as_slice())
         }
@@ -6039,9 +6196,14 @@ fn draw_overlay(frame: &mut ratatui::Frame, area: Rect, overlay: &OverlayKind, a
         OverlayKind::SessionPicker { items, selected } => {
             let labels: Vec<String> = items
                 .iter()
-                .map(|(id, count)| {
-                    let short = id.strip_prefix("session-").unwrap_or(id);
-                    format!("{short:<20} ({count} msgs)")
+                .map(|(id, title, count)| {
+                    let name = title.as_deref().unwrap_or(id);
+                    let short_id = id.strip_prefix("session-").unwrap_or(id);
+                    if title.is_some() {
+                        format!("{name:<24} ({count} msgs)")
+                    } else {
+                        format!("{short_id:<20} ({count} msgs)")
+                    }
                 })
                 .collect();
             draw_picker(

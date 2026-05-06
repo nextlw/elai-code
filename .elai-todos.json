@@ -1,0 +1,17 @@
+[
+  {
+    "content": "Gerar candidatos sonoros, curtos e fáceis de escrever",
+    "activeForm": "Gerando candidatos",
+    "status": "in_progress"
+  },
+  {
+    "content": "Validar inexistência via DeepResearch",
+    "activeForm": "Validando candidatos na web",
+    "status": "pending"
+  },
+  {
+    "content": "Apresentar shortlist final com justificativa",
+    "activeForm": "Apresentando shortlist",
+    "status": "pending"
+  }
+]

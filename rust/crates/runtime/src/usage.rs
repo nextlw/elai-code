@@ -330,6 +330,7 @@ mod tests {
     fn reconstructs_usage_from_session_messages() {
         let session = Session {
             version: 1,
+            title: None,
             messages: vec![ConversationMessage {
                 role: MessageRole::Assistant,
                 blocks: vec![ContentBlock::Text {

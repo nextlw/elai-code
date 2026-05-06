@@ -2728,6 +2728,7 @@ mod tests {
     fn compacts_sessions_via_slash_command() {
         let session = Session {
             version: 1,
+            title: Some("test".to_string()),
             messages: vec![
                 ConversationMessage::user_text("a ".repeat(200)),
                 ConversationMessage::assistant(vec![ContentBlock::Text {
