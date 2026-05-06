@@ -14,9 +14,6 @@ use tokio::sync::RwLock;
 
 use crate::auth::jwks::JwkSet;
 
-/// Shared error envelope returned by all auth failures.
-/// Once Task 9 promotes this to `crate::ErrorResponse`, replace the
-/// definition here with `use crate::ErrorResponse;`.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: String,
@@ -27,20 +24,6 @@ pub struct ClerkClaims {
     pub sub: String,
 }
 
-/// Axum middleware that validates a Clerk-issued RS256 JWT.
-///
-/// Reads the bearer token from:
-///   - `Authorization: Bearer <token>` header, or
-///   - `?token=<token>` query parameter (for EventSource clients that
-///     cannot set custom headers).
-///
-/// On success, inserts the resolved `db::user::User` into request
-/// extensions so downstream handlers can extract it via
-/// `Extension<db::user::User>`.
-///
-/// NOTE: `AppState.jwks` and `AppState.db` are added in Task 9.
-/// This function will not compile until that task completes.
-#[allow(dead_code)]
 pub async fn require_auth(
     State(state): State<crate::AppState>,
     mut req: Request<Body>,
@@ -49,13 +32,68 @@ pub async fn require_auth(
     let token = extract_bearer(&req)?;
     let clerk_id = verify_jwt(&token, &state.jwks).await?;
 
-    let user = crate::db::user::get_by_clerk_id(&state.db, &clerk_id)
-        .await
-        .map_err(|_| internal_error("db error"))?
-        .ok_or_else(|| unauthorized("user not found"))?;
+    let user = match crate::db::user::get_by_clerk_id(&state.db, &clerk_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            // Webhook não disparou ainda (dev local sem tunnel).
+            // Busca dados do usuário na Clerk API e cria o registro.
+            lazy_create_user(&state.db, &clerk_id, &state.clerk_api_secret)
+                .await
+                .ok_or_else(|| unauthorized("user not found and could not be created"))?
+        }
+        Err(_) => return Err(internal_error("db error")),
+    };
 
     req.extensions_mut().insert(user);
     Ok(next.run(req).await)
+}
+
+/// Busca dados do usuário na Clerk API e cria o registro local.
+/// Retorna None se a API key não estiver configurada ou a chamada falhar.
+async fn lazy_create_user(
+    pool: &crate::db::PgPool,
+    clerk_id: &str,
+    api_secret: &str,
+) -> Option<crate::db::user::User> {
+    if api_secret.is_empty() {
+        tracing::warn!(clerk_id, "lazy user creation skipped: CLERK_SECRET_KEY not set");
+        return None;
+    }
+
+    let url = format!("https://api.clerk.com/v1/users/{clerk_id}");
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {api_secret}"))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let email = body["email_addresses"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|e| e["email_address"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let first = body["first_name"].as_str();
+    let last  = body["last_name"].as_str();
+    let name  = match (first, last) {
+        (Some(f), Some(l)) => Some(format!("{f} {l}")),
+        (Some(f), None)    => Some(f.to_owned()),
+        (None,    Some(l)) => Some(l.to_owned()),
+        _                  => None,
+    };
+    let avatar = body["image_url"].as_str();
+
+    let user = crate::db::user::create(pool, clerk_id, &email, name.as_deref(), avatar)
+        .await
+        .ok()?;
+
+    tracing::info!(clerk_id, email, "lazy-created user on first login");
+    Some(user)
 }
 
 fn extract_bearer(req: &Request<Body>) -> Result<String, (StatusCode, Json<ErrorResponse>)> {

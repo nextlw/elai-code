@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         "CLERK_JWKS_URL must be set; copy rust/crates/server/.env.example to rust/crates/server/.env or export it",
     )?;
     let clerk_webhook_secret = std::env::var("CLERK_WEBHOOK_SECRET").unwrap_or_default();
+    let clerk_api_secret = std::env::var("CLERK_SECRET_KEY").unwrap_or_default();
     let model = std::env::var("ELAI_MODEL").unwrap_or_else(|_| "go:kimi-k2.6".to_string());
     let ai_base_url = std::env::var("AI_BASE_URL")
         .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
@@ -84,7 +85,7 @@ async fn main() -> Result<()> {
     }
     tracing::info!(model = %model, endpoint = %ai_base_url, "AI backend configured");
 
-    let state = AppState::new(token, mcp_manager, db_pool, jwk_set, clerk_webhook_secret);
+    let state = AppState::new(token, mcp_manager, db_pool, jwk_set, clerk_webhook_secret, clerk_api_secret);
     let app = server::app(state);
 
     let listener = TcpListener::bind(listen)

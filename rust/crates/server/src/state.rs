@@ -30,6 +30,9 @@ pub struct AppState {
     pub db: PgPool,
     pub jwks: Arc<RwLock<JwkSet>>,
     pub clerk_webhook_secret: String,
+    /// Clerk Backend API secret key — used to fetch user data on first login
+    /// when the webhook hasn't fired yet (e.g. local dev without a tunnel).
+    pub clerk_api_secret: String,
     conversation_channels: ConversationChannels,
 }
 
@@ -41,6 +44,7 @@ impl AppState {
         db: PgPool,
         jwks: JwkSet,
         clerk_webhook_secret: String,
+        clerk_api_secret: String,
     ) -> Self {
         Self {
             sessions: SessionStore::new(),
@@ -52,6 +56,7 @@ impl AppState {
             db,
             jwks: Arc::new(RwLock::new(jwks)),
             clerk_webhook_secret,
+            clerk_api_secret,
             conversation_channels: Arc::new(RwLock::new(HashMap::new())),
         }
     }
