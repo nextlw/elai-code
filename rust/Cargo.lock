@@ -4139,6 +4139,7 @@ dependencies = [
  "clap",
  "commands",
  "fastrand",
+ "plugins",
  "reqwest",
  "runtime",
  "serde",

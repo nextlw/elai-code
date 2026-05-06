@@ -10,8 +10,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
 use runtime::{
-    ContentBlock, ConversationMessage, ConversationRuntime, MessageRole, PermissionMode,
-    PermissionPolicy, TurnSummary,
+    compact_session, CompactionConfig, ContentBlock, ConversationMessage, ConversationRuntime,
+    MessageRole, PermissionMode, PermissionPolicy, TurnSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -629,6 +629,172 @@ pub async fn decide_permission(
         "not_found",
         "permission request not found",
     ))
+}
+
+// ── clone / compact / export / resume ───────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct CloneSessionResponse {
+    pub session_id: String,
+    pub session: SessionSnapshot,
+}
+
+pub async fn clone_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<CloneSessionResponse>), ApiError> {
+    let source = state
+        .sessions
+        .get(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    let new_id = ulid::Ulid::new().to_string();
+    let (cwd, model, permission_mode, conversation) = {
+        let guard = source.runtime_state.lock().await;
+        (
+            source.cwd.clone(),
+            guard.model.clone(),
+            guard.permission_mode,
+            guard.conversation.clone(),
+        )
+    };
+
+    let new_session = Arc::new(crate::db::SessionData::new(
+        new_id.clone(),
+        cwd,
+        model,
+        permission_mode,
+    ));
+    {
+        let mut guard = new_session.runtime_state.lock().await;
+        guard.conversation = conversation;
+    }
+    state.sessions.insert(Arc::clone(&new_session)).await;
+
+    let snapshot = snapshot_for(&new_session).await;
+    Ok((
+        StatusCode::CREATED,
+        Json(CloneSessionResponse {
+            session_id: new_id,
+            session: snapshot,
+        }),
+    ))
+}
+
+#[derive(Debug, Serialize)]
+pub struct CompactSessionResponse {
+    pub status: String,
+    pub removed_message_count: usize,
+}
+
+pub async fn compact_session_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CompactSessionResponse>, ApiError> {
+    let session = state
+        .sessions
+        .get(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    let (conversation, model) = {
+        let guard = session.runtime_state.lock().await;
+        (guard.conversation.clone(), guard.model.clone())
+    };
+
+    let config = CompactionConfig::for_model(&model);
+    let result = compact_session(&conversation, config);
+
+    {
+        let mut guard = session.runtime_state.lock().await;
+        guard.conversation = result.compacted_session;
+    }
+
+    Ok(Json(CompactSessionResponse {
+        status: "ok".to_string(),
+        removed_message_count: result.removed_message_count,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    pub format: Option<String>,
+}
+
+pub async fn export_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<ExportQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = state
+        .sessions
+        .get(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    let messages = session.runtime_state.lock().await.conversation.messages.clone();
+    let format = query.format.unwrap_or_else(|| "json".to_string());
+
+    match format.as_str() {
+        "json" => {
+            let body = serde_json::to_string_pretty(&messages).unwrap_or_default();
+            Ok(axum::response::Response::builder()
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap())
+        }
+        "md" => {
+            let mut md = format!("# Session {}\n\n", id);
+            for msg in &messages {
+                let role = role_label(msg.role);
+                md.push_str(&format!("## {role}\n\n"));
+                for block in &msg.blocks {
+                    match block {
+                        ContentBlock::Text { text } if !text.is_empty() => {
+                            md.push_str(text);
+                            md.push_str("\n\n");
+                        }
+                        ContentBlock::Thinking { thinking } if !thinking.is_empty() => {
+                            md.push_str(&format!("*Thinking:* {thinking}\n\n"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(axum::response::Response::builder()
+                .header("content-type", "text/markdown; charset=utf-8")
+                .body(axum::body::Body::from(md))
+                .unwrap())
+        }
+        other => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_format",
+            format!("unsupported format: {other}; use json or md"),
+        )),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResumeSessionResponse {
+    pub status: String,
+    pub session_id: String,
+}
+
+pub async fn resume_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ResumeSessionResponse>, ApiError> {
+    state
+        .sessions
+        .get(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
+
+    Ok(Json(ResumeSessionResponse {
+        status: "ok".to_string(),
+        session_id: id,
+    }))
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

@@ -1,8 +1,15 @@
+pub mod cache;
 pub mod commands;
 pub mod config;
+pub mod config_full;
 pub mod git;
 pub mod health;
+pub mod mcp;
+pub mod plugins;
+pub mod server_auth;
 pub mod sessions;
+pub mod tasks;
 pub mod telemetry;
 pub mod tools;
+pub mod user_commands;
 pub mod workspace;
