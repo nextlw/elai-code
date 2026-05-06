@@ -56,37 +56,61 @@ pub struct ToolPatternRequest {
 pub async fn tools_allow(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(_payload): Json<ToolPatternRequest>,
+    Json(payload): Json<ToolPatternRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify session exists
-    state
+    let session = state
         .sessions
         .get(&id)
         .await
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    let mut state = session.runtime_state.lock().await;
+    for p in &payload.patterns {
+        if !state.allow_patterns.contains(p) {
+            state.allow_patterns.push(p.clone());
+        }
+    }
+    let current = state.allow_patterns.clone();
+    drop(state);
+    Ok(Json(serde_json::json!({ "status": "ok", "allow_patterns": current })))
 }
 
 pub async fn tools_deny(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(_payload): Json<ToolPatternRequest>,
+    Json(payload): Json<ToolPatternRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify session exists
-    state
+    let session = state
         .sessions
         .get(&id)
         .await
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "not_found", "session not found"))?;
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    let mut state = session.runtime_state.lock().await;
+    for p in &payload.patterns {
+        if !state.deny_patterns.contains(p) {
+            state.deny_patterns.push(p.clone());
+        }
+    }
+    let current = state.deny_patterns.clone();
+    drop(state);
+    Ok(Json(serde_json::json!({ "status": "ok", "deny_patterns": current })))
 }
 
 pub async fn tools_rate_limit() -> Json<serde_json::Value> {
-    // last_rejected() is available via runtime but RateLimiter is not exposed as a public singleton.
-    // Return stub with rejection info via existing runtime::last_rejected().
     let rejected = runtime::last_rejected();
+    let breakdown: Vec<serde_json::Value> = rejected
+        .iter()
+        .map(|r| {
+            let reason = match &r.reason {
+                runtime::RejectionReason::Disabled => "disabled",
+                runtime::RejectionReason::SkillIncompatible(_) => "skill_incompatible",
+                runtime::RejectionReason::UserFilter => "user_filter",
+                runtime::RejectionReason::BudgetCap => "budget_cap",
+            };
+            serde_json::json!({ "tool_id": r.id, "reason": reason })
+        })
+        .collect();
     Json(serde_json::json!({
-        "status": "not_implemented",
-        "last_rejected_count": rejected.len(),
+        "rejected_count": rejected.len(),
+        "rejected": breakdown,
     }))
 }

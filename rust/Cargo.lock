@@ -4146,6 +4146,7 @@ dependencies = [
  "axum 0.8.9",
  "chrono",
  "clap",
+ "code_index",
  "commands",
  "fastrand",
  "plugins",

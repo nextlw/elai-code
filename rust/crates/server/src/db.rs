@@ -69,6 +69,8 @@ pub struct RuntimeSessionState {
     pub model: String,
     pub permission_mode: PermissionMode,
     pub usage: TokenUsage,
+    pub allow_patterns: Vec<String>,
+    pub deny_patterns: Vec<String>,
 }
 
 pub struct PendingPermission {
@@ -102,6 +104,8 @@ impl SessionData {
                 model,
                 permission_mode,
                 usage: TokenUsage::default(),
+                allow_patterns: Vec::new(),
+                deny_patterns: Vec::new(),
             }),
             events,
             event_history: RwLock::new(Vec::new()),

@@ -245,7 +245,7 @@ pub struct OAuthStartResponse {
 }
 
 pub async fn oauth_start(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<OAuthStartRequest>,
 ) -> Result<Json<OAuthStartResponse>, ApiError> {
     match payload.provider.as_str() {
@@ -267,11 +267,23 @@ pub async fn oauth_start(
 
             let auth_request = OAuthAuthorizationRequest::from_config(
                 &oauth_config,
-                redirect_uri,
+                redirect_uri.clone(),
                 &state_token,
                 &pkce,
             );
             let authorization_url = auth_request.build_url();
+
+            // Persist pending OAuth state for callback validation
+            {
+                let created_at = crate::db::now_millis();
+                let pending = crate::state::OAuthPendingState {
+                    pkce,
+                    redirect_uri,
+                    provider: "anthropic".to_string(),
+                    created_at,
+                };
+                state.oauth_pending.lock().await.insert(state_token.clone(), pending);
+            }
 
             Ok(Json(OAuthStartResponse {
                 authorization_url,
@@ -301,7 +313,7 @@ pub struct OAuthCallbackResponse {
 }
 
 pub async fn oauth_callback(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     Query(query): Query<OAuthCallbackQuery>,
 ) -> Result<Json<OAuthCallbackResponse>, ApiError> {
     if let Some(error) = query.error {
@@ -311,20 +323,78 @@ pub async fn oauth_callback(
     let code = query.code.ok_or_else(|| {
         api_error(StatusCode::BAD_REQUEST, "missing_code", "missing code parameter")
     })?;
+    let state_token = query.state.ok_or_else(|| {
+        api_error(StatusCode::BAD_REQUEST, "missing_state", "missing state parameter")
+    })?;
 
-    // We have a code — in a full implementation we'd exchange it for a token.
-    // For now we store the code as a placeholder (stub) and return ok.
-    let _ = code;
+    // Recover pending PKCE state
+    let pending = state.oauth_pending.lock().await.remove(&state_token)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid_state", "unknown or expired OAuth state"))?;
 
-    Ok(Json(OAuthCallbackResponse {
-        status: "not_implemented".to_string(),
-    }))
+    // Build OAuth config for the provider
+    let oauth_config = match pending.provider.as_str() {
+        "anthropic" => runtime::AnthropicOAuthEndpoints::production()
+            .to_oauth_config(runtime::OAuthMode::ClaudeAi),
+        other => return Err(api_error(StatusCode::BAD_REQUEST, "unknown_provider",
+            format!("OAuth not supported for provider: {other}"))),
+    };
+
+    // Exchange code for token
+    let exchange = runtime::OAuthTokenExchangeRequest::from_config(
+        &oauth_config,
+        code,
+        state_token,
+        pending.pkce.verifier.clone(),
+        pending.redirect_uri.clone(),
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&oauth_config.token_url)
+        .form(&exchange.form_params())
+        .send()
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, "token_exchange_failed", e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(api_error(StatusCode::BAD_GATEWAY, "token_exchange_error", body));
+    }
+
+    let token_data: serde_json::Value = resp.json().await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, "token_parse_failed", e.to_string()))?;
+
+    let access_token = token_data["access_token"].as_str()
+        .ok_or_else(|| api_error(StatusCode::BAD_GATEWAY, "missing_access_token", "no access_token in response"))?
+        .to_string();
+    let refresh_token = token_data["refresh_token"].as_str().map(str::to_string);
+    let expires_in = token_data["expires_in"].as_u64();
+    let expires_at = expires_in.map(|secs| crate::db::now_millis() / 1000 + secs);
+
+    let token_set = runtime::OAuthTokenSet {
+        access_token,
+        refresh_token,
+        expires_at,
+        scopes: oauth_config.scopes.clone(),
+    };
+
+    runtime::save_oauth_credentials(&token_set)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "save_failed", e.to_string()))?;
+
+    let auth_method = runtime::AuthMethod::ClaudeAiOAuth {
+        token_set,
+        subscription: None,
+    };
+    runtime::save_auth_method(&auth_method)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "save_auth_failed", e.to_string()))?;
+
+    Ok(Json(OAuthCallbackResponse { status: "ok".to_string() }))
 }
 
 // ── POST /v1/auth/oauth/refresh ────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct OAuthRefreshRequest {
+pub struct OAuthRefreshPayload {
     pub provider: String,
 }
 
@@ -335,12 +405,61 @@ pub struct OAuthRefreshResponse {
 
 pub async fn oauth_refresh(
     _state: State<AppState>,
-    Json(_payload): Json<OAuthRefreshRequest>,
-) -> Json<OAuthRefreshResponse> {
-    // Refresh flow requires HTTP client to exchange tokens — stub.
-    Json(OAuthRefreshResponse {
-        status: "not_implemented".to_string(),
-    })
+    Json(payload): Json<OAuthRefreshPayload>,
+) -> Result<Json<OAuthRefreshResponse>, ApiError> {
+    let auth = runtime::load_auth_method()
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "load_failed", e.to_string()))?;
+
+    let (token_set, oauth_config) = match (&auth, payload.provider.as_str()) {
+        (Some(runtime::AuthMethod::ClaudeAiOAuth { token_set, .. }), "anthropic") => {
+            let cfg = runtime::AnthropicOAuthEndpoints::production()
+                .to_oauth_config(runtime::OAuthMode::ClaudeAi);
+            (token_set.clone(), cfg)
+        }
+        _ => return Err(api_error(StatusCode::BAD_REQUEST, "no_refresh_token",
+            "no OAuth credentials found for provider")),
+    };
+
+    let refresh_token = token_set.refresh_token.ok_or_else(|| {
+        api_error(StatusCode::BAD_REQUEST, "no_refresh_token", "no refresh token available")
+    })?;
+
+    let refresh_req = runtime::OAuthRefreshRequest::from_config(&oauth_config, refresh_token, None);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&oauth_config.token_url)
+        .form(&refresh_req.form_params())
+        .send()
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, "refresh_failed", e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(api_error(StatusCode::BAD_GATEWAY, "refresh_error", body));
+    }
+
+    let token_data: serde_json::Value = resp.json().await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, "token_parse_failed", e.to_string()))?;
+
+    let access_token = token_data["access_token"].as_str()
+        .ok_or_else(|| api_error(StatusCode::BAD_GATEWAY, "missing_access_token", "no access_token in response"))?
+        .to_string();
+    let new_refresh = token_data["refresh_token"].as_str().map(str::to_string);
+    let expires_in = token_data["expires_in"].as_u64();
+    let expires_at = expires_in.map(|secs| crate::db::now_millis() / 1000 + secs);
+
+    let new_token_set = runtime::OAuthTokenSet {
+        access_token,
+        refresh_token: new_refresh,
+        expires_at,
+        scopes: oauth_config.scopes.clone(),
+    };
+
+    runtime::save_oauth_credentials(&new_token_set)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, "save_failed", e.to_string()))?;
+
+    Ok(Json(OAuthRefreshResponse { status: "ok".to_string() }))
 }
 
 // ── POST /v1/auth/import/claude-code ──────────────────────────────────────

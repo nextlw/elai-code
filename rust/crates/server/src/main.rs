@@ -41,7 +41,16 @@ async fn main() -> Result<()> {
         tracing::info!(origin = %origin, "CORS origin (informational)");
     }
 
-    let state = AppState::new(token);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mcp_manager = {
+        let loader = runtime::ConfigLoader::default_for(&cwd);
+        match loader.load() {
+            Ok(config) => runtime::McpServerManager::from_runtime_config(&config),
+            Err(_) => runtime::McpServerManager::from_servers(&std::collections::BTreeMap::new()),
+        }
+    };
+
+    let state = AppState::new(token, mcp_manager);
     let app = server::app(state);
 
     let listener = TcpListener::bind(args.listen)

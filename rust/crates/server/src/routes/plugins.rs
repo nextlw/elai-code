@@ -1,12 +1,17 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use plugins::{PluginManager, PluginManagerConfig};
+use plugins::{PluginError, PluginManager, PluginManagerConfig};
 use runtime::{load_all_skills, validate_skills, ConfigLoader};
 use serde::Serialize;
 
-use crate::routes::sessions::ApiError;
+use crate::routes::sessions::{api_error, ApiError};
 use crate::state::AppState;
+
+struct NoopReporter;
+impl code_index::ProgressReporter for NoopReporter {
+    fn report(&self, _msg: &str) {}
+}
 
 // ── Response types ────────────────────────────────────────────────────────────
 
@@ -117,25 +122,45 @@ pub async fn list_plugins(_state: State<AppState>) -> Json<ListPluginsResponse> 
 
 pub async fn install_plugin(
     _state: State<AppState>,
-    Path(_name): Path<String>,
-) -> (StatusCode, Json<PluginActionResponse>) {
-    (
-        StatusCode::CREATED,
-        Json(PluginActionResponse { status: "not_implemented".to_string() }),
-    )
+    Path(name): Path<String>,
+) -> Result<(StatusCode, Json<PluginActionResponse>), ApiError> {
+    let config_home = resolve_config_home();
+    let manager_config = PluginManagerConfig::new(config_home);
+    let mut manager = PluginManager::new(manager_config);
+    let reporter = NoopReporter;
+    manager.install(&name, &reporter).map_err(|e| match e {
+        PluginError::NotFound(_) => api_error(StatusCode::NOT_FOUND, "not_found", e.to_string()),
+        _ => api_error(StatusCode::INTERNAL_SERVER_ERROR, "install_failed", e.to_string()),
+    })?;
+    Ok((StatusCode::CREATED, Json(PluginActionResponse { status: "ok".to_string() })))
 }
 
 pub async fn update_plugin(
     _state: State<AppState>,
-    Path(_name): Path<String>,
-) -> Json<PluginActionResponse> {
-    Json(PluginActionResponse { status: "not_implemented".to_string() })
+    Path(name): Path<String>,
+) -> Result<Json<PluginActionResponse>, ApiError> {
+    let config_home = resolve_config_home();
+    let manager_config = PluginManagerConfig::new(config_home);
+    let mut manager = PluginManager::new(manager_config);
+    let reporter = NoopReporter;
+    manager.update(&name, &reporter).map_err(|e| match e {
+        PluginError::NotFound(_) => api_error(StatusCode::NOT_FOUND, "not_found", e.to_string()),
+        _ => api_error(StatusCode::INTERNAL_SERVER_ERROR, "update_failed", e.to_string()),
+    })?;
+    Ok(Json(PluginActionResponse { status: "ok".to_string() }))
 }
 
 pub async fn uninstall_plugin(
     _state: State<AppState>,
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    let config_home = resolve_config_home();
+    let manager_config = PluginManagerConfig::new(config_home);
+    let mut manager = PluginManager::new(manager_config);
+    manager.uninstall(&name).map_err(|e| match e {
+        PluginError::NotFound(_) => api_error(StatusCode::NOT_FOUND, "not_found", e.to_string()),
+        _ => api_error(StatusCode::INTERNAL_SERVER_ERROR, "uninstall_failed", e.to_string()),
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -166,17 +191,33 @@ pub async fn validate_skills_route(_state: State<AppState>) -> Json<SkillValidat
 }
 
 pub async fn list_agents(_state: State<AppState>) -> Json<ListAgentsResponse> {
-    Json(ListAgentsResponse { agents: Vec::new() })
+    let config_home = resolve_config_home();
+    let manager_config = PluginManagerConfig::new(config_home);
+    let manager = PluginManager::new(manager_config);
+
+    let agents = match manager.list_plugins() {
+        Ok(summaries) => summaries
+            .into_iter()
+            .filter(|s| s.metadata.kind.to_string().to_lowercase().contains("agent"))
+            .map(|s| AgentInfo { name: s.metadata.name.clone() })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    Json(ListAgentsResponse { agents })
 }
 
 pub async fn run_agent(
     _state: State<AppState>,
     Path(_name): Path<String>,
     _body: Option<Json<serde_json::Value>>,
-) -> (StatusCode, Json<AgentRunResponse>) {
+) -> (StatusCode, Json<serde_json::Value>) {
     (
-        StatusCode::ACCEPTED,
-        Json(AgentRunResponse { status: "not_implemented".to_string() }),
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "not_implemented",
+            "message": "agent execution pipeline not wired in server runtime"
+        })),
     )
 }
 

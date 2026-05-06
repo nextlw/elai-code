@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::json::JsonValue;
@@ -488,6 +489,44 @@ pub fn default_config_home() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".elai")))
         .unwrap_or_else(|| PathBuf::from(".elai"))
+}
+
+/// Reads the project-level config file (`<cwd>/.elai/settings.json`), applies
+/// `mutator` to the parsed JSON object, then atomically writes it back.
+///
+/// Creates the file (and parent directory) if it does not exist.
+/// Errors if the existing file contains invalid JSON.
+pub fn write_project_config_json(
+    cwd: &Path,
+    mutator: impl FnOnce(&mut serde_json::Value),
+) -> io::Result<()> {
+    let config_dir = cwd.join(".elai");
+    let config_path = config_dir.join("settings.json");
+
+    fs::create_dir_all(&config_dir)?;
+
+    let mut root: serde_json::Value = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path)?;
+        serde_json::from_str(&raw).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid JSON in {}: {e}", config_path.display()),
+            )
+        })?
+    } else {
+        serde_json::Value::Object(serde_json::Map::new())
+    };
+
+    mutator(&mut root);
+
+    let tmp_path = config_path.with_extension("json.tmp");
+    let serialized = serde_json::to_string_pretty(&root).map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("serialize error: {e}"))
+    })?;
+    fs::write(&tmp_path, &serialized)?;
+    fs::rename(&tmp_path, &config_path)?;
+
+    Ok(())
 }
 
 impl RuntimeHookConfig {

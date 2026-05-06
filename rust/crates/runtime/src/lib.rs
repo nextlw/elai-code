@@ -69,7 +69,7 @@ pub use config::{
     McpSdkServerConfig, McpServerConfig, McpStdioServerConfig, McpTransport,
     McpWebSocketServerConfig, OAuthConfig, OAuthMode, ResolvedPermissionMode, RuntimeConfig,
     RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig,
-    ELAI_SETTINGS_SCHEMA_NAME,
+    ELAI_SETTINGS_SCHEMA_NAME, write_project_config_json,
 };
 pub use conversation::{
     error_indicates_context_limit, ApiClient, ApiRequest, AssistantEvent, ConversationRuntime,
