@@ -109,7 +109,7 @@ fn default_locale() -> String {
     "pt-BR".to_string()
 }
 fn default_model() -> String {
-    "claude-opus-4-7".to_string()
+    "minimax-m2.5-free".to_string()
 }
 fn default_perm_mode() -> String {
     "danger-full-access".to_string()
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn defaults_used_when_no_file() {
         let cfg = GlobalConfig::default();
-        assert_eq!(cfg.default_model, "claude-opus-4-7");
+        assert_eq!(cfg.default_model, "minimax-m2.5-free");
         assert!(!cfg.setup_complete);
     }
 

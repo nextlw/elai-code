@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elai Code — O Assistente de IA que Não Passa Seu Código pra Nuvem</title>
+    <meta name="description" content="IA local, instantânea, privativa. R$ 29,90/mês. Comparativo com Copilot.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #10b981;
+            --dark: #0f172a;
+            --light: #f8fafc;
+            --gray: #64748b;
+            --border: #e2e8f0;
+            --red: #ef4444;
+            --yellow: #f59e0b;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--light);
+            color: var(--dark);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        
+        /* HERO */
+        .hero {
+            background: linear-gradient(135deg, var(--dark) 0%, #1e293b 100%);
+            padding: 100px 0 80px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        
+        .hero-badge {
+            display: inline-block;
+            background: rgba(99, 102, 241, 0.2);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: #a5b4fc;
+            padding: 8px 16px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 24px;
+        }
+        
+        .hero h1 {
+            font-size: clamp(32px, 6vw, 56px);
+            font-weight: 800;
+            color: white;
+            margin-bottom: 20px;
+            line-height: 1.1;
+        }
+        
+        .hero h1 span {
+            background: linear-gradient(135deg, var(--primary) 0%, #a855f7 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero-subtitle {
+            font-size: clamp(18px, 3vw, 24px);
+            color: #94a3b8;
+            max-width: 700px;
+            margin: 0 auto 40px;
+        }
+        
+        .hero-cta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            justify-content: center;
+            margin-bottom: 40px;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 16px 32px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .hero-note {
+            color: #64748b;
+            font-size: 14px;
+        }
+        
+        .hero-note code {
+            background: rgba(99, 102, 241, 0.2);
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: #a5b4fc;
+        }
+        
+        /* PAIN POINTS */
+        .pain-points {
+            padding: 80px 0;
+            background: white;
+        }
+        
+        .section-label {
+            text-align: center;
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 16px;
+        }
+        
+        .section-title {
+            text-align: center;
+            font-size: clamp(28px, 4vw, 40px);
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+        
+        .section-subtitle {
+            text-align: center;
+            color: var(--gray);
+            font-size: 18px;
+            max-width: 600px;
+            margin: 0 auto 60px;
+        }
+        
+        .pain-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        
+        .pain-card {
+            background: var(--light);
+            padding: 32px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+        
+        .pain-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(99, 102, 241, 0.1);
+        }
+        
+        .pain-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .pain-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        
+        .pain-desc {
+            color: var(--gray);
+            font-size: 15px;
+        }
+        
+        /* COMPARISON */
+        .comparison {
+            padding: 80px 0;
+            background: var(--dark);
+            color: white;
+        }
+        
+        .comparison .section-title,
+        .comparison .section-subtitle {
+            color: white;
+        }
+        
+        .comparison .section-subtitle {
+            color: #94a3b8;
+        }
+        
+        .comparison-table {
+            background: #1e293b;
+            border-radius: 16px;
+            overflow: hidden;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .comparison-header {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            background: #0f172a;
+            padding: 20px 24px;
+            font-weight: 600;
+        }
+        
+        .comparison-header span {
+            text-align: center;
+        }
+        
+        .comparison-header span:first-child {
+            text-align: left;
+        }
+        
+        .comparison-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            padding: 16px 24px;
+            border-bottom: 1px solid #334155;
+            align-items: center;
+        }
+        
+        .comparison-row:last-child {
+            border-bottom: none;
+        }
+        
+        .comparison-feature {
+            font-size: 15px;
+        }
+        
+        .comparison-value {
+            text-align: center;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .check {
+            color: var(--secondary);
+        }
+        
+        .cross {
+            color: var(--red);
+        }
+        
+        .highlight-elai {
+            background: rgba(99, 102, 241, 0.1);
+        }
+        
+        .savings-badge {
+            background: var(--secondary);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 50px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        
+        /* PRICING */
+        .pricing {
+            padding: 100px 0;
+            background: white;
+        }
+        
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .pricing-card {
+            background: var(--light);
+            border: 2px solid var(--border);
+            border-radius: 20px;
+            padding: 40px 32px;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        .pricing-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+        }
+        
+        .pricing-card.featured {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+        }
+        
+        .pricing-badge {
+            position: absolute;
+            top: -14px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary);
+            color: white;
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .pricing-name {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        
+        .pricing-price {
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        
+        .pricing-amount {
+            font-size: 48px;
+            font-weight: 800;
+        }
+        
+        .pricing-period {
+            color: var(--gray);
+            font-size: 16px;
+        }
+        
+        .pricing-description {
+            color: var(--gray);
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        
+        .pricing-features {
+            list-style: none;
+            margin-bottom: 32px;
+        }
+        
+        .pricing-features li {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pricing-features li:last-child {
+            border-bottom: none;
+        }
+        
+        .pricing-features li::before {
+            content: '✓';
+            color: var(--secondary);
+            font-weight: 700;
+        }
+        
+        .pricing-cta {
+            width: 100%;
+            text-align: center;
+            justify-content: center;
+        }
+        
+        .pricing-card.featured .pricing-cta {
+            background: var(--primary);
+        }
+        
+        .per-day {
+            text-align: center;
+            color: var(--gray);
+            font-size: 13px;
+            margin-top: 8px;
+        }
+        
+        /* ROI CALCULATOR */
+        .roi {
+            padding: 80px 0;
+            background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+            color: white;
+        }
+        
+        .roi-box {
+            background: rgba(255,255,255,0.1);
+            border-radius: 24px;
+            padding: 48px;
+            max-width: 800px;
+            margin: 0 auto;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .roi-title {
+            font-size: 32px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        
+        .roi-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+        
+        .roi-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .roi-input-group label {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .roi-input-group input {
+            padding: 16px;
+            border-radius: 12px;
+            border: 2px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .roi-input-group input::placeholder {
+            color: rgba(255,255,255,0.5);
+        }
+        
+        .roi-input-group input:focus {
+            outline: none;
+            border-color: white;
+        }
+        
+        .roi-result {
+            background: rgba(255,255,255,0.15);
+            border-radius: 16px;
+            padding: 32px;
+            text-align: center;
+        }
+        
+        .roi-result-label {
+            font-size: 16px;
+            margin-bottom: 8px;
+            opacity: 0.9;
+        }
+        
+        .roi-result-value {
+            font-size: 56px;
+            font-weight: 800;
+        }
+        
+        .roi-result-sub {
+            font-size: 18px;
+            opacity: 0.8;
+            margin-top: 8px;
+        }
+        
+        .roi-conclusion {
+            text-align: center;
+            padding: 24px;
+            background: rgba(16, 185, 129, 0.2);
+            border-radius: 12px;
+            font-size: 18px;
+        }
+        
+        /* SOCIAL PROOF */
+        .social-proof {
+            padding: 80px 0;
+            background: var(--light);
+        }
+        
+        .testimonial-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 24px;
+        }
+        
+        .testimonial-card {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+        }
+        
+        .testimonial-content {
+            font-size: 17px;
+            font-style: italic;
+            margin-bottom: 24px;
+            line-height: 1.7;
+        }
+        
+        .testimonial-author {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .testimonial-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 18px;
+        }
+        
+        .testimonial-info h4 {
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .testimonial-info span {
+            font-size: 14px;
+            color: var(--gray);
+        }
+        
+        .testimonial-result {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+            font-size: 14px;
+            color: var(--secondary);
+            font-weight: 600;
+        }
+        
+        /* PAYMENT METHODS */
+        .payment-methods {
+            padding: 60px 0;
+            background: white;
+        }
+        
+        .payment-icons {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 32px;
+            margin-bottom: 24px;
+        }
+        
+        .payment-icon {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 20px;
+            background: var(--light);
+            border-radius: 12px;
+            min-width: 120px;
+        }
+        
+        .payment-icon span {
+            font-size: 24px;
+        }
+        
+        .payment-icon small {
+            font-size: 12px;
+            color: var(--gray);
+            font-weight: 500;
+        }
+        
+        .payment-note {
+            text-align: center;
+            color: var(--gray);
+            font-size: 14px;
+        }
+        
+        .payment-note strong {
+            color: var(--secondary);
+        }
+        
+        /* FAQ */
+        .faq {
+            padding: 80px 0;
+            background: var(--light);
+        }
+        
+        .faq-list {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .faq-item {
+            background: white;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .faq-question {
+            padding: 20px 24px;
+            font-weight: 600;
+            font-size: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        
+        .faq-answer {
+            padding: 0 24px 20px;
+            color: var(--gray);
+            font-size: 15px;
+            display: none;
+        }
+        
+        .faq-item.active .faq-answer {
+            display: block;
+        }
+        
+        .faq-toggle {
+            font-size: 24px;
+            transition: transform 0.3s;
+        }
+        
+        .faq-item.active .faq-toggle {
+            transform: rotate(45deg);
+        }
+        
+        /* FINAL CTA */
+        .final-cta {
+            padding: 100px 0;
+            background: linear-gradient(135deg, var(--dark) 0%, #1e293b 100%);
+            text-align: center;
+        }
+        
+        .final-cta h2 {
+            color: white;
+            font-size: clamp(28px, 4vw, 40px);
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+        
+        .final-cta p {
+            color: #94a3b8;
+            font-size: 18px;
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+        
+        /* FOOTER */
+        footer {
+            background: #0f172a;
+            padding: 40px 0;
+            text-align: center;
+            color: #64748b;
+            font-size: 14px;
+        }
+        
+        /* MOBILE */
+        @media (max-width: 768px) {
+            .hero {
+                padding: 60px 0;
+            }
+            
+            .hero-cta {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .comparison-header,
+            .comparison-row {
+                grid-template-columns: 1.5fr 1fr 1fr;
+                font-size: 13px;
+            }
+            
+            .roi-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .roi-box {
+                padding: 32px 24px;
+            }
+            
+            .pricing-card.featured {
+                order: -1;
+            }
+        }
+        
+        /* ANIMATIONS */
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    
+    <!-- HERO -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-badge">🚀 Agora com PIX, Boleto e Parcelamento</div>
+            <h1>O assistente de IA que <span>não passa seu código pra nuvem</span></h1>
+            <p class="hero-subtitle">
+                Velocidade instantânea. Privacidade real. Preço justo. 
+                A ferramenta que você e seus clientes merecem.
+            </p>
+            <div class="hero-cta">
+                <a href="#pricing" class="btn btn-primary pulse">
+                    Começar Agora — R$ 29,90/mês
+                </a>
+                <a href="#comparison" class="btn btn-secondary">
+                    Comparar com Copilot →
+                </a>
+            </div>
+            <p class="hero-note">
+                <code>curl -fsSL https://get.elai.code | bash</code>
+                — Instala em 10 segundos
+            </p>
+        </div>
+    </section>
+    
+    <!-- PAIN POINTS -->
+    <section class="pain-points">
+        <div class="container">
+            <p class="section-label">O Problema</p>
+            <h2 class="section-title">Você já passou por isso?</h2>
+            <p class="section-subtitle">
+                Dores que todo desenvolvedor conhece — mas ninguém resolve.
+            </p>
+            
+            <div class="pain-grid">
+                <div class="pain-card">
+                    <div class="pain-icon">⏳</div>
+                    <h3 class="pain-title">Flow state interrompido</h3>
+                    <p class="pain-desc">
+                        Você pergunta algo. A ferramenta fica "thinking..." por 5 segundos. 
+                        Você perde o fio. Quando volta, já se passaram 10 minutos.
+                    </p>
+                </div>
+                
+                <div class="pain-card">
+                    <div class="pain-icon">🔐</div>
+                    <h3 class="pain-title">Medo de expor código</h3>
+                    <p class="pain-desc">
+                        Projeto secreto. NDA. Segredo industrial. 
+                        E sua ferramenta de IA manda tudo pra nuvem. Quem garante que tá seguro?
+                    </p>
+                </div>
+                
+                <div class="pain-card">
+                    <div class="pain-icon">💸</div>
+                    <h3 class="pain-title">R$ 169/mês de Copilot</h3>
+                    <p class="pain-desc">
+                        Você usou 4 vezes essa semana. Faz as contas: R$ 42 por uso. 
+                        E ainda assim não resolveu 80% dos seus problemas.
+                    </p>
+                </div>
+                
+                <div class="pain-card">
+                    <div class="pain-icon">📝</div>
+                    <h3 class="pain-title">Testes que você odeia fazer</h3>
+                    <p class="pain-desc">
+                        Segunda-feira 9h. Você precisa criar 200 testes unitários. 
+                        Sabe que vai levar 3 dias. Ninguém quer. Mas tem que fazer.
+                    </p>
+                </div>
+                
+                <div class="pain-card">
+                    <div class="pain-icon">✈️</div>
+                    <h3 class="pain-title">Trabalho no avião?</h3>
+                    <p class="pain-desc">
+                        Voo de 6h. Você pegou o projeto pra adiantar. Não conecta. 
+                        Sua ferramenta de IA? "Offline mode limitado."
+                    </p>
+                </div>
+                
+                <div class="pain-card">
+                    <div class="pain-icon">🤔</div>
+                    <h3 class="pain-title">Repetir contexto 47x</h3>
+                    <p class="pain-desc">
+                        "Eu preciso que ele reference o service lá de cima... 
+                        não, não aquele, o outro..." — toda. sessão.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- COMPARISON -->
+    <section class="comparison" id="comparison">
+        <div class="container">
+            <p class="section-label">Elai vs Copilot</p>
+            <h2 class="section-title">A comparação que importa</h2>
+            <p class="section-subtitle">
+                Spoiler: a gente ganha em quase tudo. E ainda é mais barato.
+            </p>
+            
+            <div class="comparison-table">
+                <div class="comparison-header">
+                    <span>Feature</span>
+                    <span>GitHub Copilot</span>
+                    <span>Elai Code</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Preço mensal</span>
+                    <span class="comparison-value">R$ 169</span>
+                    <span class="comparison-value highlight-elai">R$ 59,90 <span class="savings-badge">-65%</span></span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Processamento</span>
+                    <span class="comparison-value cross">☁️ Nuvem</span>
+                    <span class="comparison-value highlight-elai check">💻 100% Local</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Privacidade do código</span>
+                    <span class="comparison-value cross">❌ Pode ser usado p/ training</span>
+                    <span class="comparison-value highlight-elai check">✅ Nunca sai da sua máquina</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Velocidade de resposta</span>
+                    <span class="comparison-value cross">⚠️ Média (latência perceptível)</span>
+                    <span class="comparison-value highlight-elai check">⚡ Instantânea</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Funciona offline</span>
+                    <span class="comparison-value cross">❌ Precisa internet</span>
+                    <span class="comparison-value highlight-elai check">✅ Sempre</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Forma de pagamento</span>
+                    <span class="comparison-value">Cartão (só)</span>
+                    <span class="comparison-value highlight-elai check">PIX, Boleto, Cartão</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Parcelamento</span>
+                    <span class="comparison-value cross">❌</span>
+                    <span class="comparison-value highlight-elai check">✅ 4x sem juros</span>
+                </div>
+                
+                <div class="comparison-row">
+                    <span class="comparison-feature">Trial gratuito</span>
+                    <span class="comparison-value">7 dias</span>
+                    <span class="comparison-value highlight-elai check">7 dias + money back</span>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 40px;">
+                <p style="color: #94a3b8; font-size: 18px;">
+                    <strong style="color: white;">Economia de R$ 109,10/mês</strong> — isso é mais que 2 meses de Elai Pro de graça
+                </p>
+            </div>
+        </div>
+    </section>
+    
+    <!-- ROI CALCULATOR -->
+    <section class="roi" id="calculator">
+        <div class="container">
+            <div class="roi-box">
+                <h2 class="roi-title">🧮 Quanto vale seu tempo?</h2>
+                
+                <div class="roi-grid">
+                    <div class="roi-input-group">
+                        <label>Quanto você cobra por hora?</label>
+                        <input type="number" id="hourlyRate" placeholder="100" value="100">
+                    </div>
+                    <div class="roi-input-group">
+                        <label>Horas economizadas por mês?</label>
+                        <input type="number" id="hoursSaved" placeholder="10" value="10">
+                    </div>
+                </div>
+                
+                <div class="roi-result">
+                    <p class="roi-result-label">Você economiza por mês</p>
+                    <p class="roi-result-value" id="monthlySavings">R$ 1.000</p>
+                    <p class="roi-result-sub">por R$ 59,90/mês no plano Pro</p>
+                </div>
+                
+                <div class="roi-conclusion">
+                    <strong>ROI positivo em menos de 2 dias!</strong> 
+                    Cada hora economizada já paga o Elai.
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- PRICING -->
+    <section class="pricing" id="pricing">
+        <div class="container">
+            <p class="section-label">Planos</p>
+            <h2 class="section-title">Escolha sua capacidade</h2>
+            <p class="section-subtitle">
+                Sem surpresa. Sem letra miúda. Você escolhe quanto precisa.
+            </p>
+            
+            <div class="pricing-grid">
+                <!-- STARTER -->
+                <div class="pricing-card">
+                    <h3 class="pricing-name">🚀 Starter</h3>
+                    <div class="pricing-price">
+                        <span class="pricing-amount">R$ 29,90</span>
+                        <span class="pricing-period">/mês</span>
+                    </div>
+                    <p class="pricing-description">Pra quem tá começando ou usa pouco.</p>
+                    
+                    <ul class="pricing-features">
+                        <li>IA contextual básica</li>
+                        <li>Busca semântica no código</li>
+                        <li>Documentação (50 páginas/mês)</li>
+                        <li>Testes unitários (50 suites/mês)</li>
+                        <li>100% offline</li>
+                        <li>Privacidade total</li>
+                    </ul>
+                    
+                    <a href="#" class="btn btn-secondary pricing-cta">
+                        Começar no Starter
+                    </a>
+                    <p class="per-day">R$ 0,99/dia</p>
+                </div>
+                
+                <!-- PRO -->
+                <div class="pricing-card featured">
+                    <div class="pricing-badge">⭐ Mais Popular</div>
+                    <h3 class="pricing-name">💎 Pro</h3>
+                    <div class="pricing-price">
+                        <span class="pricing-amount">R$ 59,90</span>
+                        <span class="pricing-period">/mês</span>
+                    </div>
+                    <p class="pricing-description">Pra quem quer resolver mais, mais rápido.</p>
+                    
+                    <ul class="pricing-features">
+                        <li>Tudo do Starter +</li>
+                        <li>IA contextual avançada</li>
+                        <li>Documentação ilimitada</li>
+                        <li>Testes unitários ilimitados</li>
+                        <li>Refatoração inteligente</li>
+                        <li>Auto-debugging</li>
+                        <li>Plugins personalizados</li>
+                    </ul>
+                    
+                    <a href="#" class="btn btn-primary pricing-cta">
+                        Começar no Pro
+                    </a>
+                    <p class="per-day">R$ 1,99/dia</p>
+                </div>
+                
+                <!-- TEAM -->
+                <div class="pricing-card">
+                    <h3 class="pricing-name">🏆 Team</h3>
+                    <div class="pricing-price">
+                        <span class="pricing-amount">R$ 89,90</span>
+                        <span class="pricing-period">/mês</span>
+                    </div>
+                    <p class="pricing-description">Pra você que não quer limites.</p>
+                    
+                    <ul class="pricing-features">
+                        <li>Tudo do Pro +</li>
+                        <li>IA contextual full power</li>
+                        <li>Suporte prioritário</li>
+                        <li>Compartilhamento de equipe</li>
+                        <li>Multi-repo</li>
+                    </ul>
+                    
+                    <a href="#" class="btn btn-secondary pricing-cta">
+                        Começar no Team
+                    </a>
+                    <p class="per-day">R$ 2,99/dia</p>
+                </div>
+            </div>
+            
+            <!-- PAYMENT METHODS -->
+            <div style="margin-top: 60px;">
+                <p class="section-label" style="margin-bottom: 24px;">Formas de Pagamento</p>
+                <div class="payment-icons">
+                    <div class="payment-icon">
+                        <span>💳</span>
+                        <small>Cartão</small>
+                    </div>
+                    <div class="payment-icon">
+                        <span>📱</span>
+                        <small>PIX</small>
+                    </div>
+                    <div class="payment-icon">
+                        <span>📄</span>
+                        <small>Boleto</small>
+                    </div>
+                    <div class="payment-icon">
+                        <span>🔢</span>
+                        <small>4x sem juros</small>
+                    </div>
+                </div>
+                <p class="payment-note">
+                    <strong>5% desconto no PIX!</strong> | Trial de 7 dias com garantia de dinheiro de volta
+                </p>
+            </div>
+        </div>
+    </section>
+    
+    <!-- SOCIAL PROOF -->
+    <section class="social-proof">
+        <div class="container">
+            <p class="section-label">Depoimentos</p>
+            <h2 class="section-title">Quem já usa, recomenda</h2>
+            <p class="section-subtitle">
+                Histórias reais de devs que pararam de sofrer.
+            </p>
+            
+            <div class="testimonial-grid">
+                <div class="testimonial-card">
+                    <p class="testimonial-content">
+                        "Eu usava Copilot. Quando meu código apareceu num caso de treinamento de modelo,
+                       troquei pro Elai no dia seguinte. Privacidade não é feature — é premissa."
+                    </p>
+                    <div class="testimonial-author">
+                        <div class="testimonial-avatar">R</div>
+                        <div class="testimonial-info">
+                            <h4>Rafael M.</h4>
+                            <span>Backend Developer • 4 anos exp</span>
+                        </div>
+                    </div>
+                    <p class="testimonial-result">
+                        Economiza ~4h/semana em refatoração
+                    </p>
+                </div>
+                
+                <div class="testimonial-card">
+                    <p class="testimonial-content">
+                        "Trabalho remoto e viajo muito. Uso Elai no avião, no café sem WiFi, em todo lugar.
+                        Não preciso mais escolher entre produtividade e conexão."
+                    </p>
+                    <div class="testimonial-author">
+                        <div class="testimonial-avatar">A</div>
+                        <div class="testimonial-info">
+                            <h4>Amanda S.</h4>
+                            <span>Full-stack Freelancer</span>
+                        </div>
+                    </div>
+                    <p class="testimonial-result">
+                        Fatura 30% maior desde que adotou Elai
+                    </p>
+                </div>
+                
+                <div class="testimonial-card">
+                    <p class="testimonial-content">
+                        "Cobro R$ 120/hora. Com Elai, economizo 10h/semana em trabalho manual.
+                        Faz as contas: R$ 1.200/semana economizados. OElai se paga em 2 dias."
+                    </p>
+                    <div class="testimonial-author">
+                        <div class="testimonial-avatar">L</div>
+                        <div class="testimonial-info">
+                            <h4>Lucas T.</h4>
+                            <span>Tech Lead • Startup</span>
+                        </div>
+                    </div>
+                    <p class="testimonial-result">
+                        ROI positivo em 48 horas
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- FAQ -->
+    <section class="faq">
+        <div class="container">
+            <p class="section-label">Dúvidas Frequentes</p>
+            <h2 class="section-title">Perguntas & Respostas</h2>
+            
+            <div class="faq-list">
+                <div class="faq-item active">
+                    <div class="faq-question">
+                        <span>Como funciona o trial de 7 dias?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        Você usa o Elai por 7 dias completos. Se não notar valor, devolvemos 100% do dinheiro.
+                        Sem perguntas, sem burocracia. Risco zero.
+                    </div>
+                </div>
+                
+                <div class="faq-item">
+                    <div class="faq-question">
+                        <span>Posso pagar via PIX?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        Sim! PIX é imediato e tem 5% de desconto. Scaneia o QR code e paga em 2 segundos.
+                        Sem inserir dados de cartão em sites desconhecidos.
+                    </div>
+                </div>
+                
+                <div class="faq-item">
+                    <div class="faq-question">
+                        <span>E se eu quiser parcelar?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        Oferecemos 4x sem juros no cartão. R$ 4.000 vira 4x de R$ 1.000.
+                        Cabe no cartão, cabe no orçamento.
+                    </div>
+                </div>
+                
+                <div class="faq-item">
+                    <div class="faq-question">
+                        <span>Meu código é seguro?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        100%. Todo processamento é local. Seu código nunca sai da sua máquina.
+                        Não vai para nuvem, não é usado em training, não é compartilhado com ninguém.
+                        Privacidade não é feature — é premissa.
+                    </div>
+                </div>
+                
+                <div class="faq-item">
+                    <div class="faq-question">
+                        <span>Funciona offline?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        Sim. 100% offline. Você pode trabalhar no avião, no café sem WiFi,
+                        na casa do avô no interior. Onde quer que seja.
+                    </div>
+                </div>
+                
+                <div class="faq-item">
+                    <div class="faq-question">
+                        <span>Posso mudar de plano depois?</span>
+                        <span class="faq-toggle">+</span>
+                    </div>
+                    <div class="faq-answer">
+                        Sim. A hora que quiser. Sem multa, sem burocracia.
+                        Upgrade é automático, downgrade você faz no painel.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- FINAL CTA -->
+    <section class="final-cta">
+        <div class="container">
+            <h2>Pronto pra parar de sofrer?</h2>
+            <p>
+                7 dias de trial. Garantia de dinheiro de volta. 
+                PIX, boleto ou cartão — como você preferir.
+            </p>
+            <div class="hero-cta">
+                <a href="#pricing" class="btn btn-primary pulse">
+                    Começar Agora — R$ 29,90/mês
+                </a>
+            </div>
+            <p class="hero-note" style="margin-top: 24px;">
+                Installation: <code>curl -fsSL https://get.elai.code | bash</code>
+            </p>
+        </div>
+    </section>
+    
+    <!-- FOOTER -->
+    <footer>
+        <div class="container">
+            <p>Elai Code — Feito por desenvolvedores, para desenvolvedores.</p>
+            <p style="margin-top: 8px;">Porque seu tempo vale mais do que você imagina.</p>
+        </div>
+    </footer>
+    
+    <script>
+        // ROI Calculator
+        const hourlyRateInput = document.getElementById('hourlyRate');
+        const hoursSavedInput = document.getElementById('hoursSaved');
+        const monthlySavingsOutput = document.getElementById('monthlySavings');
+        
+        function calculateROI() {
+            const rate = parseFloat(hourlyRateInput.value) || 0;
+            const hours = parseFloat(hoursSavedInput.value) || 0;
+            const savings = rate * hours * 4; // Monthly
+            monthlySavingsOutput.textContent = `R$ ${savings.toLocaleString('pt-BR')}`;
+        }
+        
+        hourlyRateInput.addEventListener('input', calculateROI);
+        hoursSavedInput.addEventListener('input', calculateROI);
+        
+        // FAQ Toggle
+        document.querySelectorAll('.faq-question').forEach(question => {
+            question.addEventListener('click', () => {
+                question.parentElement.classList.toggle('active');
+            });
+        });
+        
+        // Smooth scroll
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

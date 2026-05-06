@@ -493,7 +493,13 @@ fn openai_max_completion_tokens(lower: &str) -> u32 {
 /// Default model id for the CLI when the user did not pass `--model`, based on which API keys exist.
 #[must_use]
 pub fn suggested_default_model() -> String {
-    // Priority: Anthropic → OpenAI → xAI → fallback
+    // Priority: OpenCode Zen → Anthropic → OpenAI → xAI → fallback
+    if openai_compat::has_api_key("OPENCODE_API_KEY") {
+        return std::env::var("ELAI_DEFAULT_OPENCODE_ZEN_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "minimax-m2.5-free".to_string());
+    }
     if elai_provider::has_auth_from_env_or_saved().unwrap_or(false) {
         return "claude-haiku-4-5-20251001".to_string();
     }
@@ -524,12 +530,6 @@ pub fn suggested_default_model() -> String {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "kimi-k2.6".to_string());
     }
-    if openai_compat::has_api_key("OPENCODE_API_KEY") {
-        return std::env::var("ELAI_DEFAULT_OPENCODE_ZEN_MODEL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "trinity-large-preview-free".to_string());
-    }
     // Providers locais — preferimos Ollama se ambos estiverem indicados via env.
     if std::env::var_os("OLLAMA_BASE_URL").is_some() {
         return std::env::var("ELAI_DEFAULT_OLLAMA_MODEL")
@@ -544,7 +544,7 @@ pub fn suggested_default_model() -> String {
             .unwrap_or_else(|| "lmstudio:local".to_string());
     }
     // No key detected yet — neutral fallback; wizard will correct this.
-    "claude-haiku-4-5-20251001".to_string()
+    "minimax-m2.5-free".to_string()
 }
 
 // ── Thinking / Effort Awareness ──────────────────────────────
