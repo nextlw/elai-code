@@ -2349,7 +2349,8 @@ fn run_tui_repl(
                 {
                     // SAFETY: Mutex envenena apenas se outra thread entrou em panic enquanto segurava o lock.
                     //         Neste pipeline de CLI isso indica bug irrecuperável; o processo deve encerrar.
-                    let guard = session.lock().expect("session mutex poisoned");
+                    let mut guard = session.lock().expect("session mutex poisoned");
+                    guard.auto_title();
                     let _ = guard.save_to_path(&session_handle.path);
                 }
                 // Budget check after each turn
@@ -2697,6 +2698,7 @@ fn run_tui_compact_session(
     let kept = result.compacted_session.messages.len();
     let skipped = removed == 0;
     *guard = result.compacted_session;
+    guard.auto_title();
     let save_err = guard.save_to_path(session_save_path).err();
     sync_session_to_app_chat(&guard, app);
     drop(guard);
