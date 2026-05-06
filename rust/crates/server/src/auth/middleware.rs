@@ -23,8 +23,8 @@ pub struct ErrorResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct ClerkClaims {
-    sub: String,
+pub struct ClerkClaims {
+    pub sub: String,
 }
 
 /// Axum middleware that validates a Clerk-issued RS256 JWT.
@@ -59,25 +59,54 @@ pub async fn require_auth(
 }
 
 fn extract_bearer(req: &Request<Body>) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    // Authorization: Bearer <token>
-    if let Some(header) = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Some(token) = header.strip_prefix("Bearer ") {
-            return Ok(token.to_owned());
+    // Authorization: Bearer <token> (case-insensitive scheme per RFC 7235)
+    if let Some(header) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+        if let Some((scheme, token)) = header.split_once(' ') {
+            if scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty() {
+                return Ok(token.trim().to_owned());
+            }
         }
     }
-    // ?token=<token> for EventSource (which cannot set custom headers)
+    // ?token=<token> for EventSource (cannot send custom headers)
     if let Some(query) = req.uri().query() {
         for pair in query.split('&') {
-            if let Some(token) = pair.strip_prefix("token=") {
-                return Ok(token.to_owned());
+            if let Some(raw) = pair.strip_prefix("token=") {
+                if !raw.is_empty() {
+                    // percent-decode the token value
+                    let decoded = percent_decode(raw);
+                    return Ok(decoded);
+                }
             }
         }
     }
     Err(unauthorized("missing Authorization"))
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                result.push((h << 4 | l) as char);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 async fn verify_jwt(
