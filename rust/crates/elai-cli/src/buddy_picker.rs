@@ -192,7 +192,7 @@ pub fn run_buddy_picker(initial: Option<PokemonId>) -> io::Result<Option<Pokemon
             let cols = cols_per_row.max(1) as i32;
             let page = (visible_rows.max(1) as i32) * cols;
             match (code, modifiers) {
-                (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break Ok(None),
+                (KeyCode::Esc | KeyCode::Char('q'), _) => break Ok(None),
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(None),
                 (KeyCode::Enter, _) => break Ok(Some(current)),
                 (KeyCode::Right | KeyCode::Char('l'), _) => current = step(current, 1),

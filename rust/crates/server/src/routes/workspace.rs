@@ -352,7 +352,7 @@ fn visit_dir(
     }
 
     let mut children: Vec<_> = std::fs::read_dir(dir)?.flatten().collect();
-    children.sort_by_key(|e| e.file_name());
+    children.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in children {
         let path = entry.path();

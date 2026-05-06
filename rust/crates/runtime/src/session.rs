@@ -64,7 +64,7 @@ pub fn generate_session_title(session: &Session, max_len: usize) -> Option<Strin
         let mut count = 0;
         for word in cleaned.split_whitespace() {
             let word_len = word.chars().count();
-            let sep = if count > 0 { 1 } else { 0 };
+            let sep = usize::from(count > 0);
             if count + sep + word_len > max_len {
                 break;
             }

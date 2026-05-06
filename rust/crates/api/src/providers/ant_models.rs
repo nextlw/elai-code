@@ -120,6 +120,7 @@ fn builtin_ant_models() -> Vec<AntModel> {
 }
 
 /// All model aliases: user overrides first (by alias), then builtins for aliases not overridden.
+#[must_use] 
 pub fn get_ant_models() -> Vec<AntModel> {
     let builtins = builtin_ant_models();
     let overrides = get_ant_model_override_config()
@@ -142,6 +143,7 @@ pub fn get_ant_models() -> Vec<AntModel> {
 
 /// Resolves `model` to an `AntModel` by matching alias (exact) or model name (substring).
 /// Returns `None` when no ant override applies.
+#[must_use] 
 pub fn resolve_ant_model(model: &str) -> Option<AntModel> {
     let models = get_ant_models();
     if models.is_empty() {
@@ -153,6 +155,7 @@ pub fn resolve_ant_model(model: &str) -> Option<AntModel> {
 }
 
 /// If the override config specifies a `default_model`, return it.
+#[must_use] 
 pub fn ant_default_model() -> Option<String> {
     get_ant_model_override_config()?.default_model.clone()
 }

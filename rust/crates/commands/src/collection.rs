@@ -6,7 +6,7 @@
 
 use runtime::buddy::{
     collection::{load_or_create_collection, save_collection, UserCollection},
-    count_by_rarity, pokemon_name, rarity_for_pokemon, sprite_for_id, PokemonId, Rarity,
+    count_by_rarity, pokemon_name, rarity_for_pokemon, PokemonId, Rarity,
 };
 
 /// Formata número com separador de milhar (`1234567` → `"1,234,567"`).
@@ -15,7 +15,7 @@ fn format_thousands(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(b as char);
@@ -24,10 +24,11 @@ fn format_thousands(n: u64) -> String {
 }
 
 /// Executa o comando de coleção
+#[must_use] 
 pub fn run_collection_command(args: &[&str]) -> String {
     let mut collection = load_or_create_collection();
 
-    if args.is_empty() || args[0] == "status" || args[0] == "" {
+    if args.is_empty() || args[0] == "status" || args[0].is_empty() {
         return collection.collection_report();
     }
 
@@ -56,8 +57,7 @@ pub fn run_collection_command(args: &[&str]) -> String {
                     )
                 } else {
                     format!(
-                        "❌ Mascote #{} ainda não foi desbloqueado.\nDesbloqueie-o gastando mais tokens!",
-                        id
+                        "❌ Mascote #{id} ainda não foi desbloqueado.\nDesbloqueie-o gastando mais tokens!"
                     )
                 }
             } else {
@@ -90,7 +90,7 @@ pub fn run_collection_command(args: &[&str]) -> String {
 fn show_pokemon_detail(collection: &UserCollection, id: PokemonId) -> String {
     let entry = match collection.entry(id) {
         Some(e) => e,
-        None => return format!("Mascote #{} não existe.", id),
+        None => return format!("Mascote #{id} não existe."),
     };
 
     let name = pokemon_name(id);
@@ -134,11 +134,11 @@ fn show_pokemon_detail(collection: &UserCollection, id: PokemonId) -> String {
     } else {
         lines.push(format!(
             "║  Requisito: {} tokens para desbloquear",
-            next_threshold_for_rarity(&collection, rarity)
+            next_threshold_for_rarity(collection, rarity)
         ));
     }
 
-    lines.push(format!("╚══════════════════════════════════════╝"));
+    lines.push("╚══════════════════════════════════════╝".to_string());
 
     lines.join("\n")
 }
@@ -229,7 +229,7 @@ fn show_progress_detail(collection: &UserCollection) -> String {
         let needed = n.tokens_required - tokens;
         let progress = (tokens as f64 / n.tokens_required as f64 * 100.0).min(100.0);
         lines.push(format!("  🔓 Próximo desbloqueio: {} ({})", n.rarity.as_str(), n.rarity.stars()));
-        lines.push(format!("  📈 Progresso: {:.1}%", progress));
+        lines.push(format!("  📈 Progresso: {progress:.1}%"));
         lines.push(format!("  ⏳ Faltam: {} tokens", format_thousands(needed)));
     } else {
         lines.push("  🏆 Você desbloqueou todos os mascotes! Parabéns!".to_string());
@@ -246,9 +246,9 @@ fn show_progress_detail(collection: &UserCollection) -> String {
         Rarity::Common,
     ] {
         let total = count_by_rarity(rarity);
-        let unlocked = count_by_rarity_in_unlocked(&collection, rarity);
+        let unlocked = count_by_rarity_in_unlocked(collection, rarity);
         let pct = if total > 0 {
-            (unlocked as f64 / total as f64 * 100.0)
+            unlocked as f64 / total as f64 * 100.0
         } else {
             0.0
         };
@@ -269,8 +269,7 @@ fn show_progress_detail(collection: &UserCollection) -> String {
 fn next_threshold_for_rarity(collection: &UserCollection, _rarity: Rarity) -> u64 {
     collection
         .next_unlock_threshold()
-        .map(|t| t.tokens_required)
-        .unwrap_or(0)
+        .map_or(0, |t| t.tokens_required)
 }
 
 fn count_by_rarity_in_unlocked(collection: &UserCollection, rarity: Rarity) -> usize {
@@ -281,7 +280,7 @@ fn count_by_rarity_in_unlocked(collection: &UserCollection, rarity: Rarity) -> u
         .unwrap_or(0)
 }
 
-const COLLECTION_HELP: &str = r#"📦 Comandos de Coleção:
+const COLLECTION_HELP: &str = r"📦 Comandos de Coleção:
 
   /collection          — Mostra relatório geral da coleção
   /collection status   — Mesmo que acima
@@ -299,4 +298,4 @@ const COLLECTION_HELP: &str = r#"📦 Comandos de Coleção:
     - Rare:        a partir de 150k tokens
     - Epic:        a partir de 500k tokens
     - Legendary:   a partir de 1M tokens
-  • Complete uma raridade para desbloquear versão Golden!"#;
+  • Complete uma raridade para desbloquear versão Golden!";

@@ -1,17 +1,17 @@
 //! Integração do Sistema de Unlock com o Runtime
 //!
-//! Este módulo conecta o UnlockOrchestrator ao ConversationRuntime,
+//! Este módulo conecta o `UnlockOrchestrator` ao `ConversationRuntime`,
 //! disparando eventos de desbloqueio quando milestones são atingidos.
+
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::sync::Mutex;
 
 use super::types::{PokemonId, Rarity};
-use super::collection::{load_or_create_collection, save_collection, UserCollection, UnlockStatus, CollectionEntry};
+use super::collection::UserCollection;
 use super::orchestrator::{UnlockOrchestrator, UnlockOutcome};
-use super::unlock_event::{TaskContext, TaskType, MilestoneReached, ComplexityEvaluation, MILESTONE_CONFIGS};
+use super::unlock_event::{TaskType, MilestoneReached, ComplexityEvaluation, MILESTONE_CONFIGS};
 
 /// Estado global do sistema de unlock
 /// Usado pelo runtime para trackear tokens e disparar eventos
@@ -26,6 +26,7 @@ pub struct UnlockIntegration {
 
 impl UnlockIntegration {
     /// Cria nova integração
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             orchestrator: UnlockOrchestrator::new(),
@@ -35,6 +36,7 @@ impl UnlockIntegration {
     }
 
     /// Cria com collection customizada
+    #[must_use] 
     pub fn with_collection(collection: UserCollection) -> Self {
         Self {
             orchestrator: UnlockOrchestrator::from_collection(collection),
@@ -44,6 +46,7 @@ impl UnlockIntegration {
     }
 
     /// Seta callback de notificação
+    #[must_use]
     pub fn with_notify(mut self, f: impl Fn(String) + Send + Sync + 'static) -> Self {
         self.notify_fn = Some(Arc::new(f));
         self
@@ -69,7 +72,7 @@ impl UnlockIntegration {
     pub fn start_task(&mut self, task_id: String) {
         if self.enabled {
             self.orchestrator.start_task(task_id);
-            self.notify(format!("[unlock] Task iniciada: tracking tokens"));
+            self.notify("[unlock] Task iniciada: tracking tokens".to_string());
         }
     }
 
@@ -94,7 +97,7 @@ impl UnlockIntegration {
         }
 
         let milestone = self.orchestrator.add_tokens(total_tokens);
-        
+
         if let Some(m) = milestone {
             self.notify(format!(
                 "[unlock] 🎯 Milestone atingido: {} tokens ({:?})",
@@ -102,16 +105,18 @@ impl UnlockIntegration {
                 m.rarity
             ));
         }
-        
+
         milestone
     }
 
     /// Verifica se há desbloqueio pendente
+    #[must_use] 
     pub fn has_pending_unlock(&self) -> bool {
         self.orchestrator.has_pending_event()
     }
 
     /// Retorna o próximo mascote sorteado (se pendente)
+    #[must_use] 
     pub fn pending_mascot(&self) -> Option<(PokemonId, Rarity)> {
         self.orchestrator
             .current_pending_event()
@@ -154,11 +159,13 @@ impl UnlockIntegration {
     }
 
     /// Retorna relatório da coleção
+    #[must_use] 
     pub fn collection_report(&self) -> String {
         self.orchestrator.collection_report()
     }
 
     /// Retorna o orchestrator para uso interno
+    #[must_use] 
     pub fn orchestrator(&self) -> &UnlockOrchestrator {
         &self.orchestrator
     }
@@ -169,6 +176,7 @@ impl UnlockIntegration {
     }
 
     /// Avalia a complexidade da tarefa atual
+    #[must_use] 
     pub fn evaluate_current_task(&self) -> Option<ComplexityEvaluation> {
         self.orchestrator.evaluate_current_task()
     }
@@ -188,7 +196,7 @@ impl UnlockIntegration {
     /// Processa usage de uma chamada de API
     /// Verifica se milestone foi atingido e retorna resultado
     pub fn process_usage(&mut self, usage: &TokenUsage) -> Option<MilestoneReached> {
-        let total = usage.total_tokens() as u64;
+        let total = u64::from(usage.total_tokens());
         self.add_tokens(total)
     }
 
@@ -213,16 +221,16 @@ impl UnlockIntegration {
                     probability: config.base_probability,
                     reached_at: now_unix_secs(),
                 };
-                
+
                 self.notify(format!(
                     "[unlock] 🎯 Milestone {} tokens atingido!",
                     config.tokens
                 ));
-                
+
                 return Some(milestone);
             }
         }
-        
+
         None
     }
 }
@@ -245,7 +253,7 @@ impl WithUnlock for UnlockIntegration {
     fn unlock_integration(&self) -> Option<&UnlockIntegration> {
         Some(self)
     }
-    
+
     fn unlock_integration_mut(&mut self) -> Option<&mut UnlockIntegration> {
         Some(self)
     }

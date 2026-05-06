@@ -50,8 +50,7 @@ pub async fn get_auth_status(_state: State<AppState>) -> Json<AuthStatusResponse
         },
         _ => {
             let has_env = std::env::var("ANTHROPIC_API_KEY")
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
+                .is_ok_and(|v| !v.trim().is_empty());
             ProviderAuthStatus {
                 provider: "anthropic".to_string(),
                 authenticated: has_env,
@@ -63,8 +62,7 @@ pub async fn get_auth_status(_state: State<AppState>) -> Json<AuthStatusResponse
 
     let openai_status = {
         let has_env = std::env::var("OPENAI_API_KEY")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
+            .is_ok_and(|v| !v.trim().is_empty());
         let oauth_status = match &method {
             Some(AuthMethod::OpenAiCodexOAuth { token_set, .. }) => Some(("oauth", token_set.expires_at)),
             Some(AuthMethod::OpenAiApiKey { .. }) => Some(("api_key", None)),
@@ -89,8 +87,7 @@ pub async fn get_auth_status(_state: State<AppState>) -> Json<AuthStatusResponse
 
     let xai_status = {
         let has_env = std::env::var("XAI_API_KEY")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
+            .is_ok_and(|v| !v.trim().is_empty());
         ProviderAuthStatus {
             provider: "xai".to_string(),
             authenticated: has_env,

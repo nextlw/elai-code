@@ -21,8 +21,6 @@ use serde::{Deserialize, Serialize};
 
 use super::types::{PokemonId, POKEMON_COUNT, Rarity};
 
-// ── Status de desbloqueio ────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnlockStatus {
     /// Disponível para escolha inicial (3 iniciais)
@@ -34,10 +32,12 @@ pub enum UnlockStatus {
 }
 
 impl UnlockStatus {
+    #[must_use] 
     pub fn is_unlocked(&self) -> bool {
         matches!(self, UnlockStatus::Starter | UnlockStatus::Unlocked { .. })
     }
 
+    #[must_use] 
     pub fn is_locked(&self) -> bool {
         matches!(self, UnlockStatus::Locked)
     }
@@ -58,6 +58,7 @@ pub struct CollectionEntry {
 }
 
 impl CollectionEntry {
+    #[must_use] 
     pub fn new(pokemon_id: PokemonId) -> Self {
         Self {
             pokemon_id,
@@ -97,7 +98,7 @@ pub const UNLOCK_THRESHOLDS: &[UnlockThreshold] = &[
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserCollection {
-    /// Lista de entries, index = pokemon_id - 1
+    /// Lista de entries, index = `pokemon_id` - 1
     entries: Vec<CollectionEntry>,
     /// Total de tokens gastos cumulativos
     total_tokens_spent: u64,
@@ -110,6 +111,7 @@ pub struct UserCollection {
 
 impl UserCollection {
     /// Cria uma coleção nova com os 3 iniciais
+    #[must_use] 
     pub fn new_with_starters(starter_ids: [PokemonId; 3]) -> Self {
         let mut entries = Vec::with_capacity(POKEMON_COUNT as usize);
         for id in 1..=POKEMON_COUNT {
@@ -143,11 +145,13 @@ impl UserCollection {
     }
 
     /// Retorna quantos mascotes estão desbloqueados
+    #[must_use] 
     pub fn unlocked_count(&self) -> usize {
         self.entries.iter().filter(|e| e.status.is_unlocked()).count()
     }
 
     /// Retorna quantos mascotes de cada raridade estão desbloqueados
+    #[must_use] 
     pub fn unlocked_by_rarity(&self) -> HashMap<Rarity, usize> {
         let mut counts: HashMap<Rarity, usize> = HashMap::new();
         for entry in &self.entries {
@@ -160,6 +164,7 @@ impl UserCollection {
     }
 
     /// Retorna quais mascotes estão disponíveis para escolha inicial
+    #[must_use] 
     pub fn starters(&self) -> Vec<PokemonId> {
         self.entries
             .iter()
@@ -169,6 +174,7 @@ impl UserCollection {
     }
 
     /// Retorna quais mascotes estão desbloqueados (incluindo starters)
+    #[must_use] 
     pub fn unlocked(&self) -> Vec<PokemonId> {
         self.entries
             .iter()
@@ -178,6 +184,7 @@ impl UserCollection {
     }
 
     /// Retorna quais mascotes ainda estão bloqueados
+    #[must_use] 
     pub fn locked(&self) -> Vec<PokemonId> {
         self.entries
             .iter()
@@ -187,13 +194,14 @@ impl UserCollection {
     }
 
     /// Verifica se um mascote está desbloqueado
+    #[must_use] 
     pub fn is_unlocked(&self, pokemon_id: PokemonId) -> bool {
         self.entry(pokemon_id)
-            .map(|e| e.status.is_unlocked())
-            .unwrap_or(false)
+            .is_some_and(|e| e.status.is_unlocked())
     }
 
-    /// Retorna o entry de um pokemon_id
+    /// Retorna o entry de um `pokemon_id`
+    #[must_use] 
     pub fn entry(&self, pokemon_id: PokemonId) -> Option<&CollectionEntry> {
         let idx = (pokemon_id.saturating_sub(1)) as usize;
         self.entries.get(idx)
@@ -206,6 +214,7 @@ impl UserCollection {
     }
 
     /// Retorna total de tokens gastos
+    #[must_use] 
     pub fn total_tokens_spent(&self) -> u64 {
         self.total_tokens_spent
     }
@@ -248,6 +257,7 @@ impl UserCollection {
     }
 
     /// Retorna o próximo threshold de desbloqueio
+    #[must_use] 
     pub fn next_unlock_threshold(&self) -> Option<UnlockThreshold> {
         UNLOCK_THRESHOLDS
             .iter()
@@ -256,6 +266,7 @@ impl UserCollection {
     }
 
     /// Retorna tokens necessários para próximo desbloqueio
+    #[must_use] 
     pub fn tokens_to_next_unlock(&self) -> Option<u64> {
         self.next_unlock_threshold()
             .map(|t| t.tokens_required - self.total_tokens_spent)
@@ -302,9 +313,11 @@ impl UserCollection {
     }
 
     /// Gera relatório da coleção
+    #[must_use] 
     pub fn collection_report(&self) -> String {
         let total = self.entries.len();
         let unlocked = self.unlocked_count();
+        // Percentage calculation - precision loss is acceptable for display
         let percentage = (unlocked as f64 / total as f64) * 100.0;
 
         let mut lines = vec![
@@ -372,7 +385,7 @@ fn format_thousands(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(b as char);
@@ -380,8 +393,11 @@ fn format_thousands(n: u64) -> String {
     out
 }
 
-/// Determina raridade por PokemonId (distribuição pseudo-aleatória mas determinística)
+/// Determina raridade por `PokemonId` (distribuição pseudo-aleatória mas determinística)
+#[must_use] 
+#[expect(clippy::match_same_arms)]
 pub fn rarity_for_pokemon(id: PokemonId) -> Rarity {
+    // Ranges intentionally overlap for Common to bias toward more Common mascotes
     match id {
         1..=30 => Rarity::Common,
         31..=60 => Rarity::Uncommon,
@@ -394,6 +410,7 @@ pub fn rarity_for_pokemon(id: PokemonId) -> Rarity {
 }
 
 /// Conta total de pokemon de uma raridade
+#[must_use] 
 pub fn count_by_rarity(rarity: Rarity) -> usize {
     (1..=POKEMON_COUNT)
         .filter(|&id| rarity_for_pokemon(id) == rarity)
@@ -402,6 +419,7 @@ pub fn count_by_rarity(rarity: Rarity) -> usize {
 
 /// Retorna contagem de desbloqueios por raridade
 #[allow(dead_code)]
+#[must_use] 
 pub fn unlock_counts_by_rarity() -> HashMap<Rarity, usize> {
     HashMap::new()
 }
@@ -413,6 +431,7 @@ fn collection_path() -> Option<PathBuf> {
 }
 
 /// Carrega coleção existente ou cria nova com starters default
+#[must_use] 
 pub fn load_or_create_collection() -> UserCollection {
     let path = match collection_path() {
         Some(p) => p,
@@ -471,7 +490,7 @@ mod tests {
     fn locked_mascotes_are_accessible() {
         let collection = UserCollection::new_with_starters([1, 4, 7]);
         let locked = collection.locked();
-        assert!(locked.len() > 0);
+        assert!(!locked.is_empty());
         assert!(!locked.contains(&1));
     }
 

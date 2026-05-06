@@ -160,7 +160,7 @@ static SPRITES: [&str; POKEMON_COUNT as usize] = [
     include_str!("../../sprites/151.ans"),
 ];
 
-/// Returns the ANSI sprite for the given Pokédex id (clamped to 1..=POKEMON_COUNT).
+/// Returns the ANSI sprite for the given Pokédex id (clamped to `1..=POKEMON_COUNT`).
 #[must_use]
 pub fn sprite_for_id(id: PokemonId) -> &'static str {
     let idx = (id.clamp(1, POKEMON_COUNT) - 1) as usize;

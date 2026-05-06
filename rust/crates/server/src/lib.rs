@@ -1,3 +1,7 @@
+// Allow pedantic lints that produce excessive warnings for this project
+// The app() function legitimately exceeds 266 lines due to its nature.
+#![allow(clippy::too_many_lines)]
+
 pub mod auth;
 pub mod db;
 pub mod permission_bridge;

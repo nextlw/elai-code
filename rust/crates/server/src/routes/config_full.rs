@@ -140,8 +140,7 @@ pub async fn test_provider(
     };
 
     let has_key = std::env::var(env_var)
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+        .is_ok_and(|v| !v.trim().is_empty());
 
     if has_key {
         Json(ProviderTestResponse {
@@ -153,15 +152,16 @@ pub async fn test_provider(
         // Also check stored auth
         let auth_ok = runtime::load_auth_method()
             .unwrap_or(None)
-            .map(|m| matches!(
+            .is_some_and(|m| matches!(
                 (&id[..], m),
-                ("anthropic", runtime::AuthMethod::ConsoleApiKey { .. })
-                    | ("anthropic", runtime::AuthMethod::ClaudeAiOAuth { .. })
-                    | ("anthropic", runtime::AuthMethod::AnthropicAuthToken { .. })
-                    | ("openai", runtime::AuthMethod::OpenAiApiKey { .. })
-                    | ("openai", runtime::AuthMethod::OpenAiCodexOAuth { .. })
-            ))
-            .unwrap_or(false);
+                ("anthropic",
+runtime::AuthMethod::ConsoleApiKey { .. } |
+runtime::AuthMethod::ClaudeAiOAuth { .. } |
+runtime::AuthMethod::AnthropicAuthToken { .. }) |
+("openai",
+runtime::AuthMethod::OpenAiApiKey { .. } |
+runtime::AuthMethod::OpenAiCodexOAuth { .. })
+            ));
 
         if auth_ok {
             Json(ProviderTestResponse {

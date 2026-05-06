@@ -4736,7 +4736,7 @@ printf 'pwsh:%s' "$1"
         use super::{GlobalToolRegistry, MatcherPattern};
         let registry = GlobalToolRegistry::builtin();
         // Build patterns manually since MCP tools are not in the builtin registry.
-        let patterns = vec![MatcherPattern::Prefix("mcp__github__".to_string())];
+        let patterns = [MatcherPattern::Prefix("mcp__github__".to_string())];
         assert!(patterns.iter().any(|p| p.matches("mcp__github__create_issue")));
         assert!(!patterns.iter().any(|p| p.matches("mcp__notion__create_page")));
 

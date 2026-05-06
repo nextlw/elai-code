@@ -9,12 +9,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use runtime::buddy::{
     collection::{load_or_create_collection, save_collection},
     orchestrator::UnlockOrchestrator,
-    unlock_event::{ComplexityEvaluation, MilestoneReached, TaskContext, TaskType},
-    pokemon_name, rarity_for_pokemon, count_by_rarity, PokemonId, Rarity, MILESTONE_CONFIGS,
+    unlock_event::TaskType,
+    pokemon_name, rarity_for_pokemon, count_by_rarity, Rarity, MILESTONE_CONFIGS,
     UserCollection,
 };
 
 /// Executa o comando de unlock
+#[must_use] 
 pub fn run_unlock_command(args: &[&str]) -> String {
     let mut collection = load_or_create_collection();
 
@@ -68,7 +69,7 @@ fn show_unlock_status(collection: &UserCollection) -> String {
     let tokens = collection.total_tokens_spent();
     let unlocked = collection.unlocked_count();
     let total = 151;
-    let percentage = (unlocked as f64 / total as f64) * 100.0;
+    let percentage = (unlocked as f64 / f64::from(total)) * 100.0;
 
     let mut lines = vec![
         format!("╔════════════════════════════════════════════════════════════╗"),
@@ -80,8 +81,8 @@ fn show_unlock_status(collection: &UserCollection) -> String {
     ];
 
     // Mostra próximo milestone
-    lines.push(format!("╠════════════════════════════════════════════════════════════╣"));
-    lines.push(format!("║  🎯 PRÓXIMOS MILESTONES:                                    ║"));
+    lines.push("╠════════════════════════════════════════════════════════════╣".to_string());
+    lines.push("║  🎯 PRÓXIMOS MILESTONES:                                    ║".to_string());
 
     let milestones = get_milestone_display(tokens);
     for (i, (threshold, rarity)) in milestones.iter().enumerate() {
@@ -107,7 +108,7 @@ fn show_unlock_status(collection: &UserCollection) -> String {
         ));
     }
 
-    lines.push(format!("╚════════════════════════════════════════════════════════════╝"));
+    lines.push("╚════════════════════════════════════════════════════════════╝".to_string());
 
     lines.join("\n")
 }
@@ -121,7 +122,7 @@ fn simulate_token_spending(tokens: u64, collection: &mut UserCollection) -> Stri
 
     // Adiciona tokens
     if let Some(milestone) = orch.add_tokens(tokens) {
-        lines.push(format!("🎉 MILESTONE ATINGIDO!"));
+        lines.push("🎉 MILESTONE ATINGIDO!".to_string());
         lines.push(format!("  Threshold: {} tokens", format_num(milestone.tokens_threshold)));
         lines.push(format!("  Raridade base: {:?}", milestone.rarity));
         lines.push(format!("  Probabilidade: {:.0}%", milestone.probability * 100.0));
@@ -179,8 +180,8 @@ fn simulate_token_spending(tokens: u64, collection: &mut UserCollection) -> Stri
 }
 
 fn force_unlock(id: u16, collection: &mut UserCollection) -> String {
-    if id < 1 || id > 151 {
-        return format!("ID {} inválido. Use um número de 1 a 151.", id);
+    if !(1..=151).contains(&id) {
+        return format!("ID {id} inválido. Use um número de 1 a 151.");
     }
 
     if collection.is_unlocked(id) {
@@ -204,7 +205,7 @@ fn force_unlock(id: u16, collection: &mut UserCollection) -> String {
 
     // Salva
     if let Err(e) = save_collection(collection) {
-        return format!("Erro ao salvar: {}", e);
+        return format!("Erro ao salvar: {e}");
     }
 
     let rarity = rarity_for_pokemon(id);
@@ -248,8 +249,7 @@ fn show_rarity_info(rarity_str: &str) -> String {
         "legendary" => Rarity::Legendary,
         _ => {
             return format!(
-                "Raridade '{}' desconhecida.\nUse: common, uncommon, rare, epic ou legendary",
-                rarity_str
+                "Raridade '{rarity_str}' desconhecida.\nUse: common, uncommon, rare, epic ou legendary"
             )
         }
     };
@@ -372,7 +372,7 @@ fn now_unix_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn get_milestone_display(current_tokens: u64) -> Vec<(u64, &'static str)> {
+fn get_milestone_display(_current_tokens: u64) -> Vec<(u64, &'static str)> {
     MILESTONE_CONFIGS
         .iter()
         .map(|c| (c.tokens, c.rarity.as_str()))
@@ -383,27 +383,24 @@ fn next_threshold_for_tokens(tokens: u64) -> u64 {
     MILESTONE_CONFIGS
         .iter()
         .find(|c| tokens < c.tokens)
-        .map(|c| c.tokens)
-        .unwrap_or(0)
+        .map_or(0, |c| c.tokens)
 }
 
 fn threshold_for_rarity(rarity: Rarity) -> u64 {
     MILESTONE_CONFIGS
         .iter()
         .find(|c| c.rarity == rarity)
-        .map(|c| c.tokens)
-        .unwrap_or(0)
+        .map_or(0, |c| c.tokens)
 }
 
 fn milestone_probability_for_rarity(rarity: Rarity) -> f64 {
     MILESTONE_CONFIGS
         .iter()
         .find(|c| c.rarity == rarity)
-        .map(|c| c.base_probability)
-        .unwrap_or(0.0)
+        .map_or(0.0, |c| c.base_probability)
 }
 
-const UNLOCK_HELP: &str = r#"🐾 Comandos de Unlock:
+const UNLOCK_HELP: &str = r"🐾 Comandos de Unlock:
 
   /unlock                — Mostra status do sistema
   /unlock status         — Mesmo que acima
@@ -425,7 +422,7 @@ const UNLOCK_HELP: &str = r#"🐾 Comandos de Unlock:
   3. O modelo avalia a complexidade
   4. Um mascote é sorteado da raridade determinada
   5. Você pode aceitar ou recusar
-  6. Tarefa continua normalmente"#;
+  6. Tarefa continua normalmente";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

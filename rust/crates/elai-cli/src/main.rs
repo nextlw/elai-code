@@ -2574,13 +2574,11 @@ fn run_tui_repl(
                     )));
                 }
                 tui::TuiAction::AuthComplete { label, model } => {
-                    let new_model = model
-                        .map(|m| {
+                    let new_model = model.map_or_else(preferred_model_after_auth, |m| {
                             m.split_once(" — ")
                                 .map(|(alias, _)| alias.trim().to_string())
                                 .unwrap_or(m)
-                        })
-                        .unwrap_or_else(preferred_model_after_auth);
+                        });
                     app.model.clone_from(&new_model);
                     app.push_chat(tui::ChatEntry::SystemNote(format!(
                         "\u{2705} {label}\n  Modelo padrão: {new_model}"
@@ -2718,7 +2716,7 @@ fn scan_scripts(cwd: &std::path::Path) -> Vec<(String, String)> {
         let dir = cwd.join(subdir);
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             if path.is_file() {
@@ -2737,9 +2735,7 @@ fn run_script_to_chat(
     msg_tx: &mpsc::Sender<tui::TuiMsg>,
 ) {
     let display = std::path::Path::new(&path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.clone());
+        .file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
     app.push_chat(tui::ChatEntry::SystemNote(format!("▶ Executando {display}…")));
     let tx = msg_tx.clone();
     let display_clone = display.clone();
@@ -2775,7 +2771,7 @@ fn run_script_to_chat(
 /// Handles the `/buddy [pick|show]` slash command.
 /// `pick`: suspends the TUI alternate-screen, runs the picker, then forces the
 /// TUI to redraw. `show` (or no arg): pushes the current companion header into
-/// the chat as a SystemNote.
+/// the chat as a `SystemNote`.
 fn handle_buddy_slash(arg: Option<&str>, app: &mut tui::UiApp) {
     // Default action is `pick` — abrir o seletor é o caso de uso primário.
     // `/buddy show` renderiza o mascote atual no chat.
@@ -4952,9 +4948,7 @@ fn attachment_dir_for_session_path(session_path: &Path) -> PathBuf {
         }
     }
     session_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 fn create_managed_session_handle() -> Result<SessionHandle, Box<dyn std::error::Error>> {
@@ -6889,7 +6883,7 @@ impl ApiClient for DefaultRuntimeClient {
             .is_some_and(|m| matches!(m.provider, ProviderKind::ElaiApi))
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         match metadata_for_model(&self.model).map(|m| m.provider) {
             Some(ProviderKind::ElaiApi) => "anthropic",
             Some(ProviderKind::Xai) => "xai",
@@ -7723,8 +7717,8 @@ impl CliToolExecutor {
                 if let Some(ref sender) = self.tui_sender {
                     let summary = match tool_name {
                         "grep_search" | "GrepSearch" => {
-                            let num_matches = parsed.get("numMatches").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let num_files = parsed.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let num_matches = parsed.get("numMatches").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                            let num_files = parsed.get("numFiles").and_then(serde_json::Value::as_u64).unwrap_or(0);
                             let content = parsed.get("content").and_then(|v| v.as_str()).unwrap_or("");
                             let filenames = parsed.get("filenames")
                                 .and_then(|v| v.as_array())
@@ -7740,7 +7734,7 @@ impl CliToolExecutor {
                             summary_parts.join("\n")
                         }
                         "glob_search" | "GlobSearch" => {
-                            let num_files = parsed.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let num_files = parsed.get("numFiles").and_then(serde_json::Value::as_u64).unwrap_or(0);
                             let filenames = parsed.get("filenames")
                                 .and_then(|v| v.as_array())
                                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).take(5).collect::<Vec<_>>().join("\n"))
@@ -8147,9 +8141,33 @@ fn push_assistant_blocks(
                     app.push_chat(tui::ChatEntry::AssistantText(text.clone()));
                 }
             }
-            // Assistant não envia anexos hoje, mas o match precisa cobrir os
-            // novos variantes para compilar; ignoramos silenciosamente.
-            runtime::ContentBlock::Image { .. } | runtime::ContentBlock::Document { .. } => {}
+            // Assistant pode enviar anexos (imagens, documentos) que devem ser
+            // renderizados na TUI.
+            runtime::ContentBlock::Image { media_type, sha256, size } => {
+                let size_str = if *size > 1024 * 1024 {
+                    format!("{:.1} MB", *size as f64 / 1_048_576.0)
+                } else if *size > 1024 {
+                    format!("{:.1} KB", *size as f64 / 1024.0)
+                } else {
+                    format!("{size} bytes")
+                };
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "🖼️ Imagem: {media_type} · {size_str} · sha256:{sha256}"
+                )));
+            }
+            runtime::ContentBlock::Document { media_type, sha256, size, name } => {
+                let doc_name = name.as_deref().unwrap_or("(sem nome)");
+                let size_str = if *size > 1024 * 1024 {
+                    format!("{:.1} MB", *size as f64 / 1_048_576.0)
+                } else if *size > 1024 {
+                    format!("{:.1} KB", *size as f64 / 1024.0)
+                } else {
+                    format!("{size} bytes")
+                };
+                app.push_chat(tui::ChatEntry::SystemNote(format!(
+                    "📄 Documento: `{doc_name}` · {media_type} · {size_str}"
+                )));
+            }
             runtime::ContentBlock::ToolUse { id, name, input } => {
                 let status = match tool_statuses.get(id.as_str()) {
                     Some(true) => tui::ToolItemStatus::Err,

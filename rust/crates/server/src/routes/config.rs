@@ -88,8 +88,7 @@ pub async fn list_providers() -> Json<ProvidersResponse> {
         .iter()
         .map(|spec| {
             let available = std::env::var(spec.env_var)
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
+                .is_ok_and(|v| !v.trim().is_empty());
             ProviderInfo {
                 id: spec.id.to_string(),
                 available,

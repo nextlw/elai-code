@@ -132,14 +132,11 @@ pub async fn export_session(
         let mut md = String::new();
         for msg in &conversation.messages {
             let role = format!("{:?}", msg.role).to_lowercase();
-            md.push_str(&format!("## {}\n\n", role));
+            md.push_str(&format!("## {role}\n\n"));
             for block in &msg.blocks {
-                match block {
-                    runtime::ContentBlock::Text { text } => {
-                        md.push_str(text);
-                        md.push('\n');
-                    }
-                    _ => {}
+                if let runtime::ContentBlock::Text { text } = block {
+                    md.push_str(text);
+                    md.push('\n');
                 }
             }
             md.push('\n');

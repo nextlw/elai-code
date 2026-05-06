@@ -664,7 +664,7 @@ fn extract_summary_timeline(summary: &str) -> Vec<String> {
 /// Configuration for per-block content trimming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MicroCompactConfig {
-    /// Maximum chars kept in a ToolResult `output` field.  Default: 8 000.
+    /// Maximum chars kept in a `ToolResult` `output` field.  Default: 8 000.
     pub max_tool_result_chars: usize,
     /// Maximum chars kept in a Thinking `thinking` field.  Default: 4 000.
     pub max_thinking_chars: usize,
@@ -732,7 +732,7 @@ pub fn micro_compact_messages(
             ConversationMessage {
                 role: msg.role,
                 blocks: trimmed_blocks,
-                usage: msg.usage.clone(),
+                usage: msg.usage,
             }
         })
         .collect()

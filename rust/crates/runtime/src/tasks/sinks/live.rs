@@ -198,7 +198,7 @@ mod tests {
         sink.emit("t1", "Indexing", "3%");
         let out = buf.output();
         assert_eq!(out.matches(CLEAR_LINE).count(), 3);
-        assert!(!out.contains("\n"), "no newline between updates of same owner");
+        assert!(!out.contains('\n'), "no newline between updates of same owner");
     }
 
     #[test]

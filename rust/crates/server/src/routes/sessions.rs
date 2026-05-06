@@ -129,7 +129,7 @@ pub async fn create_session(
     let cwd = payload.cwd.unwrap_or_else(|| ".".to_string());
     let model = payload
         .model
-        .unwrap_or_else(|| api::suggested_default_model().to_string());
+        .unwrap_or_else(|| api::suggested_default_model().clone());
     let permission_mode = parse_permission_mode(payload.permission_mode.as_deref())
         .unwrap_or(PermissionMode::WorkspaceWrite);
 
@@ -746,7 +746,7 @@ pub async fn export_session(
                 .unwrap())
         }
         "md" => {
-            let mut md = format!("# Session {}\n\n", id);
+            let mut md = format!("# Session {id}\n\n");
             for msg in &messages {
                 let role = role_label(msg.role);
                 md.push_str(&format!("## {role}\n\n"));

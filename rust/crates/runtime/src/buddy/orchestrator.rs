@@ -14,12 +14,12 @@
 //! 6. Collection.add_unlocked() — adiciona à coleção
 //! ```
 
-use std::sync::Arc;
+
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::sync::Mutex;
 
-use super::types::{PokemonId, POKEMON_COUNT, Rarity};
+use super::types::{PokemonId, Rarity};
 
 pub use super::collection::{
     CollectionEntry, UnlockStatus, UserCollection,
@@ -57,6 +57,7 @@ pub struct UnlockOrchestrator {
 
 impl UnlockOrchestrator {
     /// Cria novo orchestrador
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             tracker: TaskTracker::new(),
@@ -66,6 +67,7 @@ impl UnlockOrchestrator {
     }
 
     /// Carrega de collections persistence
+    #[must_use] 
     pub fn from_collection(collection: UserCollection) -> Self {
         Self {
             tracker: TaskTracker::new(),
@@ -97,10 +99,11 @@ impl UnlockOrchestrator {
     }
 
     /// Avalia a complexidade da tarefa atual
+    #[must_use] 
     pub fn evaluate_current_task(&self) -> Option<ComplexityEvaluation> {
         let task = self.tracker.current_task()?;
         let total_lines = task.lines_added + task.lines_removed;
-        
+
         // Simula avaliação (em produção, isso seria feito pelo modelo LLM)
         Some(evaluate_task_complexity(
             task,
@@ -113,15 +116,13 @@ impl UnlockOrchestrator {
 
     /// Cria um evento de unlock baseado na avaliação
     pub fn create_unlock_event(&mut self, evaluation: &ComplexityEvaluation) -> Option<UnlockEvent> {
-        let task_id = self.tracker.current_task()
-            .map(|t| t.task_id.clone())
-            .unwrap_or_else(|| format!("task_{}", now_unix_secs()));
+        let task_id = self.tracker.current_task().map_or_else(|| format!("task_{}", now_unix_secs()), |t| t.task_id.clone());
 
         let mut event = UnlockEvent::new(task_id, evaluation.clone(), &self.collection);
-        
+
         // Tenta sortear mascote
         event.roll_mascot();
-        
+
         // Se tem mascote escolhido, salva o evento
         if event.chosen_mascot.is_some() {
             self.pending_events.push(event.clone());
@@ -151,7 +152,7 @@ impl UnlockOrchestrator {
                         mascot_id: None,
                         rarity: event.rarity,
                         evaluation: Some(event.evaluation),
-                        message: format!("Erro ao salvar coleção: {}", e),
+                        message: format!("Erro ao salvar coleção: {e}"),
                         user_confirmed: Some(true),
                     };
                 }
@@ -206,11 +207,13 @@ impl UnlockOrchestrator {
     }
 
     /// Retorna evento pendente atual
+    #[must_use] 
     pub fn current_pending_event(&self) -> Option<&UnlockEvent> {
         self.pending_events.last()
     }
 
     /// Verifica se há eventos pendentes
+    #[must_use] 
     pub fn has_pending_event(&self) -> bool {
         !self.pending_events.is_empty()
     }
@@ -226,6 +229,7 @@ impl UnlockOrchestrator {
     }
 
     /// Retorna relatório da coleção
+    #[must_use] 
     pub fn collection_report(&self) -> String {
         self.collection.collection_report()
     }
@@ -245,7 +249,7 @@ fn now_unix_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Determina raridade por PokemonId
+/// Determina raridade por `PokemonId`
 fn pokemon_name(id: PokemonId) -> &'static str {
     super::types::pokemon_name(id)
 }
@@ -259,19 +263,8 @@ fn evaluate_task_complexity(
     is_recursive: bool,
 ) -> ComplexityEvaluation {
     use super::unlock_event::evaluate_task_complexity;
-    
-    evaluate_task_complexity(task, lines_changed, files_count, has_tests, is_recursive)
-}
 
-/// Score de probabilidade baseado na raridade
-fn probability_for_rarity(rarity: Rarity) -> f64 {
-    match rarity {
-        Rarity::Common => 0.80,
-        Rarity::Uncommon => 0.60,
-        Rarity::Rare => 0.40,
-        Rarity::Epic => 0.25,
-        Rarity::Legendary => 0.10,
-    }
+    evaluate_task_complexity(task, lines_changed, files_count, has_tests, is_recursive)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -283,14 +276,14 @@ mod tests {
     #[test]
     fn test_orchestrator_flow() {
         let mut orch = UnlockOrchestrator::new();
-        
+
         // Inicia tarefa
         orch.start_task("test_task_1".to_string());
-        
+
         // Adiciona tokens
         let milestone = orch.add_tokens(10_000);
         assert!(milestone.is_some());
-        
+
         // Atualiza contexto
         orch.update_task_context(
             vec!["src/main.rs".to_string()],
@@ -298,18 +291,18 @@ mod tests {
             50,
             TaskType::Feature,
         );
-        
+
         // Avalia
         let eval = orch.evaluate_current_task();
         assert!(eval.is_some());
         let eval = eval.unwrap();
         println!("Complexity score: {}", eval.complexity_score);
         println!("Determined rarity: {:?}", eval.determined_rarity);
-        
+
         // Cria evento
         let event = orch.create_unlock_event(&eval);
         assert!(event.is_some());
-        
+
         // Confirma
         let outcome = orch.confirm_unlock();
         assert!(outcome.success);
@@ -320,15 +313,15 @@ mod tests {
     fn test_milestone_detection() {
         let mut orch = UnlockOrchestrator::new();
         orch.start_task("milestone_test".to_string());
-        
+
         // Não deve trigger até 10k
         assert!(orch.add_tokens(5_000).is_none());
-        
+
         // 10k milestone
         let milestone = orch.add_tokens(5_000);
         assert!(milestone.is_some());
         assert_eq!(milestone.unwrap().tokens_threshold, 10_000);
-        
+
         // Não deve trigger de novo o mesmo milestone
         assert!(orch.add_tokens(1).is_none());
     }

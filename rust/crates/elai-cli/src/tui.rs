@@ -139,14 +139,14 @@ pub enum TuiMsg {
         attempt: u8,
         max_attempts: u8,
     },
-    /// Diff de uma tool de modificação de arquivo (edit_file/write_file).
+    /// Diff de uma tool de modificação de arquivo (`edit_file/write_file`).
     /// Enviado sempre em modo SWD partial (e full) para mostrar o que mudou.
     ToolDiff {
         path: String,
         hunks: Vec<crate::diff::DiffHunk>,
     },
-    /// Resumo truncado do output de tools como grep_search/glob_search (máx 5 linhas).
-    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    /// Resumo truncado do output de tools como `grep_search/glob_search` (máx 5 linhas).
+    /// Renderizado inline no chat após o `ToolBatchEntry` correspondente.
     ToolOutputSummary { summary: String },
     SwdDiffPreview {
         actions: Vec<(String, Vec<crate::diff::DiffHunk>)>,
@@ -243,14 +243,14 @@ pub enum ChatEntry {
         attempt: u8,
         max_attempts: u8,
     },
-    /// Diff de tool de modificação de arquivo (edit_file/write_file).
-    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    /// Diff de tool de modificação de arquivo (`edit_file/write_file`).
+    /// Renderizado inline no chat após o `ToolBatchEntry` correspondente.
     ToolDiff {
         path: String,
         hunks: Vec<crate::diff::DiffHunk>,
     },
-    /// Resumo truncado do output de tools como grep_search/glob_search (máx 5 linhas).
-    /// Renderizado inline no chat após o ToolBatchEntry correspondente.
+    /// Resumo truncado do output de tools como `grep_search/glob_search` (máx 5 linhas).
+    /// Renderizado inline no chat após o `ToolBatchEntry` correspondente.
     ToolOutputSummary { summary: String },
     SwdDiffEntry {
         path: String,
@@ -5298,7 +5298,7 @@ fn render_tips(app: &UiApp, width: usize) -> Vec<Line<'static>> {
             let sprite_width = sprite_text
                 .lines
                 .iter()
-                .map(|l| l.width())
+                .map(ratatui::prelude::Line::width)
                 .max()
                 .unwrap_or(0);
             let sprite_pad = " ".repeat(width.saturating_sub(sprite_width) / 2);
@@ -5769,7 +5769,7 @@ fn lines_for_chat_entry(app: &UiApp, entry: &ChatEntry, wrap_width: usize) -> Ve
             ))];
             for ln in summary.lines() {
                 lines.push(Line::from(Span::styled(
-                    format!("   {}", ln),
+                    format!("   {ln}"),
                     Style::default().fg(theme().text_secondary),
                 )));
             }

@@ -124,7 +124,7 @@ pub trait ApiClient {
 
     /// Nome amigável do provider, usado em mensagens de erro
     /// (`MultimodalNotSupported(provider)`). Default `"unknown"`.
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "unknown"
     }
 }
@@ -348,7 +348,7 @@ where
 
     /// Confirma o unlock pendente (retorna true se confirmou)
     pub fn confirm_pending_unlock(&mut self) -> bool {
-        if let Some((id, _)) = self.pending_unlock_mascot {
+        if let Some((_id, _)) = self.pending_unlock_mascot {
             if let Some(ref mut integration) = self.unlock_integration {
                 let outcome = integration.confirm_unlock();
                 if outcome.success {

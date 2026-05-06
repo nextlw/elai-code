@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use crate::db::{PendingPermission, PermissionDecisionPayload, SessionData};
 use crate::streaming::ServerEvent;
 
-/// Sync prompter that emits an SSE permission_request event and blocks waiting
+/// Sync prompter that emits an SSE `permission_request` event and blocks waiting
 /// for the HTTP `decide` endpoint to deliver an answer via a oneshot channel.
 ///
 /// Must be invoked from inside a `spawn_blocking` task — uses `Handle::current().block_on`.

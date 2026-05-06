@@ -2321,10 +2321,7 @@ pub fn handle_slash_command(
                 action
                     .as_ref()
                     .map(|s| s.split_whitespace().collect::<Vec<_>>())
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|s| *s)
-                    .collect::<Vec<_>>()
+                    .unwrap_or_default().clone()
                     .as_ref(),
             ),
             session: session.clone(),
@@ -2334,10 +2331,7 @@ pub fn handle_slash_command(
                 action
                     .as_ref()
                     .map(|s| s.split_whitespace().collect::<Vec<_>>())
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|s| *s)
-                    .collect::<Vec<_>>()
+                    .unwrap_or_default().clone()
                     .as_ref(),
             ),
             session: session.clone(),

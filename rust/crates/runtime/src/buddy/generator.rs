@@ -31,7 +31,10 @@ impl Mulberry32 {
     }
 
     pub fn next_usize(&mut self, len: usize) -> usize {
-        (self.next_f64() * len as f64) as usize % len
+        // Mulberry32 RNG inherently involves f64->usize casts — precision loss is intentional
+        #[allow(clippy::cast_precision_loss)]
+        let idx = (self.next_f64() * len as f64) as usize;
+        idx % len
     }
 }
 
@@ -106,7 +109,7 @@ fn roll_stats(rng: &mut Mulberry32, rarity: Rarity) -> HashMap<StatName, u8> {
 
 // ── Main entry ────────────────────────────────────────────────────────────────
 
-/// Determinístico para o usuário: sorteia rarity/pokemon_id/eye/hat/shiny/stats
+/// Determinístico para o usuário: sorteia `rarity/pokemon_id/eye/hat/shiny/stats`
 /// usando apenas `user_id` como semente. Útil como fallback antes da escolha.
 #[must_use]
 pub fn roll_bones(user_id: &str) -> CompanionBones {
@@ -208,7 +211,7 @@ mod tests {
     #[test]
     fn stats_all_in_range() {
         let b = roll_bones("test-user");
-        for (_, &v) in &b.stats {
+        for &v in b.stats.values() {
             assert!(v <= 100, "stat value {v} out of range");
         }
         assert_eq!(b.stats.len(), ALL_STAT_NAMES.len());

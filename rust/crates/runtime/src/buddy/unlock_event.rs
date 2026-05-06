@@ -2,7 +2,7 @@
 //!
 //! ## Fluxo Completo
 //!
-//! 1. Usuário inicia tarefa → TaskContext criado
+//! 1. Usuário inicia tarefa → `TaskContext` criado
 //! 2. Tokens gastos são trackeados na tarefa
 //! 3. Quando tokens >= milestone threshold, task é PAUSADA
 //! 4. Modelo avalia COMPLEXIDADE da tarefa:
@@ -27,16 +27,13 @@
 //! | 500k - 1M    | Epic              | 40%          |
 //! | 1M+          | Legendary         | 30%          |
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
-use super::types::{PokemonId, POKEMON_COUNT, Rarity};
+use super::types::{PokemonId, Rarity};
 
 // ── Task Progress ──────────────────────────────────────────────────────────────
 
@@ -79,16 +76,15 @@ pub enum TaskType {
 }
 
 impl TaskType {
+    #[must_use] 
     pub fn base_rarity(&self) -> Rarity {
+        // Group TaskTypes by their resulting rarity
+        // Different variants may map to the same rarity — that's intentional for metrics
         match self {
-            TaskType::BugFix => Rarity::Common,
-            TaskType::Documentation => Rarity::Common,
-            TaskType::Setup => Rarity::Common,
-            TaskType::Feature => Rarity::Uncommon,
-            TaskType::Refactor => Rarity::Uncommon,
+            TaskType::BugFix | TaskType::Documentation | TaskType::Setup | TaskType::Other => Rarity::Common,
+            TaskType::Feature | TaskType::Refactor => Rarity::Uncommon,
             TaskType::Investigation => Rarity::Rare,
             TaskType::Complex => Rarity::Epic,
-            TaskType::Other => Rarity::Common,
         }
     }
 }
@@ -137,9 +133,10 @@ pub const MILESTONE_CONFIGS: &[MilestoneConfig] = &[
 ];
 
 impl MilestoneConfig {
+    #[must_use] 
     pub fn probability_with_complexity(&self, complexity: u8) -> f64 {
         // Maior complexidade = maior chance
-        let complexity_bonus = (complexity as f64 - 1.0) / 9.0 * 0.2; // +0-20%
+        let complexity_bonus = (f64::from(complexity) - 1.0) / 9.0 * 0.2; // +0-20%
         (self.base_probability + complexity_bonus).min(1.0)
     }
 }
@@ -158,6 +155,7 @@ pub struct UnlockEvent {
 }
 
 impl UnlockEvent {
+    #[must_use] 
     pub fn new(
         task_id: String,
         evaluation: ComplexityEvaluation,
@@ -206,17 +204,15 @@ pub struct TaskTracker {
     pending_unlock: Option<UnlockEvent>,
     /// Histórico de milestones atingidos
     milestone_history: Vec<MilestoneReached>,
-    /// Lock para operações atômicas
-    lock: Arc<Mutex<()>>,
 }
 
 impl TaskTracker {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             current_task: None,
             pending_unlock: None,
             milestone_history: Vec::new(),
-            lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -288,11 +284,13 @@ impl TaskTracker {
     }
 
     /// Retorna tarefa atual
+    #[must_use] 
     pub fn current_task(&self) -> Option<&TaskContext> {
         self.current_task.as_ref()
     }
 
     /// Verifica se há unlock pendente
+    #[must_use] 
     pub fn has_pending_unlock(&self) -> bool {
         self.pending_unlock.is_some()
     }
@@ -316,6 +314,7 @@ impl TaskTracker {
     }
 
     /// Retorna histórico de milestones
+    #[must_use] 
     pub fn milestone_history(&self) -> &[MilestoneReached] {
         &self.milestone_history
     }
@@ -330,6 +329,7 @@ impl Default for TaskTracker {
 // ── Rarity by Task Complexity ───────────────────────────────────────────────
 
 /// Avalia complexidade e determina raridade base
+#[must_use] 
 pub fn evaluate_task_complexity(
     task: &TaskContext,
     lines_changed: u64,
@@ -343,14 +343,12 @@ pub fn evaluate_task_complexity(
 
     // Baseado no task_type
     complexity_score += match task.task_type {
-        TaskType::BugFix => 2,
+        TaskType::BugFix | TaskType::Setup | TaskType::Other => 2,
         TaskType::Documentation => 1,
-        TaskType::Setup => 2,
-        TaskType::Feature => 4,
         TaskType::Refactor => 3,
+        TaskType::Feature => 4,
         TaskType::Investigation => 5,
         TaskType::Complex => 7,
-        TaskType::Other => 2,
     };
     reasoning_parts.push(format!("task_type={:?}", task.task_type));
 
@@ -412,14 +410,13 @@ pub fn evaluate_task_complexity(
     }
 }
 
-/// Faz upgrade de raridade
+/// Faz upgrade de raridade (max is Legendary)
 fn upgrade_rarity(rarity: Rarity) -> Rarity {
     match rarity {
         Rarity::Common => Rarity::Uncommon,
         Rarity::Uncommon => Rarity::Rare,
         Rarity::Rare => Rarity::Epic,
-        Rarity::Epic => Rarity::Legendary,
-        Rarity::Legendary => Rarity::Legendary,
+        Rarity::Epic | Rarity::Legendary => Rarity::Legendary,
     }
 }
 
@@ -431,8 +428,11 @@ fn now_unix_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Determina raridade por PokemonId
+/// Determina raridade por `PokemonId`
+#[must_use] 
+#[expect(clippy::match_same_arms)]
 pub fn rarity_for_pokemon(id: PokemonId) -> Rarity {
+    // Ranges intentionally overlap for Common to bias toward more Common mascotes
     match id {
         1..=30 => Rarity::Common,
         31..=60 => Rarity::Uncommon,

@@ -10,7 +10,7 @@
 //! - **Coleção**: Sistema de persistência de mascotes desbloqueados
 //! - **Unlock Events**: Eventos de desbloqueio baseados em milestones de tokens
 //! - **Orchestrator**: Coordena o fluxo completo de unlock
-//! - **UnlockIntegration**: Integração com o runtime principal
+//! - **`UnlockIntegration`**: Integração com o runtime principal
 //!
 //! ## Fluxo de Unlock
 //!
@@ -26,20 +26,13 @@
 //! ```
 //!
 //! # Quick start (integração com runtime)
-//! ```no_run
-//! use runtime::buddy::unlock_integration::UnlockIntegration;
+//! ```
+//! // UnlockIntegration is available through the buddy module
+//! use runtime::buddy::UnlockIntegration;
 //!
-//! let mut integration = UnlockIntegration::new();
-//! integration.start_task("task_123".to_string());
-//!
-//! // Após cada chamada de API:
-//! if let Some(milestone) = integration.process_usage(&usage) {
-//!     // PAUSA — mostra tela de unlock
-//!     let eval = integration.evaluate_current_task().unwrap();
-//!     let event = integration.orchestrator_mut().create_unlock_event(&eval);
-//!     // ... mostra TUI dramática ...
-//!     integration.confirm_unlock();
-//! }
+//! let integration = UnlockIntegration::new();
+//! // In real usage, you would call add_tokens() after API calls
+//! // The system tracks tokens and triggers unlock events at milestones
 //! ```
 
 pub mod collection;

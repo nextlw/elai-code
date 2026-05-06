@@ -799,9 +799,9 @@ struct ErrorBody {
     message: Option<String>,
 }
 
-/// Returns true when the model or explicit reasoning_effort implies that every
+/// Returns true when the model or explicit `reasoning_effort` implies that every
 /// assistant message in the history MUST carry a `reasoning_content` field.
-/// Kimi (Moonshot AI) and DeepSeek thinking models enforce this requirement.
+/// Kimi (Moonshot AI) and `DeepSeek` thinking models enforce this requirement.
 fn model_needs_reasoning_content(request: &MessageRequest) -> bool {
     if request.reasoning_effort.is_some() {
         return true;
@@ -1449,7 +1449,7 @@ mod tests {
         let parsed: ChatCompletionResponse = serde_json::from_str(raw).expect("json");
         let msg = normalize_response("fallback-model", parsed).expect("normalize");
         assert!(!msg.id.is_empty());
-        assert_eq!(msg.id.strip_prefix("chatcmpl_").is_some(), true);
+        assert!(msg.id.strip_prefix("chatcmpl_").is_some());
         match msg.content.as_slice() {
             [OutputContentBlock::ToolUse { id, name, .. }] => {
                 assert_eq!(id, "tool_call_0");

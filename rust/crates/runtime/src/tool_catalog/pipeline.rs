@@ -348,8 +348,8 @@ mod tests {
         Skill {
             metadata: SkillMetadata {
                 name: "test_skill".to_string(),
-                requires_tools: requires.iter().map(|s| s.to_string()).collect(),
-                incompatible_with: incompatible.iter().map(|s| s.to_string()).collect(),
+                requires_tools: requires.iter().map(std::string::ToString::to_string).collect(),
+                incompatible_with: incompatible.iter().map(std::string::ToString::to_string).collect(),
                 ..SkillMetadata::default()
             },
             body: String::new(),
