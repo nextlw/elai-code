@@ -100,7 +100,7 @@ pub async fn stream_events(
             match receiver.recv().await {
                 Ok(text) if text == "__done__" => {
                     yield Ok::<Event, Infallible>(Event::default().event("done").data("{}"));
-                    break;
+                    // keep the stream open — client reconnects for next message otherwise
                 }
                 Ok(text) => {
                     yield Ok::<Event, Infallible>(
