@@ -1,5 +1,4 @@
 pub mod collection;
-pub mod providers;
 pub mod stats;
 pub mod unlock_cmd;
 pub mod user_commands;
@@ -543,17 +542,6 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         user_facing_name: None,
     },
     SlashCommandSpec {
-        name: "providers",
-        aliases: &[],
-        summary_key: "commands.providers.summary",
-        argument_hint_key: Some("commands.providers.argument_hint"),
-        resume_supported: true,
-        category: SlashCategory::Behavior,
-        is_enabled: always_enabled,
-        hidden: false,
-        user_facing_name: None,
-    },
-    SlashCommandSpec {
         name: "verify",
         aliases: &[],
         summary_key: "commands.verify.summary",
@@ -697,9 +685,6 @@ pub enum SlashCommand {
     Stats {
         days: Option<u32>,
     },
-    Providers {
-        verbose: bool,
-    },
     Verify,
     Locale {
         lang: Option<String>,
@@ -831,9 +816,6 @@ impl SlashCommand {
                 }
                 Self::Stats { days }
             }
-            "providers" => Self::Providers {
-                verbose: trimmed.contains("--verbose"),
-            },
             "verify" => Self::Verify,
             "locale" => Self::Locale {
                 lang: parts.next().map(ToOwned::to_owned),
@@ -2307,7 +2289,6 @@ pub fn handle_slash_command(
         | SlashCommand::Cache { .. }
         | SlashCommand::Dream { .. }
         | SlashCommand::Stats { .. }
-        | SlashCommand::Providers { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
         | SlashCommand::Unknown(_) => None,
@@ -2760,8 +2741,8 @@ mod tests {
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
         assert!(help.contains("/locale [pt-BR|en]"));
-        assert_eq!(slash_command_specs().len(), 40);
-        assert_eq!(resume_supported_slash_commands().len(), 21);
+        assert_eq!(slash_command_specs().len(), 39);
+        assert_eq!(resume_supported_slash_commands().len(), 20);
     }
 
     #[test]

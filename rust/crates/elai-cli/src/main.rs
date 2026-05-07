@@ -2012,7 +2012,6 @@ fn run_resume_command(
         | SlashCommand::Tools { .. }
         | SlashCommand::Dream { .. }
         | SlashCommand::Stats { .. }
-        | SlashCommand::Providers { .. }
         | SlashCommand::Cache { .. }
         | SlashCommand::Verify
         | SlashCommand::Locale { .. }
@@ -2563,10 +2562,18 @@ fn run_tui_repl(
                     }
                 }
                 tui::TuiAction::CopyToClipboard(text) => {
-                    copy_to_clipboard(&text);
-                    app.push_chat(tui::ChatEntry::SystemNote(
-                        "✓ Mensagem copiada para a área de transferência".into(),
-                    ));
+                    if !text.is_empty() {
+                        copy_to_clipboard(&text);
+                    }
+                    // Toast já foi setado pelo handler de mouse antes de entrar aqui.
+                    // Se veio de Ctrl+Y (sem toast setado), usa mensagem padrão.
+                    if app.toast_message.is_none() {
+                        app.toast_message = Some(
+                            rust_i18n::t!("tui.toast.copied_to_clipboard").into_owned(),
+                        );
+                        app.toast_deadline =
+                            Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                    }
                 }
                 tui::TuiAction::SetupComplete => {
                     let new_model = app.model.clone();
@@ -2919,7 +2926,7 @@ fn handle_tui_slash_command(
   /verify        {verify}\n\
   /theme gray <n> {theme_gray}\n\
   /swd [off|partial|full]  {swd}\n\
-  /auth          {auth_help}\n\
+  /provedores    {auth_help}\n\
   /uninstall     {uninstall}\n\
   /logout        {logout}\n\
   /version       {version}\n\
@@ -3250,7 +3257,7 @@ fn handle_tui_slash_command(
                 .to_string(),
             ));
         }
-        "auth" => {
+        "provedores" | "auth" => {
             app.open_auth_picker();
         }
         "uninstall" => {
@@ -3423,18 +3430,6 @@ fn handle_tui_slash_command(
             });
             let output = match load_entries(&path, since_secs) {
                 Ok(entries) => render_stats_report(&entries, by_model, by_project, days),
-                Err(e) => format!("Error reading telemetry: {e}"),
-            };
-            app.push_chat(tui::ChatEntry::SystemNote(output));
-        }
-        "providers" => {
-            use commands::providers::render_providers_dashboard;
-            use runtime::{default_telemetry_path, load_entries};
-
-            let verbose = arg.is_some_and(|a| a.contains("--verbose"));
-            let path = default_telemetry_path();
-            let output = match load_entries(&path, None) {
-                Ok(entries) => render_providers_dashboard(&entries, verbose),
                 Err(e) => format!("Error reading telemetry: {e}"),
             };
             app.push_chat(tui::ChatEntry::SystemNote(output));
@@ -4292,16 +4287,6 @@ Type \x1b[1m/help\x1b[0m for commands · \x1b[2mShift+Enter\x1b[0m for newline",
                 });
                 match load_entries(&path, since_secs) {
                     Ok(entries) => print!("{}", render_stats_report(&entries, true, false, days)),
-                    Err(e) => eprintln!("error reading telemetry: {e}"),
-                }
-                false
-            }
-            SlashCommand::Providers { verbose } => {
-                use commands::providers::render_providers_dashboard;
-                use runtime::{default_telemetry_path, load_entries};
-                let path = default_telemetry_path();
-                match load_entries(&path, None) {
-                    Ok(entries) => print!("{}", render_providers_dashboard(&entries, verbose)),
                     Err(e) => eprintln!("error reading telemetry: {e}"),
                 }
                 false
@@ -8675,7 +8660,6 @@ mod tests {
                 "budget",
                 "tools",
                 "stats",
-                "providers",
                 "verify",
                 "locale",
                 "deepresearch",

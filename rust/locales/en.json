@@ -123,10 +123,6 @@
       "summary": "Show token usage and cost statistics",
       "argument_hint": "[--days N] [--by-model] [--by-project]"
     },
-    "providers": {
-      "summary": "Show provider usage dashboard",
-      "argument_hint": "[--verbose]"
-    },
     "verify": {
       "summary": "Verify codebase files against memory entries"
     },
@@ -150,12 +146,11 @@
       "run_init": "Run /init to create a ELAI.md",
       "shortcuts": "F2 switch model · F3 permissions",
       "slash_palette": "Ctrl+K slash palette",
-      "mouse_on_hint": "Mouse: on (wheel scroll) · F9 for select/copy",
-      "mouse_off_hint": "Mouse: off (free select) · F9 for wheel scroll",
       "read_mode_hint": "Read mode on · any key to exit",
       "recent_activity_header": "Recent activity",
       "no_recent": "No recent activity",
-      "session_msgs": "%{count} msgs"
+      "session_msgs": "%{count} msgs",
+      "mouse_hint": "Scroll = navigate · Drag = copy"
     },
     "nav": {
       "next_prev": "→ next  ·  ← previous"
@@ -381,6 +376,9 @@
       "field_label": "%{provider} API key:",
       "nav_select": "↑/↓ navigate · Enter confirm",
       "nav_confirm": "Enter confirm · Esc cancel"
+    },
+    "toast": {
+      "copied_to_clipboard": "✓ Copied to clipboard"
     }
   }
 }

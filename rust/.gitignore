@@ -8,3 +8,4 @@ target/
 .elai/index/
 .sandbox-home/
 .sandbox-tmp/
+.elai-todos.json

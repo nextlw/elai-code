@@ -39,7 +39,7 @@ use crossterm::terminal::{
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -677,8 +677,10 @@ pub struct UiApp {
     /// Instante em que a próxima frase deve ser sorteada.
     pub caption_deadline: Instant,
     pub read_mode: bool,
-    /// Captura de mouse no terminal: `true` = roda rola o chat; `false` = seleção/cópia mais livre.
-    /// Padrão: `false`; ligue com `ELAI_TUI_MOUSE_CAPTURE=1` ou **F9** durante a sessão.
+    /// Captura de mouse no terminal. Padrão: `true` (scroll com a roda funciona
+    /// direto). Para selecionar/copiar texto, segure **SHIFT** e arraste — todos
+    /// os terminais modernos fazem o "SHIFT-bypass" do protocolo de mouse.
+    /// Configurável via `ELAI_TUI_MOUSE_CAPTURE=0` (terminais sem SHIFT-bypass).
     pub mouse_capture_enabled: bool,
     pub swd_level: Arc<AtomicU8>,
     pub budget_pct: f32,
@@ -690,6 +692,12 @@ pub struct UiApp {
     pub tips_cursor: usize,
     /// `false` após o usuário enviar a primeira mensagem; `true` novamente após `/clear`.
     pub show_tips: bool,
+    /// `true` para header completo (ASCII art + info); `false` para modo compacto (só info).
+    /// Escondido automaticamente após a 1ª mensagem do usuário.
+    pub show_header: bool,
+    /// `true` se o header está em modo compacto (sem ASCII art).
+    /// Toggle via Ctrl+H.
+    pub header_compact: bool,
     /// Mensagens digitadas enquanto `thinking = true`, aguardando envio.
     pub message_queue: std::collections::VecDeque<String>,
     /// Próxima mensagem a ser despachada logo que `thinking` voltar a `false`.
@@ -705,6 +713,18 @@ pub struct UiApp {
     /// sessão inteira para que placeholders em mensagens enfileiradas, no
     /// histórico e re-editadas continuem expansíveis.
     pub pasted_contents: std::collections::HashMap<u32, String>,
+    /// Texto do toast atualmente exibido (se houver).
+    pub toast_message: Option<String>,
+    /// Instante em que o toast deve sumir (auto-dismiss após 2 segundos).
+    pub toast_deadline: Option<std::time::Instant>,
+    /// Snapshot do último buffer renderizado (linha+coluna→célula). Usado para
+    /// extrair texto da seleção via mouse de forma terminal-agnóstica.
+    /// `None` antes do primeiro frame.
+    pub last_buffer: Option<Buffer>,
+    /// Posição (col,row) do `MouseDown` esquerdo. `Some` durante drag ativo.
+    pub drag_anchor: Option<(u16, u16)>,
+    /// Posição (col,row) atual do cursor durante drag. `Some` enquanto arrasta.
+    pub drag_current: Option<(u16, u16)>,
 }
 
 /// Spinner de "rosto pensando" com timing orgânico.
@@ -808,9 +828,17 @@ impl UiApp {
         recent_sessions: Vec<(String, Option<String>, usize)>,
         swd_level: Arc<AtomicU8>,
     ) -> Self {
+        // Padrão: mouse capture LIGADO — scroll com a roda funciona out-of-the-box.
+        // Para selecionar/copiar texto, o usuário segura SHIFT enquanto arrasta:
+        // praticamente todos os terminais modernos (iTerm2, Terminal.app, Alacritty,
+        // Kitty, Wezterm, GNOME Terminal, Konsole, Windows Terminal) fazem o
+        // "SHIFT-bypass" do protocolo de mouse da aplicação e ativam a seleção
+        // nativa do terminal automaticamente.
+        // `ELAI_TUI_MOUSE_CAPTURE=0` desliga o capture (para terminais raros que
+        // não suportam SHIFT-bypass — perde scroll, ganha seleção livre).
         let mouse_capture_enabled = env::var("ELAI_TUI_MOUSE_CAPTURE")
             .ok()
-            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"));
+            .map_or(true, |v| !matches!(v.trim(), "0" | "false" | "no" | "off"));
 
         Self {
             model,
@@ -849,11 +877,18 @@ impl UiApp {
             tips_order: Vec::new(),
             tips_cursor: 0,
             show_tips: true,
+            show_header: true,
+            header_compact: false,
             message_queue: std::collections::VecDeque::new(),
             pending_outgoing: None,
             ultrathink_active: false,
             paste_counter: 0,
             pasted_contents: std::collections::HashMap::new(),
+            toast_message: None,
+            toast_deadline: None,
+            last_buffer: None,
+            drag_anchor: None,
+            drag_current: None,
         }
         .with_shuffled_tips()
     }
@@ -869,6 +904,9 @@ impl UiApp {
         self.tips_order = crate::tips::shuffle_indices(self.tips.len());
         self.tips_cursor = 0;
         self.show_tips = true;
+        self.header_compact = false; // Restaura header completo após /clear
+        self.toast_message = None;
+        self.toast_deadline = None;
     }
 
     /// Avança para a próxima dica (wrap-around).
@@ -914,11 +952,19 @@ impl UiApp {
                 self.caption_deadline = now + std::time::Duration::from_millis(delay_ms);
             }
         }
+        // Auto-dismiss do toast após 2 segundos.
+        if let Some(deadline) = self.toast_deadline {
+            if now >= deadline {
+                self.toast_message = None;
+                self.toast_deadline = None;
+            }
+        }
     }
 
     pub fn push_chat(&mut self, entry: ChatEntry) {
         if matches!(entry, ChatEntry::UserMessage(_)) {
             self.show_tips = false;
+            self.header_compact = true;
         }
         // Qualquer entry que NÃO seja um item de tool batch fecha o batch
         // aberto na cauda do chat — o próximo tool call iniciará um bloco novo.
@@ -1507,9 +1553,9 @@ fn slash_command_pt_description(name: &str) -> Option<&'static str> {
         "cache" => "Gerenciar cache de resposta",
         "dream" => "Comprimir memória antiga (AI)",
         "stats" => "Estatísticas de tokens/custo",
-        "providers" => "Painel de uso por provider",
         "verify" => "Verificar codebase vs memória",
         "theme" => "Ajustar tema (cinza secundário)",
+        "provedores" => "Conectar provedores / gerenciar API keys",
         _ => return None,
     })
 }
@@ -1537,9 +1583,9 @@ fn slash_palette_items() -> Vec<(SlashCategory, String, String)> {
             "Strict Write Discipline (off/partial/full)".into(),
         ),
         (
-            SlashCategory::Behavior,
-            "auth".into(),
-            "Connect providers / manage API keys".into(),
+            SlashCategory::Session,
+            "provedores".into(),
+            "Conectar provedores / gerenciar API keys".into(),
         ),
         (
             SlashCategory::Behavior,
@@ -1776,6 +1822,7 @@ pub enum TuiAction {
     EnterReadMode,
     ExitReadMode,
     /// Reaplica `UiApp::mouse_capture_enabled` no terminal (após toggle ou sair do modo leitura).
+    #[allow(dead_code)]
     SyncMouseCapture,
     SetupComplete,
     AuthComplete {
@@ -1849,6 +1896,43 @@ pub fn poll_and_handle(
                 match mouse.kind {
                     MouseEventKind::ScrollUp => app.scroll_chat_up(2),
                     MouseEventKind::ScrollDown => app.scroll_chat_down(2),
+                    // Início de seleção via drag: ancora a posição inicial.
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                        app.drag_anchor = Some((mouse.column, mouse.row));
+                        app.drag_current = Some((mouse.column, mouse.row));
+                    }
+                    // Atualiza a posição corrente do drag para feedback visual.
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                        if app.drag_anchor.is_some() {
+                            app.drag_current = Some((mouse.column, mouse.row));
+                        }
+                    }
+                    // Fim do drag: se houve movimento, extrai o texto da seleção
+                    // a partir do snapshot do último buffer renderizado e copia
+                    // para a área de transferência.
+                    MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                        let anchor = app.drag_anchor.take();
+                        let current = app.drag_current.take();
+                        if let (Some(a), Some(c)) = (anchor, current) {
+                            // Considera drag apenas se moveu pelo menos 1 célula.
+                            let moved = a != c;
+                            if moved {
+                                if let Some(text) = extract_buffer_text(app, a, c) {
+                                    if !text.trim().is_empty() {
+                                        app.toast_message = Some(
+                                            rust_i18n::t!("tui.toast.copied_to_clipboard")
+                                                .into_owned(),
+                                        );
+                                        app.toast_deadline = Some(
+                                            std::time::Instant::now()
+                                                + std::time::Duration::from_secs(2),
+                                        );
+                                        return TuiAction::CopyToClipboard(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2011,11 +2095,6 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
             return TuiAction::EnterReadMode;
         }
-        // F9: alterna captura de mouse (evita Ctrl+M, que em muitos terminais = Enter/CR).
-        (KeyModifiers::NONE, KeyCode::F(9)) => {
-            app.mouse_capture_enabled = !app.mouse_capture_enabled;
-            return TuiAction::SyncMouseCapture;
-        }
         // Ctrl+Y: copia a última mensagem do assistente para a área de transferência.
         (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
             let text = app
@@ -2062,6 +2141,15 @@ fn handle_key(app: &mut UiApp, key: KeyEvent) -> TuiAction {
         }
         (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
             app.scroll_chat_down(5);
+            return TuiAction::None;
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+            // Ctrl+H: alterna entre header completo e compacto
+            app.header_compact = !app.header_compact;
+            // Se mudou para completo, garante que show_header está ativo
+            if !app.header_compact {
+                app.show_header = true;
+            }
             return TuiAction::None;
         }
         (KeyModifiers::NONE, KeyCode::Home) if app.input.is_empty() => {
@@ -4507,7 +4595,7 @@ pub fn render(
         terminal.clear()?;
         app.force_clear = false;
     }
-    terminal.draw(|frame| {
+    let completed = terminal.draw(|frame| {
         let size = frame.area();
 
         // Compute how many rows the input text needs so the box grows with content.
@@ -4518,35 +4606,216 @@ pub fn render(
                                                          // area height = top_border(1) + input_rows + hint(1) + bottom_border(1) = rows + 3
         let input_area_h: u16 = (visible_input_rows + 3).try_into().unwrap_or(u16::MAX);
 
-        // Outer vertical split: header, body, margin, status, input.
-        let outer = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(12),           // header
-                Constraint::Min(3),               // chat body
-                Constraint::Length(1),            // margin between chat and status
-                Constraint::Length(1),            // status footer
-                Constraint::Length(input_area_h), // input (grows with content)
-            ])
-            .split(size);
+        // Outer vertical split: header (toggleável), body, margin, status, input.
+        // Header ocupa 12 linhas fixas se visível.
+        // Quando oculto, o chat ocupa todo o espaço disponível (sem "buraco").
 
-        draw_header(frame, outer[0], app);
-        draw_chat(frame, outer[1], app);
-        // outer[2] is the visual margin — nothing rendered
-        draw_status(frame, outer[3], app);
-        draw_input(frame, outer[4], app);
+        let total_h = size.height;
+        let margin_h = 1_u16;
+        let status_h = 1_u16;
+        let input_h = input_area_h;
+        let header_h: u16 = if app.header_compact { 5 } else { 12 };
+        let chat_h = total_h.saturating_sub(header_h + margin_h + status_h + input_h);
 
-        // Draw overlays on top.
+        // Calcula Rects manualmente para evitar espaço vazio do ratatui
+        let mut y = 0;
+        let header_rect = Rect::new(size.x, y, size.width, header_h);
+        y += header_h;
+        let chat_rect = Rect::new(size.x, y, size.width, chat_h);
+        y += chat_h;
+        let _margin_rect = Rect::new(size.x, y, size.width, margin_h); // espaço visual
+        y += margin_h;
+        let status_rect = Rect::new(size.x, y, size.width, status_h);
+        y += status_h;
+        let input_rect = Rect::new(size.x, y, size.width, input_h);
+
+        // Render header apenas se visível
+        if app.show_header {
+            draw_header(frame, header_rect, app);
+        }
+        draw_chat(frame, chat_rect, app);
+        draw_status(frame, status_rect, app);
+        draw_input(frame, input_rect, app);
+
+        // Draw overlays on top (toast sobre tudo).
         if let Some(ref overlay) = app.overlay {
             draw_overlay(frame, size, overlay, app);
+        } else if let Some(ref msg) = app.toast_message {
+            // Toast não é um overlay normal (não bloqueia input) — desenhado aqui
+            // se nenhum outro overlay está ativo.
+            draw_toast(frame, size, msg);
+        }
+
+        // Highlight de seleção via mouse-drag (por cima de tudo, exceto overlays
+        // modais). Pinta as células do retângulo entre `drag_anchor` e
+        // `drag_current` com `Modifier::REVERSED` para feedback visual estilo
+        // "marca-texto", ainda que o terminal não tenha SHIFT-bypass.
+        if app.overlay.is_none() {
+            if let (Some(a), Some(c)) = (app.drag_anchor, app.drag_current) {
+                paint_selection(frame.buffer_mut(), a, c);
+            }
         }
     })?;
+    // Snapshot do buffer recém-renderizado: usado para extrair texto da
+    // seleção quando o usuário soltar o botão do mouse. `CompletedFrame.buffer`
+    // referencia o buffer "frontal" pós-flush.
+    app.last_buffer = Some(completed.buffer.clone());
     Ok(())
+}
+
+/// Pinta um retângulo de seleção (estilo seleção de texto) no buffer.
+/// `a` e `c` são `(col,row)` das pontas; o retângulo é normalizado.
+fn paint_selection(buf: &mut Buffer, a: (u16, u16), c: (u16, u16)) {
+    let area = buf.area;
+    let (x0, x1) = if a.0 <= c.0 { (a.0, c.0) } else { (c.0, a.0) };
+    let (y0, y1) = if a.1 <= c.1 { (a.1, c.1) } else { (c.1, a.1) };
+    // Clamp ao buffer.
+    let x0 = x0.max(area.x);
+    let y0 = y0.max(area.y);
+    let x1 = x1.min(area.right().saturating_sub(1));
+    let y1 = y1.min(area.bottom().saturating_sub(1));
+    if x0 > x1 || y0 > y1 {
+        return;
+    }
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            if let Some(cell) = buf.cell_mut(Position { x, y }) {
+                cell.modifier.insert(Modifier::REVERSED);
+            }
+        }
+    }
+}
+
+/// Extrai texto do snapshot do último buffer renderizado entre dois pontos
+/// `(col,row)`. A seleção é "linear" (estilo seleção de texto):
+/// - Se a âncora e o cursor estão na mesma linha, retorna o trecho daquela
+///   linha entre as colunas.
+/// - Caso contrário, da âncora até o fim da linha, linhas inteiras
+///   intermediárias, e da primeira coluna até o cursor na última linha.
+/// Trailing whitespace de cada linha é removido.
+fn extract_buffer_text(app: &UiApp, a: (u16, u16), c: (u16, u16)) -> Option<String> {
+    let buf = app.last_buffer.as_ref()?;
+    let area = buf.area;
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    // Normaliza: garante que `start` vem antes de `end` na ordem de leitura.
+    let (start, end) = if (a.1, a.0) <= (c.1, c.0) {
+        (a, c)
+    } else {
+        (c, a)
+    };
+    let max_x = area.right().saturating_sub(1);
+    let max_y = area.bottom().saturating_sub(1);
+    let sy = start.1.min(max_y);
+    let ey = end.1.min(max_y);
+    let mut out = String::new();
+
+    let read_row = |y: u16, x_from: u16, x_to: u16, out: &mut String| {
+        let xa = x_from.max(area.x);
+        let xb = x_to.min(max_x);
+        if xa > xb {
+            return;
+        }
+        let mut line = String::new();
+        for x in xa..=xb {
+            if let Some(cell) = buf.cell(Position { x, y }) {
+                line.push_str(cell.symbol());
+            }
+        }
+        // Remove trailing whitespace para evitar arrastar borda da tela.
+        let trimmed = line.trim_end();
+        out.push_str(trimmed);
+    };
+
+    if sy == ey {
+        let xa = start.0.min(end.0);
+        let xb = start.0.max(end.0);
+        read_row(sy, xa, xb, &mut out);
+    } else {
+        // Primeira linha: da âncora até o fim.
+        read_row(sy, start.0, max_x, &mut out);
+        out.push('\n');
+        // Linhas intermediárias inteiras.
+        for y in (sy + 1)..ey {
+            read_row(y, area.x, max_x, &mut out);
+            out.push('\n');
+        }
+        // Última linha: do início até o cursor.
+        read_row(ey, area.x, end.0, &mut out);
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
 fn draw_header(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
+    // Modo compacto: mesmo layout do completo, sem ASCII art.
+    // 5 linhas: borda + título(1) + welcome(1) + cwd(1) + borda = 5 totais.
+    if app.header_compact {
+        let t = theme();
+        let username = whoami_user();
+        let cwd_budget = (area.width as usize).saturating_sub(4);
+
+        let title = Span::styled(
+            format!(" Elai Code v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(t.easter_egg.warm).add_modifier(Modifier::BOLD),
+        );
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(t.easter_egg.warm))
+            .title(title);
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Mesmo split horizontal do modo completo.
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(52),
+                Constraint::Length(1),
+                Constraint::Min(20),
+            ])
+            .split(inner);
+
+        // Coluna esquerda: welcome + cwd (sem ASCII art).
+        let welcome_lines = vec![
+            Line::from(Span::styled(
+                rust_i18n::t!("tui.header.welcome", username = username),
+                Style::default()
+                    .fg(t.easter_egg.warm)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                shorten_cwd(cwd_budget),
+                Style::default().fg(t.easter_egg.dark),
+            )),
+        ];
+        let welcome_para = Paragraph::new(welcome_lines)
+            .block(Block::default())
+            .alignment(Alignment::Center);
+        frame.render_widget(welcome_para, cols[0]);
+
+        // Divisor.
+        let divider_block = Block::default()
+            .borders(Borders::LEFT)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(t.easter_egg.warm));
+        frame.render_widget(divider_block, cols[1]);
+
+        // Coluna direita: side panel completo.
+        draw_side_panel(frame, cols[2], app);
+        return;
+    }
+
     // Quadro único arredondado com título compacto " Elai Code v0.7.1 "
     let title_style = Style::default()
         .fg(theme().easter_egg.warm)
@@ -4761,10 +5030,8 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
             "  {}",
             if app.read_mode {
                 rust_i18n::t!("tui.side_panel.read_mode_hint")
-            } else if app.mouse_capture_enabled {
-                rust_i18n::t!("tui.side_panel.mouse_on_hint")
             } else {
-                rust_i18n::t!("tui.side_panel.mouse_off_hint")
+                rust_i18n::t!("tui.side_panel.mouse_hint")
             }
         ),
         muted,
@@ -4814,8 +5081,8 @@ fn draw_side_panel(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 
 fn draw_chat(frame: &mut ratatui::Frame, area: Rect, app: &mut UiApp) {
     let block = Block::default()
-        .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
-        .border_style(Style::default().fg(theme().border_inactive));
+        .borders(Borders::NONE);
+
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -6038,8 +6305,9 @@ fn draw_normal_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
         HelpBinding::new("F2", "modelo"),
         HelpBinding::new("F3", "perm"),
         HelpBinding::new("F4", "sessão"),
+        HelpBinding::new("Ctrl+H", "header"),
         HelpBinding::new("Ctrl+R", "leitura"),
-        HelpBinding::new("F9", "mouse"),
+        HelpBinding::new("arrastar", "copiar"),
         HelpBinding::new("Ctrl+C", "sair"),
     ];
     let help =
@@ -6124,6 +6392,41 @@ fn draw_normal_input(frame: &mut ratatui::Frame, area: Rect, app: &UiApp) {
 }
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
+
+/// Desenha um toast de notificação no canto inferior direito.
+/// Auto-dismiss: `app.toast_deadline` é gerenciado externamente (via tick/timeout).
+fn draw_toast(frame: &mut ratatui::Frame, area: Rect, message: &str) {
+    let t = theme();
+    // Largura do toast: mínimo do conteúdo + padding.
+    let content_w = message.chars().count() as u16 + 4;
+    let w = content_w.min(area.width.saturating_sub(4)).max(10);
+    let h = 3_u16;
+
+    // Posição: canto inferior direito, 2 células de margem.
+    let x = area.right().saturating_sub(w + 2);
+    let y = area.bottom().saturating_sub(h + 2);
+    let rect = Rect::new(x, y, w, h);
+
+    // Fundo semi-transparente + borda colorida.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(t.easter_egg.warm))
+        .style(Style::default().bg(ratatui::style::Color::DarkGray));
+
+    let para = Paragraph::new(Line::from(Span::styled(
+        format!(" {} ", message),
+        Style::default()
+            .fg(ratatui::style::Color::White)
+            .add_modifier(Modifier::BOLD),
+    )))
+    .alignment(Alignment::Center);
+
+    frame.render_widget(Clear, rect); // limpa fundo
+    frame.render_widget(block, rect);
+    let inner = Rect::new(rect.x + 1, rect.y + 1, rect.width.saturating_sub(2), rect.height.saturating_sub(2));
+    frame.render_widget(para, inner);
+}
 
 #[allow(clippy::too_many_lines)]
 fn draw_overlay(frame: &mut ratatui::Frame, area: Rect, overlay: &OverlayKind, app: &UiApp) {

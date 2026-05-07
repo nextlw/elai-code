@@ -123,10 +123,6 @@
       "summary": "Mostra estatísticas de uso de tokens e custo",
       "argument_hint": "[--days N] [--by-model] [--by-project]"
     },
-    "providers": {
-      "summary": "Mostra o painel de uso dos provedores",
-      "argument_hint": "[--verbose]"
-    },
     "verify": {
       "summary": "Verifica arquivos do código contra entradas de memória"
     },
@@ -162,12 +158,11 @@
       "run_init": "Run /init to create a ELAI.md",
       "shortcuts": "F2 trocar modelo · F3 permissões",
       "slash_palette": "Ctrl+K slash palette",
-      "mouse_on_hint": "Mouse: ligado (rolagem) · F9 copiar/selecionar",
-      "mouse_off_hint": "Mouse: desligado (seleção) · F9 rolar chat",
       "read_mode_hint": "Modo leitura ativo · tecla para sair",
       "recent_activity_header": "Recent activity",
       "no_recent": "No recent activity",
-      "session_msgs": "%{count} msgs"
+      "session_msgs": "%{count} msgs",
+      "mouse_hint": "Scroll = navegar · Arrastar = copiar"
     },
     "nav": {
       "next_prev": "→ próxima  ·  ← anterior"
@@ -175,7 +170,6 @@
     "thinking_footer": {
       "normal": [
         "Pensando...",
-
         "Embedando JSON em next.js...",
         "Trabalhando...",
         "Deslulitizando...",
@@ -258,7 +252,7 @@
         "verify": "Verificar codebase vs memória (ELAI.md)",
         "theme_gray": "Ajustar cinza secundário (232-255)",
         "swd": "Strict Write Discipline (padrão: partial)",
-        "auth_help": "Conectar providers / gerenciar API keys",
+        "auth_help": "Conectar provedores / gerenciar API keys",
         "uninstall": "Desinstalar Elai Code",
         "logout": "Remover credenciais de autenticação salvas",
         "version": "Mostrar versão",
@@ -396,6 +390,9 @@
       "field_label": "%{provider} API key:",
       "nav_select": "↑/↓ navegar · Enter confirmar",
       "nav_confirm": "Enter confirmar · Esc cancelar"
+    },
+    "toast": {
+      "copied_to_clipboard": "✓ Copiado para a área de transferência"
     }
   }
 }
