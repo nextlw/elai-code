@@ -65,8 +65,8 @@ async fn main() -> Result<()> {
     let clerk_webhook_secret = std::env::var("CLERK_WEBHOOK_SECRET").unwrap_or_default();
     let clerk_api_secret = std::env::var("CLERK_SECRET_KEY").unwrap_or_default();
     let model = std::env::var("ELAI_MODEL").unwrap_or_else(|_| "go:kimi-k2.6".to_string());
-    let ai_base_url = std::env::var("AI_BASE_URL")
-        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+    let ai_base_url = std::env::var("XAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.x.ai/v1".to_string());
 
     tracing::info!("connecting to PostgreSQL");
     let db_pool = db::connect(&database_url)
@@ -80,8 +80,8 @@ async fn main() -> Result<()> {
         .context("failed to fetch Clerk JWKS")?;
     tracing::info!(keys = jwk_set.keys.len(), "Clerk JWKS loaded");
 
-    if std::env::var("AI_API_KEY").map_or(true, |key| key.is_empty()) {
-        tracing::warn!("AI_API_KEY not set; SaaS chat responses will use the mock fallback");
+    if std::env::var("XAI_API_KEY").map_or(true, |key| key.is_empty()) {
+        tracing::warn!("XAI_API_KEY not set; SaaS chat responses will use the mock fallback");
     }
     tracing::info!(model = %model, endpoint = %ai_base_url, "AI backend configured");
 

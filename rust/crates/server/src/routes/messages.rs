@@ -140,12 +140,12 @@ async fn generate_ai_response(
     broadcaster: broadcast::Sender<String>,
     db_pool: sqlx::PgPool,
 ) {
-    let api_key = std::env::var("AI_API_KEY").unwrap_or_default();
-    let base_url = std::env::var("AI_BASE_URL")
-        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+    let api_key = std::env::var("XAI_API_KEY").unwrap_or_default();
+    let base_url = std::env::var("XAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.x.ai/v1".to_string());
 
     if api_key.is_empty() {
-        let mock = "Olá! Configure AI_API_KEY para respostas reais.";
+        let mock = "Olá! Configure XAI_API_KEY para respostas reais.";
         let _ = broadcaster.send(mock.to_owned());
         db::message::insert(&db_pool, conv_id, "assistant", mock).await.ok();
         let _ = broadcaster.send("__done__".to_owned());
