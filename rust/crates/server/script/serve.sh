@@ -505,6 +505,8 @@ trap cleanup EXIT INT TERM
 DOCS_PID=""
 if [[ "${SKIP_DOCS:-}" != "1" ]]; then
   if [[ -d "$DOCS_DIR" ]]; then
+    # libera a porta antes de tentar subir
+    lsof -ti ":${DOCS_PORT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     if command -v python3 > /dev/null 2>&1; then
       python3 -m http.server "$DOCS_PORT" --bind 127.0.0.1 2>&1 | \
         tag_stream "$C_DOCS" "[DOCS   :${DOCS_PORT}]" &
@@ -529,7 +531,7 @@ if [[ ${#ALL_PIDS[@]} -eq 0 ]]; then
 fi
 
 info "logs ao vivo (Ctrl+C para encerrar tudo):"
-echo -e "  ${C_SERVER}[SERVER :${SERVER_PORT}]${RES}  ${C_FRONT}[FRONT  :${FRONT_PORT}]${RES}  ${C_DOCS}[DOCS   :${PORT}]${RES}"
+echo -e "  ${C_SERVER}[SERVER :${SERVER_PORT}]${RES}  ${C_FRONT}[FRONT  :${FRONT_PORT}]${RES}  ${C_DOCS}[DOCS   :${DOCS_PORT}]${RES}"
 echo ""
 
 wait "${ALL_PIDS[@]}"
