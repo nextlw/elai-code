@@ -12,7 +12,7 @@ use crate::types::{
 };
 
 const DEFAULT_CODEX_COMMAND: &str = "codex";
-const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_mins(2);
+const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy)]
 struct CodexExecCapabilities {

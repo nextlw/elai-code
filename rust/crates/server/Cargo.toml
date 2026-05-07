@@ -18,8 +18,13 @@ tools = { path = "../tools" }
 runtime = { path = "../runtime" }
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros", "ws"] }
+base64 = "0.22"
+dotenvy = "0.15"
+jsonwebtoken = "9"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "macros"] }
+svix = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
@@ -30,7 +35,8 @@ fastrand.workspace = true
 ulid = "1"
 chrono.workspace = true
 anyhow.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 

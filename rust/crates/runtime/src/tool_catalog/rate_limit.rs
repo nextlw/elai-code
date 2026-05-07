@@ -19,7 +19,7 @@ impl Default for RateLimit {
     fn default() -> Self {
         Self {
             max_calls: 60,
-            window: Duration::from_mins(1),
+            window: Duration::from_secs(60),
         }
     }
 }
@@ -143,7 +143,7 @@ mod tests {
     fn rate_limit_blocks_after_max_calls() {
         let mut bucket = RateLimitBucket::new(RateLimit {
             max_calls: 3,
-            window: Duration::from_mins(1),
+            window: Duration::from_secs(60),
         });
         assert!(bucket.try_call().is_ok());
         assert!(bucket.try_call().is_ok());
@@ -179,7 +179,7 @@ mod tests {
         let mut overrides = HashMap::new();
         overrides.insert(
             "execute_bash".to_string(),
-            RateLimit { max_calls: 2, window: Duration::from_mins(1) },
+            RateLimit { max_calls: 2, window: Duration::from_secs(60) },
         );
         let mut limiter = RateLimiter::with_overrides(overrides);
         assert!(limiter.check("execute_bash").is_ok());

@@ -13,6 +13,7 @@ archive/
 .DS_Store
 **/.DS_Store
 .env
+rust/crates/server/.env
 .elai.json
 .elai/index/
 ELAI.md

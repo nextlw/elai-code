@@ -38,7 +38,7 @@ impl OllamaEmbedder {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let model = model.into();
         let client = Client::builder()
-            .timeout(Duration::from_mins(2))
+            .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| EmbedError::Backend(e.to_string()))?;
         // Healthcheck rápido: GET /api/tags. Se falhar, erro claro.

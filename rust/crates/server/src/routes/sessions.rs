@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tools::GlobalToolRegistry;
 
-use crate::db::{PermissionDecisionPayload, SessionData, TurnHandle};
+use crate::session_store::{PermissionDecisionPayload, SessionData, TurnHandle};
 use crate::permission_bridge::{mode_label, HttpPermissionPrompter};
 use crate::runtime_bridge::{ServerApiClient, ServerToolExecutor};
 use crate::state::AppState;
@@ -661,7 +661,7 @@ pub async fn clone_session(
         )
     };
 
-    let new_session = Arc::new(crate::db::SessionData::new(
+    let new_session = Arc::new(crate::session_store::SessionData::new(
         new_id.clone(),
         cwd,
         model,
