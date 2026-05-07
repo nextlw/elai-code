@@ -18,6 +18,19 @@ REPO="nextlw/elai-code"
 BIN_NAME="elai"
 _BREW_DONE=false
 
+# ── Colors (must be defined before any BOLD/RESET usage) ─────────────────────
+if [ -t 1 ]; then
+  BOLD='\033[1m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'; RED='\033[0;31m'; RESET='\033[0m'
+else
+  BOLD=''; CYAN=''; GREEN=''; YELLOW=''; RED=''; RESET=''
+fi
+
+say()   { printf "  ${CYAN}▶${RESET} %s\n" "$1"; }
+ok()    { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+warn()  { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+error() { printf "  ${RED}✗${RESET} %s\n" "$1" >&2; exit 1; }
+
 # ── Homebrew install (macOS preferred path) ───────────────────────────────────
 if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1 && [ -z "${ELAI_NO_BREW:-}" ]; then
   printf "  ${BOLD}Homebrew detectado — instalando via brew${RESET}\n\n"
@@ -52,19 +65,6 @@ _default_install_dir() {
 INSTALL_DIR="${ELAI_INSTALL_DIR:-$(_default_install_dir)}"
 ELAI_DIR="${HOME}/.elai"
 ENV_FILE="${ELAI_DIR}/.env"
-
-# ── Colors ────────────────────────────────────────────────────────────────────
-if [ -t 1 ]; then
-  BOLD='\033[1m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'
-  YELLOW='\033[0;33m'; RED='\033[0;31m'; RESET='\033[0m'
-else
-  BOLD=''; CYAN=''; GREEN=''; YELLOW=''; RED=''; RESET=''
-fi
-
-say()   { printf "  ${CYAN}▶${RESET} %s\n" "$1"; }
-ok()    { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
-warn()  { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
-error() { printf "  ${RED}✗${RESET} %s\n" "$1" >&2; exit 1; }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}"

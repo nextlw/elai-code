@@ -1,0 +1,5 @@
+./script/serve.sh: line 346: ./target/debug/elai-server: No such file or directory
+./script/serve.sh: line 346: ./target/debug/elai-server: No such file or directory
+./script/serve.sh: line 352: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory
+./script/serve.sh: line 352: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory
+./script/serve.sh: line 353: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory

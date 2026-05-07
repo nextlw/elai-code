@@ -1,0 +1,62 @@
+# docker-compose.yml — serviços de infraestrutura para elai-server dev
+# Uso: docker compose up -d  (ou docker-compose up -d)
+#
+# Portas defaults (sobrescreve com .env se precisar):
+#   PostgreSQL: 5432
+#   Qdrant:     6333 (HTTP) + 6334 (gRPC)
+#   Redis:      6379
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: elai-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DB:-nexa_dev}
+      POSTGRES_USER: ${PG_USER:-nexa}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-nexa123}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - elai_pg_data:/var/lib/postgresql/data
+      # migrations mount-point (roda via script, não aqui)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-nexa} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: elai-qdrant-dev
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - elai_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6333/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: elai-redis-dev
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - elai_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  elai_pg_data:
+  elai_qdrant_data:
+  elai_redis_data:
