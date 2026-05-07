@@ -66,10 +66,25 @@ elai
 
 Elai Code is a modular, memory-safe agent harness that lets AI models safely interact with your filesystem, codebase, web resources, and remote agents — with transactional write guarantees, real-time cost tracking, and a polished terminal UI.
 
-## What's New — v1.4.1
+## What's New — v1.4.4
 
-- feat: update Elai Code documentation and landing page
-- chore: update scoop bucket to v1.4.0
+- refactor: remove providers command and related functionality; update localization and UI for improved user experience
+- fix(server): finalize main.rs wiring and SSE response handler
+- feat(server): lazy user creation on first login via Clerk API (fixes 401 on dev without webhook)
+- chore(server): add .env.example for local development
+- fix: replace Duration::from_mins with from_secs (unstable API on stable Rust)
+- feat(server): wire AppState, router and main.rs for SaaS (Tasks 9+10)
+- fix(server): close SSE on __done__ sentinel; fix UTF-8 chunk boundary decoding
+- feat(server): conversation messages + SSE events routes
+- feat(server): POST/GET/DELETE /v1/conversations routes
+- feat(server): GET/PATCH /v1/me routes
+- feat(server): Clerk webhook handler (user.created/updated/deleted)
+- fix(server): robust bearer extraction (case-insensitive, percent-decode, empty check)
+- feat(server): Clerk JWKS cache and JWT auth middleware
+- feat(server): add DB models (user, conversation, message, config)
+- feat(server): add PostgreSQL schema migrations
+- feat(server): add sqlx, jsonwebtoken, svix, uuid dependencies
+- chore: update scoop bucket to v1.4.1
 
 ---
 
