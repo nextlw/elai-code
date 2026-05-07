@@ -1,5 +1,78 @@
-./script/serve.sh: line 346: ./target/debug/elai-server: No such file or directory
-./script/serve.sh: line 346: ./target/debug/elai-server: No such file or directory
-./script/serve.sh: line 352: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory
-./script/serve.sh: line 352: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory
-./script/serve.sh: line 353: /Users/williamduarte/NCMproduto/integracoes/cratesIO/elai-code/rust/crates/server/../target/debug/elai-server: No such file or directory
+
+[2m2026-05-07T16:40:51.020023Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T16:40:51.020127Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T16:40:51.065900Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T16:40:51.192237Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T16:40:51.192284Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T16:40:51.569583Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T16:40:51.569635Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T16:43:08.187862Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T16:43:08.188017Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T16:43:08.188341Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T16:43:08.238587Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T16:43:08.238619Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T16:43:08.629813Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T16:43:08.629871Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T16:44:31.993828Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T16:44:31.994010Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T16:44:31.994355Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T16:44:32.063426Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T16:44:32.063487Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T16:44:32.345828Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T16:44:32.345892Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T16:48:35.637002Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T16:48:35.637132Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T16:48:35.637451Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T16:48:35.688643Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T16:48:35.688683Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T16:48:36.438600Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T16:48:36.438698Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:05:38.616620Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:05:38.616684Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:05:38.617024Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:05:38.668533Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:05:38.668572Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:05:39.440059Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:05:39.440108Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:11:16.142555Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:11:16.142611Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:11:16.143068Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:11:16.194900Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:11:16.194993Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:11:16.756054Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:11:16.756098Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:14:21.862693Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:14:21.862877Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:14:21.863237Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:14:21.916772Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:14:21.916821Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:14:22.191176Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:14:22.191232Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:16:23.377135Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:16:23.377334Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:16:23.377702Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:16:23.477854Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:16:23.477904Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:16:23.723082Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:16:23.723142Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:20:17.077999Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:20:17.078066Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:20:17.078528Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:20:17.128095Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:20:17.128130Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:20:17.509010Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:20:17.509460Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T17:23:17.151627Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T17:23:17.151829Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T17:23:17.152193Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T17:23:17.202160Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T17:23:17.202204Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T17:23:17.581437Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1
+[2m2026-05-07T17:23:17.581485Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m AI backend configured [3mmodel[0m[2m=[0mzen:minimax-m2.5-free [3mendpoint[0m[2m=[0mhttps://api.opencode.ai/v1
+[2m2026-05-07T18:04:59.008847Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m auth token persisted [3mpath[0m[2m=[0m/Users/williamduarte/.elai/server-token
+[2m2026-05-07T18:04:59.009575Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m starting elai-server [3maddr[0m[2m=[0m0.0.0.0:3000
+[2m2026-05-07T18:04:59.015930Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m connecting to PostgreSQL
+[2m2026-05-07T18:04:59.091580Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m PostgreSQL connected
+[2m2026-05-07T18:04:59.099746Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m active model synced to DB [3mmodel[0m[2m=[0mzen:minimax-m2.5-free
+[2m2026-05-07T18:04:59.099774Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m fetching Clerk JWKS [3murl[0m[2m=[0mhttps://living-fly-76.clerk.accounts.dev/.well-known/jwks.json
+[2m2026-05-07T18:04:59.480844Z[0m [32m INFO[0m [2melai_server[0m[2m:[0m Clerk JWKS loaded [3mkeys[0m[2m=[0m1

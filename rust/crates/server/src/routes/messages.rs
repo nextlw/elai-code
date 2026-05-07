@@ -1,5 +1,9 @@
 use std::convert::Infallible;
 
+use api::{
+    max_tokens_for_model, resolve_model_alias, InputContentBlock, InputMessage, MessageRequest,
+    OutputContentBlock, ProviderClient,
+};
 use async_stream::stream;
 use axum::{
     extract::{Path, State},
@@ -75,7 +79,12 @@ pub async fn send_message(
     let broadcaster = state.get_or_create_channel(conv_id).await;
 
     let db_pool = state.db.clone();
-    let model = conv.model.clone().unwrap_or_else(|| "go:kimi-k2.6".to_owned());
+    let model = conv
+        .model
+        .clone()
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| api::suggested_default_model());
+
     tokio::spawn(async move {
         generate_ai_response(conv_id, history, system_prompt, model, broadcaster, db_pool).await;
     });
@@ -99,6 +108,17 @@ pub async fn stream_events(
         loop {
             match receiver.recv().await {
                 Ok(text) if text == "__done__" => {
+                    yield Ok::<Event, Infallible>(Event::default().event("done").data("{}"));
+                    break;
+                }
+                Ok(text) if text.starts_with("__error__:") => {
+                    let msg = text.strip_prefix("__error__:").unwrap_or(&text);
+                    yield Ok::<Event, Infallible>(
+                        Event::default().event("error").data(
+                            serde_json::to_string(&serde_json::json!({ "message": msg }))
+                                .unwrap_or_default()
+                        )
+                    );
                     yield Ok::<Event, Infallible>(Event::default().event("done").data("{}"));
                     break;
                 }
@@ -140,80 +160,78 @@ async fn generate_ai_response(
     broadcaster: broadcast::Sender<String>,
     db_pool: sqlx::PgPool,
 ) {
-    let api_key = std::env::var("XAI_API_KEY").unwrap_or_default();
-    let base_url = std::env::var("XAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.x.ai/v1".to_string());
-
-    if api_key.is_empty() {
-        let mock = "Olá! Configure XAI_API_KEY para respostas reais.";
-        let _ = broadcaster.send(mock.to_owned());
-        db::message::insert(&db_pool, conv_id, "assistant", mock).await.ok();
-        let _ = broadcaster.send("__done__".to_owned());
-        return;
-    }
-
-    let mut oai_messages = vec![serde_json::json!({ "role": "system", "content": system_prompt })];
-    for m in &history {
-        if m.role == "user" || m.role == "assistant" {
-            oai_messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
-        }
-    }
-
-    let body = serde_json::json!({
-        "model": model,
-        "max_tokens": 64_000,
-        "stream": true,
-        "messages": oai_messages
-    });
-
-    let client = reqwest::Client::new();
-    let response = match client
-        .post(format!("{base_url}/chat/completions"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => r,
-        Ok(r) => {
-            eprintln!("AI API error {}", r.status());
-            let _ = broadcaster.send("__done__".to_owned());
-            return;
-        }
+    let client = match ProviderClient::from_model(&model) {
+        Ok(c) => c,
         Err(e) => {
-            eprintln!("AI request failed: {e}");
-            let _ = broadcaster.send("__done__".to_owned());
+            tracing::error!(%model, error = %e, "failed to build ProviderClient");
+            let _ = broadcaster.send(format!("__error__:Erro ao configurar provider para '{model}': {e}"));
             return;
         }
     };
 
-    let mut full_text = String::new();
-    let mut raw_buf: Vec<u8> = Vec::new();
-    let mut response = response;
+    let resolved = resolve_model_alias(&model);
+    let max_tokens = max_tokens_for_model(&resolved);
 
-    'outer: while let Ok(Some(chunk)) = response.chunk().await {
-        raw_buf.extend_from_slice(&chunk);
-        while let Some(pos) = raw_buf.iter().position(|&b| b == b'\n') {
-            let line_bytes = raw_buf.drain(..=pos).collect::<Vec<u8>>();
-            let line = match String::from_utf8(line_bytes) {
-                Ok(s) => s,
-                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-            };
-            let line = line.trim();
-            let Some(data) = line.strip_prefix("data: ") else { continue };
-            if data == "[DONE]" { break 'outer; }
-            let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else { continue };
-            if let Some(text) = val["choices"][0]["delta"]["content"].as_str() {
-                if !text.is_empty() {
-                    full_text.push_str(text);
-                    let _ = broadcaster.send(text.to_owned());
-                }
+    let mut messages: Vec<InputMessage> = Vec::new();
+    for m in &history {
+        let role = match m.role.as_str() {
+            "assistant" => "assistant",
+            _ => "user",
+        };
+        messages.push(InputMessage {
+            role: role.to_string(),
+            content: vec![InputContentBlock::Text { text: m.content.clone() }],
+        });
+    }
+
+    let request = MessageRequest {
+        model: resolved.clone(),
+        max_tokens,
+        messages,
+        system: Some(system_prompt),
+        tools: None,
+        tool_choice: None,
+        stream: false,
+        thinking: None,
+        output_config: None,
+        reasoning_effort: None,
+    };
+
+    match client.send_message(&request).await {
+        Ok(response) => {
+            let full_text: String = response
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    OutputContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+
+            if full_text.is_empty() {
+                tracing::warn!(%conv_id, "AI returned empty response");
+                let _ = broadcaster.send("__error__:A IA retornou uma resposta vazia.".to_string());
+                return;
             }
+
+            // Envia em blocos para simular streaming (chunks de ~80 chars)
+            for chunk in full_text.as_bytes().chunks(80) {
+                let text = String::from_utf8_lossy(chunk).into_owned();
+                let _ = broadcaster.send(text);
+            }
+
+            db::message::insert(&db_pool, conv_id, "assistant", &full_text)
+                .await
+                .ok();
+            db::conversation::touch(&db_pool, conv_id).await.ok();
+        }
+        Err(e) => {
+            tracing::error!(%conv_id, %resolved, error = %e, "AI API call failed");
+            let _ = broadcaster.send(format!("__error__:Erro na IA ({resolved}): {e}"));
         }
     }
 
-    db::message::insert(&db_pool, conv_id, "assistant", &full_text).await.ok();
-    db::conversation::touch(&db_pool, conv_id).await.ok();
     let _ = broadcaster.send("__done__".to_owned());
 }
 

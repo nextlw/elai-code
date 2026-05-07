@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: ${PG_USER:-nexa}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-nexa123}
     ports:
-      - "${PG_PORT:-5432}:5432"
+      - "${PG_PORT:-5433}:5432"
     volumes:
       - elai_pg_data:/var/lib/postgresql/data
       # migrations mount-point (roda via script, não aqui)

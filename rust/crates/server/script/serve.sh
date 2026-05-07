@@ -15,33 +15,52 @@ pipefail_on()  { set -o pipefail; }
 pipefail_off() { set +o pipefail; }
 
 # ── defaults ──────────────────────────────────────────────────────────────────
-PORT="${1:-8080}"
-SERVER_PORT="${SERVER_PORT:-3000}"
-SERVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # crates/server/
-RUST_DIR="${SERVER_DIR}/../"  # rust/
+# DOCS_PORT  = porta do servidor estático de docs (primeiro arg, separado do API server)
+# SERVER_PORT = porta do elai-server (deve bater com o proxy do Vite — vite.config.ts aponta pra 8080)
+DOCS_PORT="${1:-9090}"
+SERVER_PORT="${SERVER_PORT:-8080}"
+SERVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"       # rust/crates/server/
 COMPOSE_FILE="${SERVER_DIR}/docker-compose.yml"
 ENV_FILE="${SERVER_DIR}/.env"
+RUST_DIR="$(cd "$SERVER_DIR/../.." && pwd)"                            # rust/
+# garante trailing slash
+[[ "$RUST_DIR" != */ ]] && RUST_DIR="${RUST_DIR}/"
 
 # credenciais padrão (dev)
 export PG_DB="${PG_DB:-nexa_dev}"
 export PG_USER="${PG_USER:-nexa}"
 export PG_PASSWORD="${PG_PASSWORD:-nexa123}"
-export PG_PORT="${PG_PORT:-5432}"
+export PG_PORT="${PG_PORT:-5433}"
 export QDRANT_PORT="${QDRANT_PORT:-6333}"
 export QDRANT_GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
 export REDIS_PORT="${REDIS_PORT:-6379}"
 
 # frontend
 export FRONT_DIR="${FRONT_DIR:-}"
-export FRONT_PORT="${FRONT_PORT:-5173}"
+export FRONT_PORT="${FRONT_PORT:-5174}"
 
 # ── cores ─────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YEL='\033[1;33m'; CYA='\033[0;36m'; BLD='\033[1m'
+MAG='\033[0;35m'; BLU='\033[0;34m'; WHT='\033[0;37m'
 RES='\033[0m'
 info()  { echo -e "${CYA}[INFO]${RES} $*"; }
 ok()    { echo -e "${GRN}[ OK ]${RES} $*"; }
 warn()  { echo -e "${YEL}[WARN]${RES} $*"; }
 die()   { echo -e "${RED}[FAIL]${RES} $*" >&2; exit 1; }
+
+# cores por processo
+C_SERVER="${GRN}"; C_FRONT="${MAG}"; C_DOCS="${BLU}"
+
+# tag_stream COLOR LABEL — lê stdin e prefixa cada linha com [LABEL] colorido
+tag_stream() {
+  local color="$1" label="$2"
+  while IFS= read -r line; do
+    printf "${color}%-20s${RES} %s\n" "$label" "$line"
+  done
+}
+
+# array global de PIDs em foreground para wait/cleanup
+declare -a ALL_PIDS=()
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 docker_running()  { docker info > /dev/null 2>&1; }
@@ -133,16 +152,34 @@ wait_service() {
 }
 
 ask_front_path() {
-  if [[ -n "${FRONT_DIR}" ]]; then
-    if [[ -d "$FRONT_DIR" ]]; then
-      ok "frontend: $FRONT_DIR"
-    else
+  # FRONT_DIR já vem do .env → pergunta só se quer ativar ou pular
+  if [[ -n "${FRONT_DIR:-}" ]]; then
+    if [[ ! -d "$FRONT_DIR" ]]; then
       warn "FRONT_DIR='$FRONT_DIR' não encontrado — pulando frontend"
       FRONT_DIR=""
+      return
     fi
-    return
+
+    if ! read -t 0 2>/dev/null; then
+      info "frontend: $FRONT_DIR (auto, stdin não interativo)"
+      return
+    fi
+
+    echo ""
+    echo -e "  ${YEL}[?] Frontend detectado no .env:${RES}"
+    echo -e "       ${CYA}${FRONT_DIR}${RES}"
+    echo ""
+    echo -n "       Subir frontend? [S/n] "
+    read answer
+    answer=$(echo "${answer:-s}" | tr '[:upper:]' '[:lower:]')
+
+    case "$answer" in
+      n|nao|não) info "frontend pulado"; FRONT_DIR=""; return ;;
+      *) ok "frontend: $FRONT_DIR" ; return ;;
+    esac
   fi
 
+  # sem FRONT_DIR → pergunta caminho
   echo ""
   echo -e "${YEL}[?] Caminho do frontend${RES}"
   echo "   (vite / next / react — deixa vazio para pular)"
@@ -265,7 +302,7 @@ FRONT_DIR=${FRONT_DIR:-}
 FRONT_PORT=${FRONT_PORT:-5173}
 
 # Docs (porta do servidor http local)
-DOCS_PORT=${PORT}
+DOCS_PORT=${DOCS_PORT}
 EOF
   ok ".env gerado em $f"
   echo "  → DATABASE_URL=${DATABASE_URL}"
@@ -327,40 +364,35 @@ fi
 if [[ "${SKIP_SERVER:-}" != "1" ]]; then
   info "iniciando elai-server em :${SERVER_PORT}..."
 
-  # mata processo anterior na porta
-  if command -v fuser > /dev/null 2>&1; then
+  # mata processo anterior na porta (macOS-safe)
+  if command -v lsof > /dev/null 2>&1; then
+    lsof -ti ":${SERVER_PORT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
+  elif command -v fuser > /dev/null 2>&1; then
     fuser -k "${SERVER_PORT}/tcp" 2>/dev/null || true
-  else
-    # fallback: lsof no macOS
-    lsof -ti ":${SERVER_PORT}" | xargs kill -9 2>/dev/null || true
   fi
 
   # compila se necessário
   SERVER_BINARY="${RUST_DIR}target/debug/elai-server"
+  mkdir -p "${SERVER_DIR}/tmp"
   if [[ ! -f "$SERVER_BINARY" ]]; then
     warn "binário não encontrado — compilando (pode demorar na primeira vez)..."
     cd "$RUST_DIR"
-    cargo build --package server 2>&1 | tail -5
+    cargo build --package server 2>&1 | tag_stream "$C_SERVER" "[SERVER build]"
   fi
 
-  SERVER_LOG="${SERVER_DIR}/tmp/server.log"
-  mkdir -p "$(dirname "$SERVER_LOG")"
-
-  # sobe em background com .env carregado
-  SERVER_BINARY="${RUST_DIR}target/debug/elai-server"
+  # sobe em background com saída colorida ao vivo
   (
-    set -a; source "$ENV_FILE" 2>/dev/null || true; set +a
-    "$SERVER_BINARY" >> "$SERVER_LOG" 2>&1
-  ) &
+    set -a
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE" 2>/dev/null || true
+    set +a
+    PORT="${SERVER_PORT}" RUST_BACKTRACE=1 "$SERVER_BINARY" 2>&1
+  ) | tag_stream "$C_SERVER" "[SERVER :${SERVER_PORT}]" &
   SERVER_PID=$!
   echo $SERVER_PID > "${SERVER_DIR}/tmp/server.pid"
+  ALL_PIDS+=("$SERVER_PID")
 
   info "server PID=${SERVER_PID} — aguardando health check..."
   sleep 4
-
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    die "server morreu imediatamente. Logs:\n$(tail -30 "$SERVER_LOG")"
-  fi
 
   for i in $(seq 1 15); do
     if curl -sf "http://127.0.0.1:${SERVER_PORT}/v1/health" > /dev/null 2>&1; then
@@ -371,8 +403,7 @@ if [[ "${SKIP_SERVER:-}" != "1" ]]; then
   done
 
   if ! curl -sf "http://127.0.0.1:${SERVER_PORT}/v1/health" > /dev/null 2>&1; then
-    warn "server não respondeu health check — logs:"
-    tail -20 "$SERVER_LOG"
+    warn "server não respondeu health check — verifique os logs acima"
   fi
 else
   info "SKIP_SERVER=1 — server não foi iniciado"
@@ -386,20 +417,16 @@ if [[ -z "${FRONT_DIR}" ]]; then
 else
   info "iniciando frontend em $FRONT_DIR ..."
 
-  FRONT_LOG="${SERVER_DIR}/tmp/front.log"
-  mkdir -p "$(dirname "$FRONT_LOG")"
+  mkdir -p "${SERVER_DIR}/tmp"
 
   # detecta qual bundler
   if [[ -f "${FRONT_DIR}/package.json" ]]; then
     if grep -q '"next"' "${FRONT_DIR}/package.json"; then
-      FRONT_CMD="npm run dev"
       FRONT_NAME="Next.js"
     elif grep -q '"vite"' "${FRONT_DIR}/package.json" || \
          grep -q '"react"' "${FRONT_DIR}/package.json"; then
-      FRONT_CMD="npm run dev"
       FRONT_NAME="Vite/React"
     else
-      FRONT_CMD="npm run dev"
       FRONT_NAME="npm dev"
     fi
   else
@@ -407,40 +434,34 @@ else
     FRONT_DIR=""
   fi
 
-  (
-    cd "$FRONT_DIR"
-    npm run dev >> "$FRONT_LOG" 2>&1 &
-  ) &
-  FRONT_PID=$!
-  echo $FRONT_PID > "${SERVER_DIR}/tmp/front.pid"
+  if [[ -n "${FRONT_DIR}" ]]; then
+    (
+      cd "$FRONT_DIR"
+      npm run dev 2>&1
+    ) | tag_stream "$C_FRONT" "[FRONT  :${FRONT_PORT}]" &
+    FRONT_PID=$!
+    echo $FRONT_PID > "${SERVER_DIR}/tmp/front.pid"
+    ALL_PIDS+=("$FRONT_PID")
 
-  info "frontend PID=${FRONT_PID} — aguardando subir..."
-  for i in $(seq 1 20); do
-    if nc -z localhost "$FRONT_PORT" 2>/dev/null; then
-      ok "frontend responding em http://127.0.0.1:${FRONT_PORT}"
-      break
+    info "frontend PID=${FRONT_PID} — aguardando subir..."
+    for i in $(seq 1 20); do
+      if nc -z localhost "$FRONT_PORT" 2>/dev/null; then
+        ok "frontend responding em http://127.0.0.1:${FRONT_PORT}"
+        break
+      fi
+      sleep 1
+    done
+
+    if ! nc -z localhost "$FRONT_PORT" 2>/dev/null; then
+      warn "frontend pode não ter subido — verifique os logs acima"
     fi
-    sleep 1
-  done
-
-  if ! nc -z localhost "$FRONT_PORT" 2>/dev/null; then
-    warn "frontend pode não ter subido — veja: tail -20 $FRONT_LOG"
   fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. DOCS SERVER (ou mantém server em foreground)
+# 6. DOCS SERVER + MULTIPLEXED FOREGROUND WAIT
 # ══════════════════════════════════════════════════════════════════════════════
-if [[ "${SKIP_DOCS:-}" == "1" ]]; then
-  info "SKIP_DOCS=1 — mantendo server em foreground (Ctrl+C para parar)"
-  wait $SERVER_PID
-  exit $?
-fi
-
 DOCS_DIR="${SERVER_DIR}/docs/site"
-if [[ ! -d "$DOCS_DIR" ]]; then
-  warn "docs/site não encontrada"
-fi
 
 echo ""
 echo -e "${BLD}─────────────────────────────────────────────────────────${RES}"
@@ -451,37 +472,64 @@ echo -e "     PostgreSQL  ${GRN}localhost:${PG_PORT}${RES}  (${PG_DB})"
 echo -e "     Qdrant      ${GRN}localhost:${QDRANT_PORT}${RES}  (HTTP + ${QDRANT_GRPC_PORT} gRPC)"
 echo -e "     Redis       ${GRN}localhost:${REDIS_PORT}${RES}"
 echo ""
-echo -e "  🖥  elai-server  ${CYA}http://127.0.0.1:${SERVER_PORT}${RES}"
-if [[ -n "${FRONT_DIR}" ]]; then
-  echo -e "  🌐 frontend     ${CYA}http://127.0.0.1:${FRONT_PORT}${RES}"
+echo -e "  ${C_SERVER}●${RES} elai-server  ${CYA}http://127.0.0.1:${SERVER_PORT}${RES}"
+if [[ -n "${FRONT_DIR:-}" ]]; then
+  echo -e "  ${C_FRONT}●${RES} frontend     ${MAG}http://127.0.0.1:${FRONT_PORT}${RES}"
 fi
-echo -e "  📖 docs         ${CYA}http://127.0.0.1:${PORT}${RES}"
+if [[ "${SKIP_DOCS:-}" != "1" ]] && [[ -d "$DOCS_DIR" ]]; then
+  echo -e "  ${C_DOCS}●${RES} docs         ${BLU}http://127.0.0.1:${DOCS_PORT}${RES}"
+fi
 echo ""
 echo -e "  🔗 DATABASE_URL=${DATABASE_URL}"
 echo -e "─────────────────────────────────────────────────────────${RES}"
 echo ""
 
-info "servindo docs em http://127.0.0.1:${PORT}/"
-cd "$DOCS_DIR"
-if command -v python3 > /dev/null 2>&1; then
-  exec python3 -m http.server "$PORT" --bind 127.0.0.1
-elif command -v npx > /dev/null 2>&1; then
-  exec npx --yes http-server -p "$PORT" -a 127.0.0.1 -c-1 .
-else
-  warn "sem python3 nem npx — docs não podem ser servidas."
-  info "Server continua rodando em background. Acesse http://127.0.0.1:${SERVER_PORT}/v1/health"
-  wait $SERVER_PID
-fi
-
 # ── cleanup ──────────────────────────────────────────────────────────────────
 cleanup() {
-  info "encerrando..."
-  if [[ -f "${SERVER_DIR}/tmp/server.pid" ]]; then
-    kill "$(cat "${SERVER_DIR}/tmp/server.pid")" 2>/dev/null || true
-  fi
-  if [[ -f "${SERVER_DIR}/tmp/front.pid" ]]; then
-    kill "$(cat "${SERVER_DIR}/tmp/front.pid")" 2>/dev/null || true
-  fi
+  echo ""
+  info "encerrando processos..."
+  for pid_file in "${SERVER_DIR}/tmp/server.pid" "${SERVER_DIR}/tmp/front.pid"; do
+    if [[ -f "$pid_file" ]]; then
+      local pid
+      pid=$(cat "$pid_file" 2>/dev/null)
+      [[ -n "$pid" ]] && { kill -- "-${pid}" 2>/dev/null || kill "$pid" 2>/dev/null || true; }
+      rm -f "$pid_file"
+    fi
+  done
+  [[ -n "${DOCS_PID:-}" ]] && { kill -- "-${DOCS_PID}" 2>/dev/null || kill "$DOCS_PID" 2>/dev/null || true; }
   ok "feito"
 }
 trap cleanup EXIT INT TERM
+
+# docs server em background com saída colorida (exceto se SKIP_DOCS ou pasta ausente)
+DOCS_PID=""
+if [[ "${SKIP_DOCS:-}" != "1" ]]; then
+  if [[ -d "$DOCS_DIR" ]]; then
+    if command -v python3 > /dev/null 2>&1; then
+      python3 -m http.server "$DOCS_PORT" --bind 127.0.0.1 2>&1 | \
+        tag_stream "$C_DOCS" "[DOCS   :${DOCS_PORT}]" &
+      DOCS_PID=$!
+      ALL_PIDS+=("$DOCS_PID")
+    elif command -v npx > /dev/null 2>&1; then
+      npx --yes http-server -p "$DOCS_PORT" -a 127.0.0.1 -c-1 "$DOCS_DIR" 2>&1 | \
+        tag_stream "$C_DOCS" "[DOCS   :${DOCS_PORT}]" &
+      DOCS_PID=$!
+      ALL_PIDS+=("$DOCS_PID")
+    else
+      warn "sem python3 nem npx — docs não serão servidas"
+    fi
+  else
+    warn "docs/site não encontrada — pulando servidor de docs"
+  fi
+fi
+
+if [[ ${#ALL_PIDS[@]} -eq 0 ]]; then
+  warn "nenhum processo em foreground — saindo"
+  exit 0
+fi
+
+info "logs ao vivo (Ctrl+C para encerrar tudo):"
+echo -e "  ${C_SERVER}[SERVER :${SERVER_PORT}]${RES}  ${C_FRONT}[FRONT  :${FRONT_PORT}]${RES}  ${C_DOCS}[DOCS   :${PORT}]${RES}"
+echo ""
+
+wait "${ALL_PIDS[@]}"

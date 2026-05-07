@@ -40,6 +40,5 @@ CREATE TABLE IF NOT EXISTS config (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-
-INSERT INTO config (key, value) VALUES ('active_model', 'go:kimi-k2.6')
-ON CONFLICT (key) DO NOTHING;
+-- active_model é semeado pelo servidor no startup via api::suggested_default_model()
+-- para garantir que o modelo reflita as credenciais disponíveis no ambiente.

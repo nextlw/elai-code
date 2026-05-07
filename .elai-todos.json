@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "content": "Verificar se o server está rodando e recebendo requisições de chat",
+    "activeForm": "root",
+    "status": "completed"
+  },
+  {
+    "content": "Verificar configuração do frontend e por que não está enviando requisições",
+    "activeForm": "root",
+    "status": "in_progress"
+  },
+  {
+    "content": "Analisar código do frontend em /front-elai/src para identificar fluxo de requisições",
+    "activeForm": "root",
+    "status": "in_progress"
+  }
+]

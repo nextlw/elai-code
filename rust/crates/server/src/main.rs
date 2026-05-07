@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use server::auth::{generate_token, jwks};
 use server::{db, AppState};
+use api::suggested_default_model;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -64,9 +65,6 @@ async fn main() -> Result<()> {
     )?;
     let clerk_webhook_secret = std::env::var("CLERK_WEBHOOK_SECRET").unwrap_or_default();
     let clerk_api_secret = std::env::var("CLERK_SECRET_KEY").unwrap_or_default();
-    let model = std::env::var("ELAI_MODEL").unwrap_or_else(|_| "go:kimi-k2.6".to_string());
-    let ai_base_url = std::env::var("XAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.x.ai/v1".to_string());
 
     tracing::info!("connecting to PostgreSQL");
     let db_pool = db::connect(&database_url)
@@ -74,16 +72,22 @@ async fn main() -> Result<()> {
         .context("failed to connect to PostgreSQL")?;
     tracing::info!("PostgreSQL connected");
 
+    // Sincroniza o modelo ativo: ELAI_MODEL no .env tem prioridade,
+    // caso contrário usa a mesma lógica do CLI (suggested_default_model).
+    let active_model = std::env::var("ELAI_MODEL")
+        .ok()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(suggested_default_model);
+    db::config::set(&db_pool, "active_model", &active_model)
+        .await
+        .context("failed to upsert active_model in config")?;
+    tracing::info!(model = %active_model, "active model synced to DB");
+
     tracing::info!(url = %clerk_jwks_url, "fetching Clerk JWKS");
     let jwk_set = jwks::fetch(&clerk_jwks_url)
         .await
         .context("failed to fetch Clerk JWKS")?;
     tracing::info!(keys = jwk_set.keys.len(), "Clerk JWKS loaded");
-
-    if std::env::var("XAI_API_KEY").map_or(true, |key| key.is_empty()) {
-        tracing::warn!("XAI_API_KEY not set; SaaS chat responses will use the mock fallback");
-    }
-    tracing::info!(model = %model, endpoint = %ai_base_url, "AI backend configured");
 
     let state = AppState::new(token, mcp_manager, db_pool, jwk_set, clerk_webhook_secret, clerk_api_secret);
     let app = server::app(state);
